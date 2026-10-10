@@ -1,0 +1,42 @@
+{
+  "name": "@udofin/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Udofin modular-monolith API (HTTP) \u2014 business rules, authorization, integrations.",
+  "main": "dist/server.js",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/server.js",
+    "dev": "tsx watch src/server.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.3.1",
+    "@fastify/helmet": "^13.1.2",
+    "@fastify/rate-limit": "^11.2.1",
+    "@fastify/sensible": "^6.0.7",
+    "@udofin/adapters": "workspace:*",
+    "@udofin/contracts": "workspace:*",
+    "@udofin/domain": "workspace:*",
+    "fastify": "^5.12.5",
+    "fastify-plugin": "^6.0.1",
+    "jose": "^6.2.12",
+    "pg": "^8.23.1",
+    "pino": "^10.4.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "@types/pg": "^8.23.1",
+    "pino-pretty": "^13.2.0",
+    "tsx": "^4.23.15",
+    "typescript": "~6.0.3",
+    "vitest": "^5.0.3"
+  }
+}
