@@ -1,0 +1,10 @@
+# Every change needs the product owner's review. Security- and money-sensitive paths are listed
+# explicitly so additional reviewers can be added as the team grows.
+*                         @lawdocs
+/supabase/migrations/     @lawdocs
+/supabase/tests/          @lawdocs
+/services/api/            @lawdocs
+/packages/domain/         @lawdocs
+/docs/regulatory/         @lawdocs
+/docs/security/           @lawdocs
+/.github/                 @lawdocs
