@@ -49,7 +49,7 @@
 
 **Risks**
 
-- An automated dependency update could pull TypeScript 7 and break linting. Mitigation (planned, not in place): an update-bot rule that holds `typescript` at 6.0.x.
+- An automated dependency update could pull TypeScript 7 and break linting. Mitigation in place: `.github/dependabot.yml` ignores `typescript` versions `>=6.1.0`.
 - Supply-chain risk from transitive packages. Mitigation in place: lifecycle scripts blocked by default. Further controls such as a minimum release age are recommended by research (feature names: likely) but not configured.
 
 ## Compliance and security notes
@@ -61,7 +61,7 @@
 
 - `pnpm check` (root `package.json`) runs `format:check`, `lint`, `typecheck` and `test` across workspaces.
 - The `packages/domain` import restriction is enforced by ESLint on every lint run.
-- There is no CI workflow yet (`.github/workflows/` is empty at baseline). Until it exists, these checks are run locally.
+- `.github/workflows/ci.yml` runs `pnpm install --frozen-lockfile`, `format:check`, `build`, `lint`, `typecheck` and `test` on every pull request, plus `pnpm audit --prod --audit-level high` and a gitleaks secret scan.
 
 ## Revisit triggers
 

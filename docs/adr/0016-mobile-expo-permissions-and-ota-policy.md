@@ -54,7 +54,7 @@ Research findings (`docs/research/2026-10-10/app-store-mobile.md`, `rbi-digital-
 
 **Risks and known gaps (baseline)**
 
-- No CI manifest check yet (no CI workflow exists); no `@expo/app-integrity`, SMS retriever or `expo-updates` dependency yet.
+- CI validates the production Expo config (`config:check` with `APP_ENV=production` in `.github/workflows/ci.yml`) but does not yet scan the merged AndroidManifest of a built bundle; no `@expo/app-integrity`, SMS retriever or `expo-updates` dependency yet.
 - CAMERA and ACCESS_COARSE_LOCATION are intentionally not blocked; their use must stay one-time and KYC-only.
 - RECORD_AUDIO is blocked. Video KYC runs in the lender's own flow (research KYC-08); any in-app microphone use (for example a voice assistant) needs legal review first (ADR-0019).
 

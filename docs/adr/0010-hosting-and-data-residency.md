@@ -25,7 +25,7 @@ Research findings (`docs/research/2026-10-10/infra-stack.md`, `rbi-digital-lendi
 5. **Edge Functions**, if used, are pinned to ap-south-1; prefer Postgres functions or hooks.
 6. **Observability:** OpenTelemetry to a collector in ap-south-1 and an India-hosted backend. No Sentry SaaS (or other offshore SaaS) for anything that may carry personal data. Security and access logs kept at least 180 days in India.
 7. **Push notifications** carry no personal data (generic text; details fetched in-app), because push services route outside India (research interpretation).
-8. **Build artefacts:** the baseline is to ship a Dockerfile only (no `railway.json`/`railway.toml`). Any Railway configuration goes in `.railway/railway.ts`. Infrastructure as code later with OpenTofu or Terraform, with a region allowlist of ap-south-1 and ap-south-2.
+8. **Build artefacts:** the baseline ships a Dockerfile only (`infra/docker/api.Dockerfile`, multi-stage, non-root, built in CI), with no `railway.json`/`railway.toml`. Any Railway configuration goes in `.railway/railway.ts`. Infrastructure as code later with OpenTofu or Terraform, with a region allowlist of ap-south-1 and ap-south-2.
 9. **Finbyx:** recreate its project in Mumbai, migrate, rotate keys, delete the Tokyo project. If it ever held real data, treat it as an incident with an inventory of what was held.
 
 ## Alternatives considered

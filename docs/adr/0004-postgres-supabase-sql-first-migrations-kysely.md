@@ -26,7 +26,8 @@
 ## Implementation state
 
 - Done: five migrations and three pgTAP files (88 assertions) passing locally on PostgreSQL 16 via `scripts/db-test-local.sh` and the local-only auth shim `scripts/db/local-supabase-shim.sql`.
-- Not yet built: the per-request transaction wrapper, JWKS verification (`jose` is a dependency but unused), Kysely, the CI job that runs the tests on the Supabase CLI stack (Postgres 17), and `supabase/config.toml` (referred to in the foundation migration).
+- CI: the `database` job in `.github/workflows/ci.yml` runs `supabase db start` and `supabase test db` on the Supabase CLI stack (Postgres 17). `supabase/config.toml` exposes only `public` and `graphql_public` through the API.
+- Not yet built: the per-request transaction wrapper, JWKS verification (`jose` is a dependency but unused), Kysely.
 
 ## Alternatives considered
 
@@ -50,7 +51,7 @@
 
 - Coupling to Supabase specifics: the `auth` schema, `auth.uid()`, the `authenticated` / `service_role` roles. Moving off Supabase needs replacements.
 - Business rules exist in two places for some lifecycles (SQL triggers and `packages/domain`); kept in sync by tests (ADR-0015).
-- Local tests run on PostgreSQL 16 with a shim, while production is Postgres 17 on Supabase; differences are caught only once CI runs on the real stack.
+- Local tests run on PostgreSQL 16 with a shim, while production is Postgres 17 on Supabase; the CI `database` job on the Supabase stack is the authoritative run.
 
 **Risks**
 

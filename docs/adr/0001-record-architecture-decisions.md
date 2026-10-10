@@ -55,7 +55,7 @@
 
 ## Verification
 
-- Review checklist for pull requests that touch `supabase/migrations/`, `services/api/src/`, `packages/*/src/`, `apps/*/app.config.ts`, `apps/*/proxy.ts` or hosting configuration: "Does this change a recorded decision? If so, which ADR?" (not yet automated; no CI workflow exists in `.github/workflows/` at baseline).
+- Review checklist for pull requests that touch `supabase/migrations/`, `services/api/src/`, `packages/*/src/`, `apps/*/app.config.ts`, `apps/*/proxy.ts` or hosting configuration: "Does this change a recorded decision? If so, which ADR?" (a human review step; `.github/workflows/ci.yml` does not check ADR references).
 - The README index must list every ADR file in this folder.
 
 ## Revisit triggers
