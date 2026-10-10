@@ -58,3 +58,6 @@ exports/
 data-dumps/
 *.dump
 *.sql.gz
+
+# Next.js generated type references (recreated by `next typegen` / `next build`)
+next-env.d.ts
