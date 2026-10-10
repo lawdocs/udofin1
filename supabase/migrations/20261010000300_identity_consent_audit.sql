@@ -53,7 +53,9 @@ end
 $$;
 revoke all on function private.handle_new_auth_user() from public;
 
-create trigger on_auth_user_created
+-- Named distinctly from Supabase's quick-start trigger (`on_auth_user_created`) so it cannot
+-- collide with a pre-existing prototype trigger on the same project.
+create trigger udofin_create_borrower_on_signup
   after insert on auth.users
   for each row execute function private.handle_new_auth_user();
 
