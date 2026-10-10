@@ -61,3 +61,6 @@ data-dumps/
 
 # Next.js generated type references (recreated by `next typegen` / `next build`)
 next-env.d.ts
+
+# Vitest cache
+.vitest/
