@@ -84,8 +84,9 @@ the next phase can start; **P2** = needed before a later phase; **P3** = can wai
 - **Question.** Which 2–4 lenders launch with Udofin, and has each agreed to: report the Udofin
   app (and any web front end) on RBI's CIMS portal; list Udofin on its website; provide KYC,
   bureau, Account Aggregator, eSign/eStamp, disbursement, mandate and payment-gateway arrangements
-  in its own name; expose its LOS/LMS (Finbyx or other) to Udofin; and sign an outsourcing-compliant
-  contract with audit rights?
+  in its own name; expose its LOS/LMS (Finbyx or other) to Udofin; and sign a written contract with
+  the clauses its outsourcing directions require (roles, audit and RBI inspection rights, data
+  protection, incident notification, exit)?
 - **Why it matters.** Google Play admits new Indian personal-loan apps only if they appear on RBI's
   public DLA list, which lenders populate through CIMS (confirmed via Google Help Center extract;
   `app-store-mobile.md` §1.2). Udofin cannot list itself. Every regulated rail must run in the
