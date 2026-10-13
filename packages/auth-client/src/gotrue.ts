@@ -130,7 +130,32 @@ export interface GoTrueClient {
   verifyPhoneOtp(phoneE164: string, code: string): Promise<Session>;
 }
 
+/**
+ * Refuses privileged keys. A service/secret key in a portal or mobile configuration would hand the
+ * whole database to anyone who can read the bundle or the environment, so this fails at start-up.
+ */
+export function assertPublishableKey(key: string): void {
+  if (key.startsWith('sb_secret_'))
+    throw new Error(
+      'a Supabase secret key was configured where only the publishable key is allowed',
+    );
+  if (key.split('.').length === 3) {
+    const role = (() => {
+      try {
+        return (JSON.parse(base64UrlToString(key.split('.')[1] ?? '')) as { role?: unknown }).role;
+      } catch {
+        return undefined;
+      }
+    })();
+    if (role === 'service_role')
+      throw new Error(
+        'a Supabase service_role key was configured where only the publishable key is allowed',
+      );
+  }
+}
+
 export function createGoTrueClient(options: GoTrueOptions): GoTrueClient {
+  assertPublishableKey(options.publishableKey);
   const base = `${options.baseUrl.replace(/\/$/, '')}/auth/v1`;
   const doFetch = options.fetch ?? fetch;
   const now = options.now ?? (() => Math.floor(Date.now() / 1000));

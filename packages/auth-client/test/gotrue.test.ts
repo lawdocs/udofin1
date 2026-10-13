@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  assertPublishableKey,
   AuthFailure,
   base64UrlToString,
   createGoTrueClient,
   readTokenClaims,
 } from '../src/gotrue.js';
-import { accessToken, fakeFetch, ok, USER_ID } from './helpers.js';
+import { accessToken, fakeFetch, jwt, ok, USER_ID } from './helpers.js';
 
 const BASE = 'https://proj.supabase.co';
 const client = (routes: Parameters<typeof fakeFetch>[0]) => {
@@ -30,6 +31,18 @@ const code = async (p: Promise<unknown>) =>
     () => 'ok',
     (e: unknown) => (e instanceof AuthFailure ? e.code : 'other'),
   );
+
+describe('privileged keys', () => {
+  it('are refused at start-up', () => {
+    expect(() => assertPublishableKey('sb_secret_abcdef')).toThrow(/secret key/);
+    expect(() => assertPublishableKey(jwt({ role: 'service_role' }))).toThrow(/service_role/);
+    expect(() =>
+      createGoTrueClient({ baseUrl: BASE, publishableKey: jwt({ role: 'service_role' }) }),
+    ).toThrow();
+    expect(() => assertPublishableKey('sb_publishable_abc')).not.toThrow();
+    expect(() => assertPublishableKey(jwt({ role: 'anon' }))).not.toThrow();
+  });
+});
 
 describe('GoTrue client', () => {
   it('signs in with the publishable key only and returns a session with its assurance level', async () => {
