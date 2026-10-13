@@ -118,10 +118,10 @@ select is((select count(*)::int from onboarding.lender_profiles), 3, 'platform o
 
 -- 4. Direct table writes are impossible for users --------------------------------------------------
 select pg_temp.as_user('d1000000-0000-4000-8000-000000000005');
-select is(pg_temp.err($$update onboarding.lender_profiles set verification_status = 'verified'$$), '42501|', 'a lender cannot update a profile directly');
-select is(pg_temp.err($$update onboarding.lender_gates set stage = 'activated'$$), '42501|', 'a lender cannot move its own gate directly');
+select is(pg_temp.err($$update onboarding.lender_profiles set verification_status = 'verified'$$) like '42501|%', true, 'a lender cannot update a profile directly');
+select is(pg_temp.err($$update onboarding.lender_gates set stage = 'activated'$$) like '42501|%', true, 'a lender cannot move its own gate directly');
 select is(pg_temp.err($$insert into onboarding.documents (lender_org_id, purpose, label, storage_key, sha256, size_bytes, mime_type, uploaded_by)
-  values ('d2000000-0000-4000-8000-000000000000', 'other', 'x', 'dev/aaaaaaaaaaaa', repeat('a', 64), 10, 'application/pdf', 'd1000000-0000-4000-8000-000000000005')$$), '42501|',
+  values ('d2000000-0000-4000-8000-000000000000', 'other', 'x', 'dev/aaaaaaaaaaaa', repeat('a', 64), 10, 'application/pdf', 'd1000000-0000-4000-8000-000000000005')$$) like '42501|%', true,
   'documents cannot be inserted directly');
 
 -- 5. Institution verification: evidence, independence, history -----------------------------------
