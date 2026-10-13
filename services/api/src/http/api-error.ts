@@ -45,6 +45,7 @@ const RULE_HINTS: Readonly<Record<string, { showMessage: boolean }>> = {
   dependency_open: { showMessage: false },
   unsafe_free_text: { showMessage: false },
   document_quarantined: { showMessage: false },
+  waiver_not_allowed: { showMessage: false },
 };
 
 /**

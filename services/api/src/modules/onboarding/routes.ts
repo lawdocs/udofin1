@@ -763,6 +763,153 @@ export function onboardingRoutes(documents: DocumentStore | undefined): RouteDef
       },
     }),
 
+    // ---- accounting waiver (owner decision D-33) -------------------------------------------------
+    userRoute({
+      method: 'get',
+      path: '/v1/onboarding/settings',
+      operationId: 'getOnboardingSettings',
+      summary:
+        'Compliance-controlled onboarding switches (e.g. whether the accounting record may be waived)',
+      tags: ['Onboarding'],
+      auth: 'staff',
+      responses: {
+        200: z.object({
+          items: z.array(
+            z.object({
+              key: z.string(),
+              value: z.boolean(),
+              description: z.string(),
+              reason: z.string().nullable(),
+            }),
+          ),
+        }),
+      },
+      errors: [401, 403],
+      handler: async ({ tx }) => {
+        const r = await tx.query(
+          'select key, bool_value as value, description, reason from onboarding.platform_settings order by key',
+        );
+        return { status: 200, body: { items: r.rows } };
+      },
+    }),
+    userRoute({
+      method: 'post',
+      path: '/v1/onboarding/settings/:key',
+      operationId: 'setOnboardingSetting',
+      summary:
+        'Switch an onboarding policy option on or off (compliance officer, with a recorded reason)',
+      tags: ['Onboarding'],
+      auth: 'staff',
+      idempotent: true,
+      params: Key,
+      body: z.strictObject({ value: z.boolean(), reason: z.string().trim().min(20).max(1000) }),
+      responses: { 200: Done },
+      errors: [400, 401, 403, 404, 422],
+      rateLimit: WRITE_LIMIT,
+      handler: async ({ tx, params, body }) => {
+        await assertCan(tx, 'compliance');
+        await tx.query('select onboarding.set_setting($1, $2::boolean, $3)', [
+          params.key,
+          body.value,
+          body.reason,
+        ]);
+        return ok;
+      },
+    }),
+    userRoute({
+      method: 'get',
+      path: '/v1/onboarding/lenders/:lenderId/accounting-waivers',
+      operationId: 'listAccountingWaivers',
+      summary: 'Waivers of the verified accounting record for a lender',
+      tags: ['Onboarding'],
+      auth: 'staff',
+      params: Lender,
+      responses: {
+        200: z.object({
+          items: z.array(
+            z.object({
+              id: z.uuid(),
+              status: z.string(),
+              reason: z.string(),
+              requestedAt: z.string(),
+              decidedAt: z.string().nullable(),
+              decisionNote: z.string().nullable(),
+            }),
+          ),
+        }),
+      },
+      errors: [401, 403, 404],
+      handler: async ({ tx, params }) => {
+        await assertCan(tx, 'read', params.lenderId);
+        const r = await tx.query(
+          `select ${columns({ id: 'id', status: 'status', reason: 'reason', requestedAt: 'requested_at::text', decidedAt: 'decided_at::text', decisionNote: 'decision_note' })}
+             from onboarding.accounting_waivers where lender_org_id = $1::uuid order by requested_at desc`,
+          [params.lenderId],
+        );
+        return { status: 200, body: { items: r.rows } };
+      },
+    }),
+    userRoute({
+      method: 'post',
+      path: '/v1/onboarding/lenders/:lenderId/accounting-waivers',
+      operationId: 'requestAccountingWaiver',
+      summary:
+        'Ask to waive the verified accounting record for this lender (only when the option is on)',
+      description:
+        'Needs a written reason; a different approver decides. The waiver stops counting if the option is switched off.',
+      tags: ['Onboarding'],
+      auth: 'staff',
+      idempotent: true,
+      idempotencyTenant: ({ params }) => (params).lenderId,
+      params: Lender,
+      body: z.strictObject({ reason: z.string().trim().min(30).max(2000) }),
+      responses: { 201: Created },
+      errors: [400, 401, 403, 404, 409, 422],
+      rateLimit: WRITE_LIMIT,
+      handler: async ({ tx, params, body }) => {
+        await assertCan(tx, 'manage');
+        const id = await scalar<string>(tx, 'select onboarding.waiver_request($1::uuid, $2) as v', [
+          params.lenderId,
+          body.reason,
+        ]);
+        return { status: 201, body: { id } };
+      },
+    }),
+    userRoute({
+      method: 'post',
+      path: '/v1/onboarding/accounting-waivers/:id/decision',
+      operationId: 'decideAccountingWaiver',
+      summary:
+        'Approve or reject a waiver (not its requester); or revoke an approved one with revoke=true',
+      tags: ['Onboarding'],
+      auth: 'staff',
+      idempotent: true,
+      params: Id,
+      body: z.strictObject({
+        approve: z.boolean(),
+        revoke: z.boolean().optional(),
+        note: note.optional(),
+      }),
+      responses: { 200: Done },
+      errors: [400, 401, 403, 404, 409, 422],
+      rateLimit: WRITE_LIMIT,
+      handler: async ({ tx, params, body }) => {
+        await assertCan(tx, 'approve');
+        if (body.revoke)
+          await tx.query('select onboarding.waiver_revoke($1::uuid, $2)', [
+            params.id,
+            body.note ?? null,
+          ]);
+        else
+          await tx.query('select onboarding.waiver_decide($1::uuid, $2::boolean, $3)', [
+            params.id,
+            body.approve,
+            body.note ?? null,
+          ]);
+        return ok;
+      },
+    }),
+
     // ---- contracts ---------------------------------------------------------------------------
     userRoute({
       method: 'get',
