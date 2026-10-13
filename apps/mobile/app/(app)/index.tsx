@@ -1,71 +1,76 @@
-import { type MeResponse } from '@udofin/contracts';
-import { useEffect, useState } from 'react';
-import { useAuth } from '../../src/auth/AuthProvider';
-import { Banner, Body, Button, Heading, Loading, Screen } from '../../src/ui/kit';
-
-type Load =
-  | { kind: 'loading' }
-  | { kind: 'ready'; me: MeResponse }
-  | { kind: 'offline' }
-  | { kind: 'error'; code: string };
+import { useRouter } from 'expo-router';
+import { useBorrower } from '../../src/borrower/BorrowerProvider';
+import { errorKey } from '../../src/borrower/errors';
+import { nextStep } from '../../src/borrower/journey';
+import { useI18n } from '../../src/i18n/I18nProvider';
+import {
+  Banner,
+  Body,
+  Button,
+  Card,
+  ErrorState,
+  Heading,
+  Loading,
+  ScrollScreen,
+} from '../../src/ui/kit';
 
 /**
- * Signed-in home. Phase 03 shows only that the session works end to end (token -> API -> database).
- * Onboarding, offers and loans arrive in later phases; nothing here is sample or fabricated loan data.
+ * Signed-in home for borrowers. Shows where you are in setup using separate facts from the server.
+ * Nothing here says verified, eligible or approved: identity checks and decisions belong to lenders.
  */
 export default function HomeScreen() {
-  const { api, signOut } = useAuth();
-  const [load, setLoad] = useState<Load>({ kind: 'loading' });
+  const router = useRouter();
+  const { t } = useI18n();
+  const { meState, refresh } = useBorrower();
 
-  const [attempt, setAttempt] = useState(0);
+  if (meState.kind === 'loading') return <Loading label={t('common.loading')} />;
+  if (meState.kind === 'error')
+    return (
+      <ScrollScreen>
+        <Heading>{t('home.title')}</Heading>
+        <ErrorState
+          message={t(errorKey(meState.code))}
+          retryLabel={t('common.retry')}
+          onRetry={() => void refresh()}
+        />
+      </ScrollScreen>
+    );
 
-  useEffect(() => {
-    let cancelled = false;
-    void api.me().then((result) => {
-      if (cancelled) return;
-      if (result.ok) setLoad({ kind: 'ready', me: result.data });
-      else if (result.code === 'network_error') setLoad({ kind: 'offline' });
-      else setLoad({ kind: 'error', code: result.code });
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [api, attempt]);
-
-  const retry = () => {
-    setLoad({ kind: 'loading' });
-    setAttempt((n) => n + 1);
-  };
-
-  if (load.kind === 'loading') return <Loading label="Loading your account" />;
+  const me = meState.me;
+  const step = nextStep(me);
+  const name = me.profile.displayName;
   return (
-    <Screen>
-      <Heading>Udofin</Heading>
-      {load.kind === 'ready' ? (
-        <>
-          <Banner tone="info">
-            You are signed in. Loan features are not available yet in this build.
-          </Banner>
-          <Body muted>Account type: {load.me.actor}</Body>
-        </>
+    <ScrollScreen>
+      <Heading>{name ? t('home.greeting', { name }) : t('home.greetingAnon')}</Heading>
+      <Body muted>{t('home.role')}</Body>
+      {step === 'closed' ? <Banner tone="warning">{t('home.closed')}</Banner> : null}
+      {step === 'closing' ? <Banner tone="warning">{t('home.closing')}</Banner> : null}
+      {step === 'profile' ? (
+        <Card>
+          <Body>{t('home.step.profile')}</Body>
+          <Button title={t('home.continueSetup')} onPress={() => router.push('/profile')} />
+        </Card>
       ) : null}
-      {load.kind === 'offline' ? (
-        <>
-          <Banner tone="warning">
-            You appear to be offline. Check your connection and try again.
-          </Banner>
-          <Button title="Try again" onPress={() => retry()} />
-        </>
+      {step === 'consents' ? (
+        <Card>
+          <Body>{t('home.step.consents')}</Body>
+          <Button title={t('home.continueSetup')} onPress={() => router.push('/consent')} />
+        </Card>
       ) : null}
-      {load.kind === 'error' ? (
-        <>
-          <Banner tone="danger">
-            We could not load your account right now. Please try again in a moment.
-          </Banner>
-          <Button title="Try again" onPress={() => retry()} />
-        </>
+      {step === 'request' ? (
+        <Card>
+          <Body>{t('home.step.request')}</Body>
+          <Button title={t('home.newRequest')} onPress={() => router.push('/new-request')} />
+        </Card>
       ) : null}
-      <Button title="Sign out" secondary onPress={() => void signOut()} />
-    </Screen>
+      {step !== 'closed' ? (
+        <Card>
+          <Body>{t('home.drafts', { count: me.journey.draftRequests })}</Body>
+          <Body>{t('home.submitted', { count: me.journey.submittedRequests })}</Body>
+          <Button title={t('home.myRequests')} secondary onPress={() => router.push('/requests')} />
+        </Card>
+      ) : null}
+      <Banner tone="info">{t('home.noKyc')}</Banner>
+    </ScrollScreen>
   );
 }

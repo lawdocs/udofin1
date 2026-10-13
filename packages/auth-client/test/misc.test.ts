@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { createApiClient } from '../src/api-client.js';
 import {
   clearSessionCookie,
@@ -132,5 +133,34 @@ describe('API client', () => {
     const res = await api.decideChangeRequest(USER_ID, 'approve', 'key-0123456789abcdef');
     expect(res.ok).toBe(true);
     expect(f.calls[0]?.headers['idempotency-key']).toBe('key-0123456789abcdef');
+  });
+});
+
+describe('generic call allow-list', () => {
+  const api = createApiClient({
+    baseUrl: 'https://api.example',
+    getAccessToken: () => Promise.resolve('t'),
+    fetch: fakeFetch({}).fetch,
+  });
+  const any = z.unknown();
+  it.each([
+    '/v1/admin/change-requests',
+    '/v1/me',
+    '/v1/borrower/../admin/x',
+    '/v1/loan-purposes-extra',
+    '/v1/consentx',
+    '/v2/borrower/me',
+  ])('refuses %s', async (path) => {
+    expect(await api.get(path, any)).toEqual({ ok: false, status: 0, code: 'path_not_allowed' });
+  });
+  it.each([
+    '/v1/borrower/me',
+    '/v1/loan-purposes?language=hi',
+    '/v1/loan-requests?limit=20',
+    '/v1/consent/notices?language=en',
+    '/v1/stepup/challenges',
+  ])('allows %s through to the network', async (path) => {
+    const result = await api.get(path, any);
+    expect(result.ok === false && result.code === 'path_not_allowed').toBe(false);
   });
 });

@@ -1,0 +1,30 @@
+import { type MessageKey } from '../i18n';
+
+/** Stable API codes to message keys. Unknown codes fall back to a generic message; raw server text is never shown. */
+const MAP: Readonly<Record<string, MessageKey>> = {
+  network_error: 'error.offline',
+  signed_out: 'error.signedOut',
+  bad_response: 'error.badResponse',
+  rate_limited: 'error.rateLimited',
+  http_429: 'error.rateLimited',
+  version_conflict: 'error.versionConflict',
+  draft_expired: 'error.draftExpired',
+  not_editable: 'error.notEditable',
+  consent_required: 'error.consentRequired',
+  purpose_unknown: 'error.purposeUnknown',
+  tenure_out_of_range: 'error.tenureOutOfRange',
+  category_unavailable: 'error.categoryUnavailable',
+  product_unavailable: 'error.productUnavailable',
+  too_many_drafts: 'error.tooManyDrafts',
+  account_closing: 'error.accountClosing',
+  account_closed: 'error.accountClosed',
+  stepup_required: 'error.stepupRequired',
+  stepup_unavailable: 'error.stepupUnavailable',
+  http_404: 'error.notFound',
+  http_422: 'error.invalidInput',
+  http_400: 'error.invalidInput',
+};
+
+export const errorKey = (code: string): MessageKey => MAP[code] ?? 'error.generic';
+/** Offline is the only failure where retrying immediately makes sense for the user; others may also be retried. */
+export const isOffline = (code: string): boolean => code === 'network_error';

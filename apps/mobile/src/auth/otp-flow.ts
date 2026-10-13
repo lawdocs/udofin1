@@ -91,12 +91,3 @@ export class OtpFlow {
     return 'unavailable';
   }
 }
-
-export const OTP_MESSAGES: Record<OtpError, string> = {
-  invalid_phone: 'Enter a valid 10-digit Indian mobile number.',
-  invalid_code: 'That code is not correct. Check the SMS and try again.',
-  rate_limited: 'Too many attempts. Please wait a few minutes and try again.',
-  too_many_attempts: 'Too many wrong codes. Go back and request a new code.',
-  resend_wait: 'Please wait before requesting another code.',
-  unavailable: 'We could not reach the service. Check your connection and try again.',
-};

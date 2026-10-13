@@ -224,3 +224,12 @@ export const DeletionRequest = z.object({
   signInIdentityRemoved: z.boolean(),
 });
 export const DeletionCurrent = z.object({ item: DeletionRequest.nullable() });
+
+export type Notice = z.infer<typeof Notice>;
+export type LoanPurpose = z.infer<typeof LoanPurpose>;
+export type BorrowerCategory = z.infer<typeof BorrowerCategory>;
+export type BorrowerProduct = z.infer<typeof BorrowerProduct>;
+export type LoanRequestEvent = z.infer<typeof LoanRequestEvent>;
+export type DeletionRequest = z.infer<typeof DeletionRequest>;
+export type StepUpStarted = z.infer<typeof StepUpStarted>;
+export type StepUpVerified = z.infer<typeof StepUpVerified>;

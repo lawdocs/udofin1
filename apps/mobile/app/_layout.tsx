@@ -2,13 +2,15 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from '../src/auth/AuthProvider';
+import { I18nProvider, useI18n } from '../src/i18n/I18nProvider';
 import { useTheme } from '../src/theme';
 import { Banner, Body, Heading, Loading, Screen } from '../src/ui/kit';
 
 function Navigator() {
   const theme = useTheme();
+  const { t } = useI18n();
   const { state } = useAuth();
-  if (state.status === 'loading') return <Loading label="Starting Udofin" />;
+  if (state.status === 'loading') return <Loading label={t('common.loading')} />;
   const signedIn = state.status === 'signed_in';
   return (
     <Stack
@@ -28,25 +30,27 @@ function Navigator() {
   );
 }
 
+function ConfigProblem() {
+  const { t } = useI18n();
+  return (
+    <Screen>
+      <Heading>{t('error.generic')}</Heading>
+      <Banner tone="danger">{t('error.badResponse')}</Banner>
+      <Body muted>Udofin</Body>
+    </Screen>
+  );
+}
+
 export default function RootLayout() {
   const theme = useTheme();
   return (
-    <SafeAreaProvider>
-      <StatusBar style={theme.mode === 'dark' ? 'light' : 'dark'} />
-      <AuthProvider
-        fallback={() => (
-          <Screen>
-            <Heading>App configuration problem</Heading>
-            <Banner tone="danger">
-              This build is not configured correctly. Please install the latest version from the
-              official store.
-            </Banner>
-            <Body muted>If this continues, contact support.</Body>
-          </Screen>
-        )}
-      >
-        <Navigator />
-      </AuthProvider>
-    </SafeAreaProvider>
+    <I18nProvider>
+      <SafeAreaProvider>
+        <StatusBar style={theme.mode === 'dark' ? 'light' : 'dark'} />
+        <AuthProvider fallback={() => <ConfigProblem />}>
+          <Navigator />
+        </AuthProvider>
+      </SafeAreaProvider>
+    </I18nProvider>
   );
 }

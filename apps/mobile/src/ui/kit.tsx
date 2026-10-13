@@ -2,6 +2,7 @@ import { type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -183,3 +184,141 @@ export function Loading({ label }: { label: string }) {
 }
 
 const styles = StyleSheet.create({ root: { flex: 1 } });
+
+/** A selectable row (single choice). State is announced to screen readers and never colour-only. */
+export function Choice({
+  label,
+  detail,
+  selected,
+  onPress,
+}: {
+  label: string;
+  detail?: string;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  const theme = useTheme();
+  return (
+    <Pressable
+      accessibilityRole="radio"
+      accessibilityLabel={detail ? `${label}. ${detail}` : label}
+      accessibilityState={{ selected, checked: selected }}
+      onPress={onPress}
+      style={{
+        minHeight: TARGET,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: theme.space.sm,
+        borderWidth: selected ? 2 : 1,
+        borderColor: selected ? theme.color.primary : theme.color.border,
+        borderRadius: theme.radius.md,
+        padding: theme.space.md,
+      }}
+    >
+      <Text style={{ color: theme.color.text, fontSize: theme.typography.size.lg }}>
+        {selected ? '●' : '○'}
+      </Text>
+      <View style={{ flex: 1 }}>
+        <Text
+          style={{ color: theme.color.text, fontSize: theme.typography.size.md, fontWeight: '600' }}
+        >
+          {label}
+        </Text>
+        {detail ? <Text style={{ color: theme.color.textMuted }}>{detail}</Text> : null}
+      </View>
+    </Pressable>
+  );
+}
+
+/** A labelled on/off row. Starts off unless the caller says otherwise; never pre-ticked on our behalf. */
+export function CheckRow({
+  label,
+  checked,
+  onToggle,
+  disabled,
+}: {
+  label: string;
+  checked: boolean;
+  onToggle: (next: boolean) => void;
+  disabled?: boolean;
+}) {
+  const theme = useTheme();
+  return (
+    <Pressable
+      accessibilityRole="checkbox"
+      accessibilityLabel={label}
+      accessibilityState={{ checked, disabled: disabled === true }}
+      disabled={disabled}
+      onPress={() => onToggle(!checked)}
+      style={{
+        minHeight: TARGET,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: theme.space.sm,
+        opacity: disabled ? 0.6 : 1,
+      }}
+    >
+      <Text style={{ color: theme.color.text, fontSize: theme.typography.size.xl }}>
+        {checked ? '☑' : '☐'}
+      </Text>
+      <Text style={{ color: theme.color.text, flex: 1, fontSize: theme.typography.size.md }}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+export function Card({ children }: { children: ReactNode }) {
+  const theme = useTheme();
+  return (
+    <View
+      style={{
+        borderWidth: 1,
+        borderColor: theme.color.border,
+        borderRadius: theme.radius.md,
+        padding: theme.space.md,
+        gap: theme.space.sm,
+      }}
+    >
+      {children}
+    </View>
+  );
+}
+
+export function Label({ children }: { children: ReactNode }) {
+  const theme = useTheme();
+  return <Text style={{ color: theme.color.text, fontWeight: '700' }}>{children}</Text>;
+}
+
+/** Scrollable screen for forms that can outgrow the display (large text sizes, small phones). */
+export function ScrollScreen({ children }: { children: ReactNode }) {
+  const theme = useTheme();
+  return (
+    <SafeAreaView style={[styles.root, { backgroundColor: theme.color.background }]}>
+      <ScrollView
+        contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.md }}
+        keyboardShouldPersistTaps="handled"
+      >
+        {children}
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+/** A failed read: says what happened in the borrower's language and offers retry. */
+export function ErrorState({
+  message,
+  retryLabel,
+  onRetry,
+}: {
+  message: string;
+  retryLabel: string;
+  onRetry: () => void;
+}) {
+  return (
+    <View style={{ gap: 12 }}>
+      <Banner tone="danger">{message}</Banner>
+      <Button title={retryLabel} onPress={onRetry} />
+    </View>
+  );
+}
