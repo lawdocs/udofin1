@@ -58,6 +58,7 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter "@udofin/api^..." build
       - name: API integration tests against the real migrated database
         env:
           # Throwaway local CI database only; these are not secrets.
