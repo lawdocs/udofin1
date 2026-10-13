@@ -1,6 +1,6 @@
 # Phase 06 specification: lender routing, verification status, decisions and offers
 
-**Status:** draft v1 for owner approval (13 Oct 2026). Nothing in this phase is implemented.
+**Status:** implemented on branch `claude/peaceful-babbage-14p1ci` (13 Oct 2026) and awaiting owner review; see section 15 for what was built, what differs from this draft and what stays open. Sections 1–14 are the original draft, kept for the record.
 **Depends on:** Phases 01–05. **Roadmap:** `docs/product/roadmap.md`, Phase 06.
 **Decisions it needs:** D-13, D-16, D-19, D-03 (lender systems), D-04 (Finbyx), plus the questions in section 11. Per your instruction, anything unanswered stays open; this spec builds what can be built correctly without it and lists exactly what is waiting (section 12).
 
@@ -116,3 +116,39 @@ Q1 (lender APIs and credentials), Q2/D-13 (vendor structure), D-16 and D-19 fina
 ## 14. Risks
 
 No real lender connector can be written until the lenders' systems are known, so end-to-end behaviour with a real lender is untested in this phase. Per-lender consent wording needs legal approval. The 2027 per-product consent rules may change the routing screen. Offer data quality depends on each lender; Udofin only validates consistency. Without lenders ready, the comparison screen can be demonstrated only with mock data, which will be labelled and blocked from production.
+
+## 15. Implementation record (13 October 2026)
+
+**Built.** Migrations `20261015000800`–`…802`; `LenderConnector` and key-management ports with labelled mocks
+(`packages/adapters`); routing, lender and platform routes (`docs/api/routing.md`); worker handlers (send, reconcile);
+a separate signed-callback receiver; mobile screens in English and Hindi; lender-portal application screens.
+
+**Differs from the draft.**
+
+- Borrower routes follow the shape in `docs/api/routing.md` (selection → per-lender consent → route), not the single
+  `POST /route` of section 6.
+- Callbacks are served by a separate process rather than `POST /v1/hooks/lender/{connector}` on the public API, so the
+  public API never holds the system database login.
+- Platform screens (connector settings, matching-rule approval) are **API only**; no ops-portal screen was built.
+- The `auth.users` phone is read inside `begin_transmission`; it never touches Udofin tables, the outbox, audit or logs.
+- Payload cap, response window and validity minimums are defaults awaiting approval (D-48, D-49, D-45).
+
+**Acceptance criteria (section 10) and the tests that evidence them.**
+
+| #   | Evidence                                                                                                                                                                                               | Run                            |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------ |
+| 1   | `routing.integration` (two of four lenders decline → two offers, two named) and pgTAP 011                                                                                                              | yes                            |
+| 2   | Integration 'lists the valid offers in the approved order'. Independence from Udofin fees holds by construction (`compare_offers` reads no commercial data); no test varies fee data. Partly evidenced |
+| 3   | pgTAP 011 display and non-offer rows with rule version                                                                                                                                                 | yes                            |
+| 4   | pgTAP 011 consent required, stale and withdrawn consent refused, direct insert refused                                                                                                                 | yes                            |
+| 5   | Not applicable: no KYC/bureau/AA initiation exists (status only, D-13). Routing without consent is refused (see 4)                                                                                     | n/a                            |
+| 6   | pgTAP 011 and 006 cross-tenant negatives; canary scan for phone in `routing.integration` (no PAN/Aadhaar field exists to store)                                                                        | yes                            |
+| 7   | `lender-callbacks` cases in `routing.integration` (replay, bad signature, stale timestamp, unknown lender) and pgTAP message-id de-duplication                                                         | yes                            |
+| 8   | pgTAP 011 and routing integration: offer without a valid KFS link is held and not displayed                                                                                                            | yes                            |
+| 9   | Contract schema has no badge/countdown/preselect field; mobile `routing.test.ts`                                                                                                                       | yes (no UI review by a person) |
+| 10  | pgTAP 011 section 12: with the filter on, an offer above 36% APR is omitted and the omission recorded; off by default. Run: yes                                                                        |
+| 11  | `lender-connector.test.ts` (mock blocked in staging and production) and the callback 503                                                                                                               | yes                            |
+| 12  | Integration: a withdrawn application's job is stopped before sending. A suspended-lender case is not separately tested. Partly evidenced                                                               |
+
+**Not tested:** any real lender; real SMS; the mobile screens on a device; browser tests of the new portal screens;
+the Supabase-stack run of pgTAP before CI; load or soak behaviour of the worker.

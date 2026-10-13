@@ -347,10 +347,13 @@ declare
   v_sel lending.lender_selections;
   v_id uuid;
 begin
-  if not exists (select 1 from lending.loan_requests r where r.id = p_request and r.borrower_id = v_borrower) then
+  -- The request row is locked (as route_selection does), so a withdrawal and a routing run cannot both miss each other.
+  perform 1 from lending.loan_requests r where r.id = p_request and r.borrower_id = v_borrower for update;
+  if not found then
     raise exception 'request not found' using errcode = 'P0002';
   end if;
-  select * into v_notice from consent.notices where id = p_notice_id and status = 'published';
+  -- Withdrawal must stay possible after the wording is retired; granting needs the published wording.
+  select * into v_notice from consent.notices where id = p_notice_id and (status = 'published' or p_decision = 'withdrawn');
   if not found or v_notice.purpose <> 'share_with_lender' or v_notice.lender_org_id is distinct from p_lender then
     raise exception 'notice not found' using errcode = 'P0002';
   end if;
@@ -849,7 +852,7 @@ begin
   v_valid := private.try_timestamptz(v_clean ->> 'validUntil');
   if v_issued is null or v_issued > now() + interval '5 minutes' then v_issues := array_append(v_issues, 'issued_at_invalid'::text); end if;
   if v_valid is null or v_valid <= now() then v_issues := array_append(v_issues, 'valid_until_invalid'::text);
-  elsif v_issued is not null and v_valid - v_issued < make_interval(days => v_c.offer_min_validity_days) then v_issues := array_append(v_issues, 'validity_too_short'::text); end if;
+  elsif v_valid - now() < make_interval(days => v_c.offer_min_validity_days) then v_issues := array_append(v_issues, 'validity_too_short'::text); end if;
 
   if cardinality(v_issues) = 0 then
     update lending.offers set status = 'withdrawn' where application_id = p_app and status = 'issued';
@@ -1103,6 +1106,14 @@ begin
     perform private.routing_event(r.application_id, r.lender_org_id, 'no_response_by_deadline');
     v_nr := v_nr + 1;
   end loop;
+  -- A send that never recorded its outcome is treated as unknown after five minutes and reconciled, never resent blindly.
+  for r in select ar.application_id, ar.lender_org_id from lending.application_routing ar
+           where ar.transmission_status = 'transmitting' and ar.updated_at < now() - interval '5 minutes'
+           for update of ar skip locked loop
+    update lending.application_routing set transmission_status = 'uncertain', last_error_class = 'worker_interrupted' where application_id = r.application_id;
+    perform private.routing_event(r.application_id, r.lender_org_id, 'uncertain', '{"class":"worker_interrupted"}'::jsonb);
+    perform ops.enqueue_event('application.reconcile', jsonb_build_object('application_id', r.application_id, 'round', 1), null, 'reconcile-sweep:' || r.application_id::text);
+  end loop;
   with e as (update lending.offers set status = 'expired' where status = 'issued' and valid_until < now() returning id)
   select count(*) into v_exp from e;
   return jsonb_build_object('noResponse', v_nr, 'offersExpired', v_exp);
@@ -1330,7 +1341,7 @@ begin
         'responseDueAt', ar.response_due_at, 'noResponseAt', ar.no_response_at, 'lenderApplicationRef', ar.lender_application_ref,
         'request', jsonb_build_object('categoryKey', lr.category_key, 'amountMinor', lr.requested_amount_minor,
                                       'tenureDays', lr.requested_tenure_days, 'purposeCode', lr.purpose_code),
-        'productName', p.name, 'displayName', b.display_name, 'language', b.preferred_language,
+        'productName', p.name, 'displayName', case when ar.consent_withdrawn_at is null then b.display_name end, 'language', b.preferred_language,
         'consentWithdrawn', ar.consent_withdrawn_at is not null,
         'checks', coalesce((select jsonb_agg(jsonb_build_object('kind', c.kind, 'status', c.status, 'reportedAt', c.reported_at) order by c.kind)
                               from lending.application_check_status c where c.application_id = a.id), '[]'::jsonb),

@@ -49,6 +49,11 @@ cp services/api/.env.example services/api/.env   # fill placeholders; never comm
 pnpm --filter @udofin/api dev
 # Worker (needs SYSTEM_DATABASE_URL = the udofin_system login)
 pnpm --filter @udofin/api worker
+
+# Lender callback receiver (Phase 06; separate process, same system login; PORT/HOST as usual).
+# Signing secrets are referenced by NAME (the connector's signing_secret_ref is an environment variable name
+# set in the deployment); only the labelled mock scheme exists and it is refused in staging and production.
+pnpm --filter @udofin/api callbacks
 # Portals (copy each .env.example to .env.local first)
 pnpm --filter @udofin/ops-portal dev      # http://localhost:3001
 pnpm --filter @udofin/lender-portal dev   # http://localhost:3002

@@ -123,7 +123,7 @@ export function ApplicationDetailView({
   const closed = application.consentWithdrawn;
   const d = detail.ok ? detail.data : undefined;
   const approved = d?.decisions.some((x) => x.decision === 'approved' && x.applied) ?? false;
-  const openOffers = d?.offers.filter((o) => o.status === 'open') ?? [];
+  const openOffers = d?.offers.filter((o) => o.status === 'issued') ?? [];
   return (
     <section>
       <p>

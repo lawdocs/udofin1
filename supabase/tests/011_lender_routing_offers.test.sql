@@ -2,7 +2,7 @@
 -- Synthetic data only. Lenders are made genuinely "live" through the same facts private.lender_is_live reads.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(159);
+select plan(161);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -313,6 +313,8 @@ select is(pg_temp.err(format($$select lending.lender_record_decision(%L, 'proces
 select is(lending.lender_submit_offer(pg_temp.get('appA1')::uuid, (pg_temp.mkoffer('A-OFFER-1', 'kfs.alpha.example', 2050, 1000000, 24000000) - 'kfsUrl'))::jsonb -> 'issues' ? 'kfs_url_missing', true, 'an offer without a KFS link is held');
 select is(lending.lender_submit_offer(pg_temp.get('appA1')::uuid, pg_temp.mkoffer('A-OFFER-1', 'evil.example', 2050, 1000000, 24000000)) -> 'issues' ? 'kfs_host_not_allowed', true, 'a KFS link on a host the lender has not registered is held');
 select is(lending.lender_submit_offer(pg_temp.get('appA1')::uuid, pg_temp.mkoffer('A-OFFER-1', 'kfs.alpha.example', 2050, 1000000, 24000000, 6)) -> 'issues' ? 'validity_too_short', true, 'validity under seven days is held');
+select is(lending.lender_submit_offer(pg_temp.get('appA1')::uuid, jsonb_set(pg_temp.mkoffer('A-OFFER-1', 'kfs.alpha.example', 2050, 1000000, 24000000, 1), '{issuedAt}', to_jsonb((now() - interval '39 days')::text))) -> 'issues' ? 'validity_too_short', true, 'validity is counted from now, so back-dating the issue date cannot shorten what the borrower gets');
+select is(pg_temp.errs(format($$select private.apply_offer(%L, '{}'::jsonb, 'portal', null)$$, pg_temp.get('appA1'))), '42501', 'a signed-in user cannot call the private offer function directly');
 select is(lending.lender_submit_offer(pg_temp.get('appA1')::uuid, jsonb_set(pg_temp.mkoffer('A-OFFER-1', 'kfs.alpha.example', 2050, 1000000, 24000000), '{principalMinor}', '1000.5'::jsonb)) -> 'issues' ? 'principal_invalid', true, 'a fractional amount is held, not rounded');
 select is(lending.lender_submit_offer(pg_temp.get('appA1')::uuid, jsonb_set(pg_temp.mkoffer('A-OFFER-1', 'kfs.alpha.example', 2050, 1000000, 24000000), '{kfsUrl}', '"http://kfs.alpha.example/x"')) -> 'issues' ? 'kfs_url_invalid', true, 'a non-https KFS link is held');
 select is(lending.lender_submit_offer(pg_temp.get('appA1')::uuid, jsonb_set(pg_temp.mkoffer('A-OFFER-1', 'kfs.alpha.example', 2050, 1000000, 24000000), '{kfsUrl}', '"https://user:pw@kfs.alpha.example/x"')) -> 'issues' ? 'kfs_url_invalid', true, 'a KFS link with embedded credentials is held');
