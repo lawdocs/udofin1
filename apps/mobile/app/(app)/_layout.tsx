@@ -17,6 +17,9 @@ function Menu() {
       <Tabs.Screen name="consent" options={{ href: null }} />
       <Tabs.Screen name="new-request" options={{ href: null }} />
       <Tabs.Screen name="stepup" options={{ href: null }} />
+      <Tabs.Screen name="lenders" options={{ href: null }} />
+      <Tabs.Screen name="applications" options={{ href: null }} />
+      <Tabs.Screen name="offers" options={{ href: null }} />
     </Tabs>
   );
 }

@@ -103,6 +103,24 @@ export default function RequestDetailScreen() {
       ))}
 
       {error ? <Banner tone="danger">{error}</Banner> : null}
+      {r.status === 'submitted' ? (
+        <>
+          <Button
+            title={t('apps.chooseLenders')}
+            onPress={() => router.push({ pathname: '/lenders', params: { request: r.id } })}
+          />
+          <Button
+            title={t('lenders.viewStatus')}
+            secondary
+            onPress={() => router.push({ pathname: '/applications', params: { request: r.id } })}
+          />
+          <Button
+            title={t('apps.compare')}
+            secondary
+            onPress={() => router.push({ pathname: '/offers', params: { request: r.id } })}
+          />
+        </>
+      ) : null}
       {r.status === 'draft' ? (
         <Button
           title={t('requests.edit')}

@@ -16,6 +16,16 @@ import {
   type STEPUP_ACTIONS,
 } from '@udofin/contracts';
 import { type ApiClient, type ApiResult } from '@udofin/auth-client';
+import {
+  BorrowerApplicationList,
+  Comparison,
+  MatchingLenderList,
+  RouteResult,
+  SelectionCreated,
+  SelectionView,
+  type COMPARISON_SORTS,
+  type PLATFORMS,
+} from '@udofin/contracts';
 import { z } from 'zod';
 import { type Language } from '../i18n';
 import { newIdempotencyKey } from './form';
@@ -116,6 +126,72 @@ export function createBorrowerClient(api: ApiClient) {
     integrityNonce: () => api.post('/v1/integrity/nonce', IntegrityNonce, {}, key()),
     verifyIntegrity: (token: string, nonce: string) =>
       api.post('/v1/integrity/verify', IntegrityResult, { token, nonce }, key()),
+
+    matchingLenders: (requestId: string) =>
+      api.get(`/v1/loan-requests/${encodeURIComponent(requestId)}/lenders`, MatchingLenderList),
+    selectLenders: (requestId: string, items: { lenderId: string; productVersionId?: string }[]) =>
+      api.post(
+        `/v1/loan-requests/${encodeURIComponent(requestId)}/selection`,
+        SelectionCreated,
+        { items },
+        key(),
+      ),
+    selection: (requestId: string, language: Language) =>
+      api.get(
+        `/v1/loan-requests/${encodeURIComponent(requestId)}/selection?language=${language}`,
+        SelectionView,
+      ),
+    removeSelected: (selectionId: string, lenderId: string) =>
+      api.post(
+        `/v1/selections/${encodeURIComponent(selectionId)}/items/${encodeURIComponent(lenderId)}/remove`,
+        Ok,
+        {},
+        key(),
+      ),
+    lenderConsent: (
+      requestId: string,
+      input: {
+        lenderId: string;
+        noticeId: string;
+        decision: 'granted' | 'denied' | 'withdrawn';
+        appVersion: string;
+      },
+    ) =>
+      api.post(
+        `/v1/loan-requests/${encodeURIComponent(requestId)}/lender-consents`,
+        Created,
+        { ...input, screen: 'lender_consent' },
+        key(),
+      ),
+    routeSelection: (selectionId: string, idempotencyKey?: string) =>
+      api.post(
+        `/v1/selections/${encodeURIComponent(selectionId)}/route`,
+        RouteResult,
+        {},
+        key(idempotencyKey),
+      ),
+    applications: (requestId: string) =>
+      api.get(
+        `/v1/loan-requests/${encodeURIComponent(requestId)}/applications`,
+        BorrowerApplicationList,
+      ),
+    withdrawApplication: (applicationId: string) =>
+      api.post(`/v1/applications/${encodeURIComponent(applicationId)}/withdraw`, Ok, {}, key()),
+    compare: (
+      requestId: string,
+      input: {
+        sort?: (typeof COMPARISON_SORTS)[number];
+        platform: (typeof PLATFORMS)[number];
+        language: Language;
+      },
+      idempotencyKey?: string,
+    ) =>
+      api.post(
+        `/v1/loan-requests/${encodeURIComponent(requestId)}/comparison`,
+        Comparison,
+        input,
+        key(idempotencyKey),
+      ),
 
     requestDeletion: () => api.post('/v1/borrower/deletion-requests', Created, {}, key()),
     cancelDeletion: () => api.post('/v1/borrower/deletion-requests/cancel', Ok, {}, key()),

@@ -54,7 +54,7 @@ describe('catalogues', () => {
       const text = readFileSync(file, 'utf8');
       for (const m of text.matchAll(/\bt\(\s*'([a-zA-Z0-9_.]+)'/g)) used.add(m[1] ?? '');
       for (const m of text.matchAll(
-        /'((?:common|error|signin|otp|home|profile|language|consent|request|requests|settings|delete|stepup)\.[a-zA-Z0-9_.]+)'/g,
+        /'((?:common|error|signin|otp|home|profile|language|consent|request|requests|settings|delete|stepup|lenders|stage|check|apps|offers)\.[a-zA-Z0-9_.]+)'/g,
       ))
         used.add(m[1] ?? '');
     }
@@ -90,6 +90,28 @@ describe('catalogues', () => {
       ),
       ...['requested', 'blocked', 'anonymised', 'cancelled'].map((s) => `delete.status.${s}`),
       ...LANGUAGES.map((l) => `language.${l}`),
+      ...[
+        'sending',
+        'sent',
+        'acknowledged',
+        'processing',
+        'info_requested',
+        'approved_awaiting_offer',
+        'offer_received',
+        'declined',
+        'no_response',
+        'technical_failure',
+        'stopped',
+        'withdrawn',
+      ].map((s) => `stage.${s}`),
+      ...['kyc', 'bureau', 'account_aggregator'].map((s) => `check.${s}`),
+      ...['not_started', 'in_progress', 'completed', 'failed'].map((s) => `check.status.${s}`),
+      ...['apr_bps', 'monthly_repayment_minor', 'total_repayable_minor'].map(
+        (s) => `offers.sort.${s}`,
+      ),
+      ...['declined', 'no_response', 'processing', 'technical_failure', 'offer_unavailable'].map(
+        (s) => `offers.reason.${s}`,
+      ),
     ];
     expect(need.filter((k) => !(k in en))).toEqual([]);
   });
