@@ -29,7 +29,7 @@
 
 ## Implementation state
 
-- Done: the skeleton and hardening above, with 14 tests.
+- Done: the skeleton and hardening above, with 22 tests.
 - Module layout and rules (public `index.ts` per module, one transaction per command, `service_role` only in worker paths) are documented in `services/api/src/modules/README.md`; no module code exists yet.
 - Not yet built: any business module or route, authentication (JWT verification), the per-request database transaction (ADR-0004), module-boundary lint rules beyond `packages/domain`, the worker entrypoint.
 

@@ -13,7 +13,7 @@
 
 ## 0. How to read status
 
-- **Built**: exists in the repository and is covered by tests (pgTAP for the database: 88 assertions in `supabase/tests/`, passing locally on PostgreSQL 16 and wired into CI on the Supabase CLI with Postgres 17; Vitest for TypeScript packages and the API).
+- **Built**: exists in the repository and is covered by tests (pgTAP for the database: 145 assertions in `supabase/tests/`, passing locally on PostgreSQL 16 and wired into CI on the Supabase CLI with Postgres 17; Vitest for TypeScript packages and the API).
 - **Planned (Phase N)**: decided, not implemented. "Decided" means it is recorded in the baseline decisions; it does not mean it has been designed in detail.
 
 | Phase | Name                                                           |

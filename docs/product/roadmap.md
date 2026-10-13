@@ -125,10 +125,10 @@ phases build on tested ground rather than assumptions.
 **Scope (delivered).**
 
 - Monorepo (pnpm workspaces, Turborepo, TypeScript ~6.0.3, ESLint, Prettier).
-- Database schema in `supabase/migrations/` (5 migrations) with 88 pgTAP assertions in
+- Database schema in `supabase/migrations/` (6 migrations) with 145 pgTAP assertions in
   `supabase/tests/` passing locally on PostgreSQL 16 (`scripts/db-test-local.sh`).
 - API skeleton `services/api` (Fastify 5: validated config, PII-redacting logger, health checks,
-  problem+json errors, rate limits, CORS allowlist) with 14 tests.
+  problem+json errors, rate limits, CORS allowlist) with 22 tests.
 - App shells: `apps/mobile` (Expo SDK 57; 28 prohibited Android permissions blocked; OTA off),
   `apps/ops-portal` and `apps/lender-portal` (Next.js 16.4 with nonce-based CSP).
 - Shared packages: `packages/domain` (money in paise, state machines), `packages/contracts`
@@ -149,7 +149,7 @@ data. Nothing has been deployed.
 **Acceptance criteria.**
 
 - `pnpm lint && pnpm typecheck && pnpm test` pass locally.
-- `scripts/db-test-local.sh` applies all migrations and passes all 88 pgTAP assertions.
+- `scripts/db-test-local.sh` applies all migrations and passes all 145 pgTAP assertions.
 - The tests prove: lender A cannot read or change lender B's data; a borrower sees only their own
   records; an approved product version cannot be edited; maker and checker must differ; an
   application cannot be marked disbursed without disbursement evidence; duplicate idempotency keys

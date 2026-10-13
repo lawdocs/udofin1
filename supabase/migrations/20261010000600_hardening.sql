@@ -737,3 +737,11 @@ exception when others then
   raise warning 'could not drop pg_graphql (%): disable it in the Supabase dashboard (Database > Extensions)', sqlerrm;
 end
 $$;
+
+-- N. Indexes behind the row-level-security filters -----------------------------------------------
+-- Every policy filters on a borrower or lender key; without an index those filters scan the table
+-- once borrowers and payments reach the millions.
+create index payment_intents_borrower on payments.payment_intents (borrower_id, created_at desc);
+create index provider_events_lender on payments.provider_events (lender_org_id, received_at desc);
+create index notices_lender on consent.notices (lender_org_id) where lender_org_id is not null;
+create index applications_product_version on lending.applications (product_version_id);

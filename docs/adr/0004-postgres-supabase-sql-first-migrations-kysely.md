@@ -25,7 +25,7 @@
 
 ## Implementation state
 
-- Done: five migrations and three pgTAP files (88 assertions) passing locally on PostgreSQL 16 via `scripts/db-test-local.sh` and the local-only auth shim `scripts/db/local-supabase-shim.sql`.
+- Done: six migrations and four pgTAP files (145 assertions) passing locally on PostgreSQL 16 via `scripts/db-test-local.sh` and the local-only auth shim `scripts/db/local-supabase-shim.sql`.
 - CI: the `database` job in `.github/workflows/ci.yml` runs `supabase db start` and `supabase test db` on the Supabase CLI stack (Postgres 17). `supabase/config.toml` exposes only `public` and `graphql_public` through the API.
 - Not yet built: the per-request transaction wrapper, JWKS verification (`jose` is a dependency but unused), Kysely.
 

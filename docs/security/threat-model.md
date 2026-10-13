@@ -1,5 +1,7 @@
 # Udofin threat model
 
+> **Update (migration 0600 and API hardening).** Many gaps in the register below were closed after this model was written; see [`review-2026-10-10.md`](review-2026-10-10.md) for each finding's disposition. Gap statuses here are re-baselined in Phase 02.
+
 - **Date:** 2026-10-10 (baseline). **Scope:** the code in this repository plus the system planned in
   [`../product/roadmap.md`](../product/roadmap.md) up to Phase 11.
 - **Owner:** security lead (engineering owner not yet appointed). **Approver:** product owner.
@@ -44,7 +46,7 @@ in which phase, and what risk remains.
 | Portals (`apps/ops-portal`, `apps/lender-portal`) | Foundation page only. Per-request nonce CSP (`proxy.ts`), security headers (`next.config.ts`), `noindex`. No sign-in.                                                 | Staff sign-in with MFA (02/03), lender configuration (04), queues and documents (06–08), grievance (09).   |
 | API (`services/api`)                              | Health endpoints only. Validated config, PII-redacting logger, request-id validation, helmet, CORS allowlist, rate limit, problem+json errors. No authentication yet. | JWT verification via JWKS (03), per-request RLS context (02), business endpoints from 04.                  |
 | Worker                                            | Does not exist.                                                                                                                                                       | Outbox + pg-boss worker (03).                                                                              |
-| Database (`supabase/migrations`)                  | 5 migrations: tenancy, identity, consent, audit, lending, servicing, payments; RLS on every domain table; 88 pgTAP assertions.                                        | Corrective migrations (02); new tables per phase.                                                          |
+| Database (`supabase/migrations`)                  | 6 migrations: tenancy, identity, consent, audit, lending, servicing, payments; RLS on every domain table; 145 pgTAP assertions.                                       | Corrective migrations (02); new tables per phase.                                                          |
 | Object storage                                    | Not used. Decision: no Supabase Storage for KYC or loan documents.                                                                                                    | S3 ap-south-1 + KMS (07).                                                                                  |
 | Provider integrations (`packages/adapters`)       | Provider mode guard only (`mock` / `sandbox` / `production`).                                                                                                         | KYC, bureau, AA (06), eSign (07), payments and mandates (08), SMS (05), AI inference (09).                 |
 | CI/CD (`.github/workflows/ci.yml`)                | Format, build, lint, typecheck, unit tests, mobile config check, `pnpm audit` (high), Supabase pgTAP on Postgres 17, gitleaks, API image build.                       | Merged-manifest check, migration lint, image publishing, deployments with OIDC (03).                       |

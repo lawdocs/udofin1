@@ -23,11 +23,6 @@ for f in "$ROOT"/supabase/migrations/*.sql; do
   psql -v ON_ERROR_STOP=1 -q -d "$DB" -f "$f"
 done
 
-if [[ -f "$ROOT/supabase/seed.sql" ]]; then
-  echo "==> Applying seed (synthetic data only)"
-  psql -v ON_ERROR_STOP=1 -q -d "$DB" -f "$ROOT/supabase/seed.sql"
-fi
-
 echo "==> Running pgTAP tests"
 tests=("$ROOT"/supabase/tests/*.test.sql)
 if (( ${#tests[@]} == 0 )); then

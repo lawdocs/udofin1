@@ -108,7 +108,7 @@ What `scripts/db-test-local.sh` does:
 3. Creates the pgTAP extension, applies every migration in filename order, applies `supabase/seed.sql`
    if it exists, and runs `pg_prove` over `supabase/tests/*.test.sql`.
 
-Today the suite has 88 assertions (7 in `001_structure`, 34 in `002_tenant_isolation`, 47 in
+Today the suite has 145 assertions (7 in `001_structure`, 34 in `002_tenant_isolation`, 69 in
 `003_lifecycle_and_integrity`).
 
 Limits of the local run: it uses PostgreSQL 16 while Supabase and CI use 17, and the shim's `auth.users`

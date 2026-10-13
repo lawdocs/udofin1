@@ -1,5 +1,7 @@
 # Udofin requirements-to-controls matrix
 
+> **Update (migration 0600 and API hardening).** Rows describing database controls were written against migrations 0100-0500. Migration `20261010000600_hardening.sql` and the API changes after the independent review ([`../security/review-2026-10-10.md`](../security/review-2026-10-10.md)) strengthen several of them (actor model, audit scope, offers, payments, history, consent, logging). Implementation states below are re-baselined at the start of Phase 02; where this note and a row disagree, the migrations and tests are authoritative.
+
 **As of:** 10 October 2026 · **Version:** 1.0 (first issue) · **Companion:** `docs/regulatory/register.md`
 
 ## Read this first

@@ -3,7 +3,7 @@
 -- audit writes are bound to the right lender and people.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(31);
+select plan(35);
 
 -- ---------------------------------------------------------------------------------------------
 -- Shared fixture (identical in 002 and 003; keep in sync). Synthetic data only.
@@ -276,6 +276,16 @@ select pg_temp.as_user('11111111-1111-4111-8111-111111111111');
 select is((select count(*) from consent.notices where status = 'published'), 2::bigint,
   'a borrower can read every published notice');
 select pg_temp.as_owner();
+
+-- ============================== Indexes behind RLS filters ===================================
+select ok(exists(select 1 from pg_indexes where schemaname = 'payments' and tablename = 'payment_intents' and indexdef like '%(borrower_id, created_at DESC)%'),
+  'borrower payment lookups are indexed');
+select ok(exists(select 1 from pg_indexes where schemaname = 'payments' and tablename = 'provider_events' and indexdef like '%(lender_org_id, received_at DESC)%'),
+  'lender provider-event lookups are indexed');
+select ok(exists(select 1 from pg_indexes where schemaname = 'consent' and tablename = 'notices' and indexdef like '%(lender_org_id)%'),
+  'lender consent-notice lookups are indexed');
+select ok(exists(select 1 from pg_indexes where schemaname = 'lending' and tablename = 'applications' and indexdef like '%(product_version_id)%'),
+  'applications by product version are indexed');
 
 select * from finish();
 rollback;
