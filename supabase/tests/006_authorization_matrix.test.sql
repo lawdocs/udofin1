@@ -28,6 +28,8 @@ insert into expected_tables values
   ('identity.borrowers', '-', 'su', 'siud', true),
   ('lending.application_events', '-', 's', 'siud', true),
   ('lending.application_transitions', '-', 's', 'siud', false),
+  ('ops.idempotency_keys', '-', '-', 'siud', true),
+  ('ops.outbox_events', '-', '-', 'siud', true),
   ('lending.applications', '-', 'su', 'siud', true),
   ('lending.loan_product_versions', '-', 'siu', 'siud', true),
   ('lending.loan_products', '-', 'siu', 'siud', true),
@@ -53,7 +55,7 @@ insert into expected_tables values
 create temp table actual_tables as
 select n.nspname || '.' || c.relname as tbl, c.oid as oid, c.relrowsecurity as rls, c.relforcerowsecurity as forced
 from pg_class c join pg_namespace n on n.oid = c.relnamespace
-where c.relkind in ('r', 'p') and n.nspname in ('tenancy', 'identity', 'consent', 'audit', 'lending', 'servicing', 'payments');
+where c.relkind in ('r', 'p') and n.nspname in ('tenancy', 'identity', 'consent', 'audit', 'lending', 'servicing', 'payments', 'ops');
 
 select is((select coalesce(string_agg(tbl, ', '), '') from (select tbl from actual_tables except select tbl from expected_tables) x), '',
   'every domain table has a row in the matrix (add new tables here)');
