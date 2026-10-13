@@ -1,4 +1,10 @@
-import { createLocalDocumentStore } from '@udofin/adapters';
+import {
+  createLocalDocumentStore,
+  createMockIntegrityVerifier,
+  createMockSmsSender,
+  createUnconfiguredSmsSender,
+  createUnavailableIntegrityVerifier,
+} from '@udofin/adapters';
 import pg from 'pg';
 import { buildApp, type ReadinessCheck } from './app.js';
 import { createTokenVerifier, supabaseKeys } from './auth/token-verifier.js';
@@ -58,7 +64,24 @@ const documents = config.LOCAL_DOCUMENT_DIR
   ? createLocalDocumentStore(config.LOCAL_DOCUMENT_DIR, config.APP_ENV)
   : undefined;
 
+// SMS and device integrity: only labelled mocks exist today, and the adapters refuse to build outside
+// local/test. With no provider configured the routes that need one answer honestly that they cannot run.
+const borrower = {
+  sms:
+    config.SMS_PROVIDER === 'mock'
+      ? createMockSmsSender(config.APP_ENV)
+      : createUnconfiguredSmsSender(),
+  integrity:
+    config.INTEGRITY_PROVIDER === 'mock'
+      ? createMockIntegrityVerifier(config.APP_ENV)
+      : createUnavailableIntegrityVerifier(),
+  ...(config.STEPUP_OTP_PEPPER ? { stepUpPepper: config.STEPUP_OTP_PEPPER } : {}),
+  ...(config.SEND_SMS_HOOK_SECRET ? { sendSmsHookSecret: config.SEND_SMS_HOOK_SECRET } : {}),
+  smsTimeoutMs: 4000,
+};
+
 const app = await buildApp(config, {
+  borrower,
   readinessChecks,
   ...(auth ? { auth } : {}),
   ...(documents ? { documents } : {}),

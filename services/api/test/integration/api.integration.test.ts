@@ -10,6 +10,7 @@ import { TokenError, type TokenVerifier } from '../../src/auth/token-verifier.js
 import { loadConfig } from '../../src/config.js';
 import { assertUserLoginPosture, LoginPostureError } from '../../src/db/login-posture.js';
 import { createUserContext } from '../../src/db/user-context.js';
+import { createBorrowerProcessor } from '../../src/system/borrower.js';
 import { createChangeRequestApplier } from '../../src/system/change-requests.js';
 import { createSystemPool, type SystemPool } from '../../src/system/pool.js';
 import { createHandlers } from '../../src/workers/handlers.js';
@@ -133,6 +134,7 @@ describe.skipIf(!enabled)('API against a real database', () => {
       store: store(),
       handlers: createHandlers({
         applier,
+        borrower: createBorrowerProcessor(systemPool),
         changeRequestStatus: (id) =>
           systemPool.withSystem(async (tx) => {
             const r = await tx.query<{ status: string }>(

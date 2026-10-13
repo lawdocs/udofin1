@@ -1,4 +1,5 @@
 import { loadConfig } from '../config.js';
+import { createBorrowerProcessor } from '../system/borrower.js';
 import { createChangeRequestApplier } from '../system/change-requests.js';
 import { createSystemPool } from '../system/pool.js';
 import { createHandlers } from './handlers.js';
@@ -21,8 +22,10 @@ const log: WorkerLogger = { info: out('info'), warn: out('warn'), error: out('er
 
 const pool = createSystemPool(config.SYSTEM_DATABASE_URL);
 const applier = createChangeRequestApplier(pool);
+const borrower = createBorrowerProcessor(pool);
 const handlers = createHandlers({
   applier,
+  borrower,
   changeRequestStatus: (id) =>
     pool.withSystem(async (tx) => {
       const r = await tx.query<{ status: string }>(
@@ -51,6 +54,22 @@ async function shutdown(signal: string): Promise<void> {
 }
 process.on('SIGTERM', () => void shutdown('SIGTERM'));
 process.on('SIGINT', () => void shutdown('SIGINT'));
+
+// Housekeeping: keep stored draft statuses honest. Reads and writes already enforce expiry on their own.
+const housekeeping = setInterval(
+  () => {
+    borrower
+      .expireDrafts()
+      .then((n) => {
+        if (n > 0) log.info({ expired: n }, 'drafts expired');
+      })
+      .catch((error: unknown) => {
+        log.warn({ type: (error as Error).name }, 'draft expiry housekeeping failed');
+      });
+  },
+  15 * 60 * 1000,
+);
+housekeeping.unref();
 
 worker.start();
 log.info({}, 'worker started');
