@@ -466,3 +466,23 @@ Also on 13 October 2026: the first lenders to onboard are **MGM Financiers Priva
   offshore DR (not recommended: residency).
 - **Recommendation.** (a) at launch, with (b) reviewed once volumes justify it.
 - **Deadline.** Phase 11 (DR drill targets).
+
+## D-31 Bank, urban co-operative bank and other lender-type regulation
+
+- **Question.** Please supply the RBI directions (and, for co-operative banks, registrar rules) that govern digital lending through an LSP for commercial banks, small finance banks, regional rural banks, urban co-operative banks and HFCs.
+- **Why it matters.** Only NBFC categories are confirmed from primary sources. The platform can record these lenders, but their categories stay non-activatable until compliance signs them off citing the primary source.
+- **Recommendation.** Supply the texts; compliance signs off category by category.
+- **Deadline.** Before the first non-NBFC lender is onboarded.
+
+## D-32 Ind AS applicability rules and who may verify the declaration
+
+- **Question.** Which authoritative rule set should reviewers use to check a lender's Ind AS declaration, and must evidence be audited statements or may an auditor letter or management declaration suffice?
+- **Why it matters.** The system records and verifies declarations but deliberately concludes nothing; the gate "production readiness" requires a verified record, so the evidence standard decides how strict that is. Thresholds for NBFCs and the position of banks are not on file (unverified).
+- **Recommendation.** Require audited statements or an auditor confirmation for "verified"; treat a management declaration as recorded but not sufficient for production readiness until counsel advises otherwise.
+- **Deadline.** Before the first lender goes to production.
+
+## D-33 Production readiness: accounting record and exceptions
+
+- **Question.** Should an unconfirmed accounting record ever be waivable for go-live, and who may waive a mandatory requirement?
+- **Recommendation.** No waiver of the verified accounting record; mandatory requirements may be waived only by an independent approver with a written reason (as built).
+- **Deadline.** Before the first lender goes to production.

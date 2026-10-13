@@ -195,3 +195,13 @@ Each commit runs the full checks first; the PR carries the acceptance checklist 
 | Tenant data crosses lenders through a view or export               | Security-invoker views, per-view negative tests, matrix test, export audit                                  |
 | Secret handling mistakes                                           | References only, scan test, no secret-accepting UI                                                          |
 | Scope too large for one PR                                         | Two-PR delivery; the panel ships with synthetic fixtures only and shows empty states until real data exists |
+
+## Addendum A — Accounting framework, Ind AS status and lender–Udofin engagement (implemented 13 Oct 2026)
+
+Added by the owner's brief of 13 Oct 2026; see ADR 0028 and `docs/api/onboarding.md`.
+
+**Built in this increment:** configurable institution categories and profiles with verification and history; versioned accounting framework / Ind AS status (framework, applicability, implementation status, basis, FY/effective date, statement scope, listed status, group relationships, net worth with date and FY in integer paise, confirmation source, evidence, reviewer, last-verified date, notes, next review); engagement services with requested, proposed and agreed scope, responsible/accountable/supporting parties, shared-responsibility allocation, data and purpose, system of record, integration needs, SLA, escalation, contract reference, dates and statuses (proposed, under discussion, agreed, active, suspended, terminated, superseded) with versions and dual agreement; requirements register with templates, dependencies and ten statuses; integrations with tests or a documented, independently approved manual exception; contract references with independent verification; private documents; ten sequential gates plus suspended/deactivated/terminated, each requested and decided by different people; borrower visibility view; audit by trigger; shared screens in both portals.
+
+**Gate mapping.** profile created · institution verified · approved for onboarding · contract onboarded · service scope agreed · product configuration completed · product configuration approved (existing maker-checker) · integration tested or excepted · production readiness approved · activated.
+
+**Deliberately not built / blocked:** automatic Ind AS conclusions (never); activation of bank, UCB and other categories until compliance sign-off (D-31); evidence standard (D-32, D-33); commercial terms approval; malware scanning; S3/KMS wiring; browser tests for the new screens; the transactions panel and product-configuration UI (remaining Phase 04 scope).
