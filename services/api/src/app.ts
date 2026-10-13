@@ -83,14 +83,15 @@ export async function buildApp(
   });
 
   // Keep the exact bytes of JSON bodies: signed webhooks (the Supabase auth hook) are verified over them.
+  // Fastify's own parser refuses `__proto__` / `constructor` keys. Its error text can echo body fragments (a hook
+  // body carries a phone number and a code), so failures are replaced by a fixed message.
+  const parseJson = app.getDefaultJsonParser('error', 'error');
   app.addContentTypeParser('application/json', { parseAs: 'string' }, (request, body, done) => {
-    try {
-      (request as { rawBody?: string }).rawBody = body as string;
-      done(null, body === '' ? undefined : (JSON.parse(body as string) as unknown));
-    } catch (error) {
-      Object.assign(error as Error, { statusCode: 400 });
-      done(error as Error, undefined);
-    }
+    (request as { rawBody?: string }).rawBody = body as string;
+    void parseJson(request, body as string, (error: Error | null, parsed?: unknown) => {
+      if (error) done(Object.assign(new Error('invalid_json'), { statusCode: 400 }), undefined);
+      else done(null, parsed);
+    });
   });
 
   const registered: { method: string; url: string }[] = [];

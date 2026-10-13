@@ -19,6 +19,12 @@ The owner decided D-01 (baseline approved for now, may change after the app is b
 
 Also on 13 October 2026: the first lenders to onboard are **MGM Financiers Private Limited** and **Megapode Vyapar Private Limited**, both RBI-regulated NBFCs (D-03, partly). Their registration numbers, layer (Base, Middle, Upper), Ind AS status and what each provides (products, whether Udofin gives DLG, whether Udofin collects) are still to be collected during onboarding; nothing is assumed. Lender staff who approve changes inside a lender are named by each lender; Udofin separately needs **two named platform administrators**. Production hosting is **AWS Mumbai (ap-south-1)** (D-06 confirmed 13 Oct 2026); the owner is creating the staging Supabase project in Mumbai. The prototype Supabase project `Udofin-app` is left untouched; fresh staging and production projects will be created in Mumbai (Phase 02 spec Q1, agreed).
 
+## Decisions recorded for Phase 05 (13 October 2026)
+
+The owner decided: **D-14** service messages only at launch, no marketing or promotional messages, with the data model ready for a separate marketing consent later; **D-15** English and Hindi everywhere (labels, validation, errors, statuses, consent), preference stored, unapproved Hindi consent wording marked "requires review"; **D-24** tiered device integrity plus a one-time-code step-up for offer acceptance, e-sign, bank-account change and mandate creation; **D-25 (partly)** deleting an account anonymises the profile and keeps only the consent and audit records that must be kept, with no retention period assumed; display name is optional; drafts expire 30 days after creation.
+
+New open items raised by the Phase 05 build are D-34 to D-38 below.
+
 ## Summary
 
 | No.  | Decision                                                                                      | Priority                 | Deadline (blocks)                                       | Status                                                                                          |
@@ -36,8 +42,8 @@ Also on 13 October 2026: the first lenders to onboard are **MGM Financiers Priva
 | D-11 | Will Udofin act as recovery agent for any lender?                                             | P2                       | Phase 04 (KFS naming), Phase 08                         | Decided 13 Oct 2026: yes, plus other agencies allowed                                           |
 | D-12 | Appoint Udofin's grievance officer, privacy contact, CERT-In point of contact, incident owner | P2                       | Phase 04 (disclosures), Phase 05 (trust page)           | Open                                                                                            |
 | D-13 | KYC / bureau / AA vendor contract structure under lender credentials                          | P2                       | Phase 06                                                | Open                                                                                            |
-| D-14 | Marketing consent and notification strategy                                                   | P2                       | Phase 05                                                | Open                                                                                            |
-| D-15 | Languages at launch                                                                           | P2                       | Phase 05 (UI), Phase 07 (KFS and documents)             | Open                                                                                            |
+| D-14 | Marketing consent and notification strategy                                                   | P2                       | Phase 05                                                | Decided 13 Oct 2026: service messages only; marketing consent data model ready, no marketing is sent |
+| D-15 | Languages at launch                                                                           | P2                       | Phase 05 (UI), Phase 07 (KFS and documents)             | Decided 13 Oct 2026: English and Hindi; Hindi wording awaits review |
 | D-16 | Default order of offers and who owns the matching logic                                       | P2                       | Phase 06                                                | Open                                                                                            |
 | D-17 | Equator: domain, brand and independence model                                                 | P2                       | Phase 09                                                | Open                                                                                            |
 | D-18 | AI provider and hosting                                                                       | P2                       | Phase 09                                                | Open                                                                                            |
@@ -46,8 +52,8 @@ Also on 13 October 2026: the first lenders to onboard are **MGM Financiers Priva
 | D-21 | Field-agent app                                                                               | P3                       | Only if a lender needs it                               | Open                                                                                            |
 | D-22 | Personal "books of accounts" feature                                                          | P3                       | Before Phase 10 planning                                | Open                                                                                            |
 | D-23 | Confirm payday loans are not supported                                                        | P2                       | Phase 04                                                | Open                                                                                            |
-| D-24 | Device-integrity enforcement policy                                                           | P2                       | Phase 05                                                | Open                                                                                            |
-| D-25 | Record-retention schedule (with lenders)                                                      | P2                       | Phase 07                                                | Open                                                                                            |
+| D-24 | Device-integrity enforcement policy                                                           | P2                       | Phase 05                                                | Decided 13 Oct 2026: tiered; step-up OTP on high-risk actions (built); production verifier needs Play Integrity credentials |
+| D-25 | Record-retention schedule (with lenders)                                                      | P2                       | Phase 07                                                | Partly decided: deletion anonymises the profile and keeps required consent and audit records; the retention schedule is still open |
 | D-26 | Ecosystem boundaries and conflict disclosures (Finbyx, LawDocsComply, staff SSO)              | P2                       | Phase 10; disclosures before Phase 04 contracts         | Open                                                                                            |
 | D-27 | Membership of the fintech self-regulatory organisation (FACE)                                 | P3                       | Before Phase 11                                         | Open                                                                                            |
 | D-28 | Disaster-recovery posture for a regional outage                                               | P2                       | Phase 11 (DR drill targets)                             | Open                                                                                            |
@@ -486,3 +492,38 @@ Also on 13 October 2026: the first lenders to onboard are **MGM Financiers Priva
 ## D-31 update
 
 The owner will supply the bank / co-operative bank directions near the final stage, because RBI amends them regularly. Until then those categories stay non-activatable.
+
+
+## D-34 Loan-purpose list (missing dependency)
+
+- **Question.** Please supply the fixed list of loan purposes (stable key, English label, Hindi label) that borrowers choose from.
+- **Why it matters.** The Phase 05 brief says to use the existing list. No such list exists in the repository, in the earlier specs or in the roadmap; the Phase 05 draft spec wrongly described one as existing, and that statement is withdrawn. The table `lending.loan_purposes` and the API enforce the list but ship **empty**, so no request can be saved until you supply it. Nothing was invented.
+- **Recommendation.** Send the list; it is loaded through a reviewed data migration. Hindi labels carry their own review status.
+- **Deadline.** Before any borrower testing of Phase 05.
+
+## D-35 SMS provider and DLT registration
+
+- **Question.** Which SMS provider, and which sender header and templates are registered under the legal entity (D-02)?
+- **Why it matters.** Real sign-in codes and step-up codes cannot be delivered until a provider adapter exists. Only a labelled mock exists, blocked outside local and test. No provider values or DLT identifiers are in the code; they are configuration.
+- **Recommendation.** Choose after quotes; the port (`SmsSender`) makes the choice reversible. Delivery is never claimed from provider acceptance.
+- **Deadline.** Before the first real borrower.
+
+## D-36 How tenure is counted
+
+- **Question.** The app asks for months and sends days (a month counts as 30 days). Is that acceptable, or should it be calendar months with the lender's schedule?
+- **Recommendation.** Keep for requests (the lender's schedule is authoritative), and revisit in Phase 06 with lender product rules.
+- **Deadline.** Phase 06.
+
+## D-37 Approval of consent and Hindi wording
+
+- **Question.** Who approves the English consent notices (terms, privacy notice, sharing with lenders) and the Hindi translations, and in what form?
+- **Why it matters.** No notice is seeded. Wording flagged "requires review" cannot be the basis of a required consent (enforced in the database), so Hindi borrowers are offered the approved English text until the Hindi text is approved.
+- **Recommendation.** Counsel approves English first; a native Hindi reviewer then a lawyer approves Hindi. The app strings in Hindi are also a draft.
+- **Deadline.** Before the first real borrower.
+
+## D-38 Removing the sign-in identity on deletion
+
+- **Question.** May the worker call the authentication provider's admin interface to remove the phone identity when an account is deleted, and when (immediately or after the retention schedule D-25)?
+- **Why it matters.** The deletion processor anonymises Udofin's profile, but the phone number lives in the authentication provider. The app records that removal as pending and never says it is done.
+- **Recommendation.** Decide together with D-25.
+- **Deadline.** Before the first real borrower.

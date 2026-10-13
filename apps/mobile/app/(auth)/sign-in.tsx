@@ -20,8 +20,7 @@ export default function SignInScreen() {
     setError(null);
     const result = await otp.requestCode(phone);
     setBusy(false);
-    if (result.ok && result.phone)
-      router.push({ pathname: '/verify', params: { phone: result.phone } });
+    if (result.ok && result.phone) router.push('/verify');
     else if (!result.ok) setError(t(`otp.error.${result.error}` as MessageKey));
   }
 

@@ -581,6 +581,10 @@ begin
   if v_recent >= 5 then
     raise exception 'too many verification codes requested' using errcode = '55000', hint = 'rate_limited';
   end if;
+  -- Overall guess budget: two locked challenges (ten wrong codes) in 24 hours stop further codes until the window passes.
+  if (select count(*) from identity.stepup_challenges where borrower_id = v_borrower and status = 'locked' and created_at > now() - interval '24 hours') >= 2 then
+    raise exception 'too many failed verification attempts' using errcode = '55000', hint = 'rate_limited';
+  end if;
   update identity.stepup_challenges set status = 'expired'
   where borrower_id = v_borrower and action = p_action and context_ref = p_context_ref and status = 'pending';
   insert into identity.stepup_challenges (id, borrower_id, action, context_ref, code_hash, expires_at)

@@ -1,7 +1,7 @@
 -- Phase 05: borrower profile, consent, loan requests, step-up, integrity, deletion. Synthetic data only.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(82);
+select plan(83);
 
 create function pg_temp.as_user(uid uuid) returns void language plpgsql as $fn$
 begin
@@ -156,6 +156,9 @@ select identity.stepup_verify('e3000000-0000-4000-8000-000000000002', repeat('0'
 select identity.stepup_verify('e3000000-0000-4000-8000-000000000002', repeat('0', 64));
 select is(identity.stepup_verify('e3000000-0000-4000-8000-000000000002', repeat('0', 64)), 'locked', 'five wrong attempts lock the challenge');
 select is(identity.stepup_verify('e3000000-0000-4000-8000-000000000002', repeat('c', 64)), 'locked', 'even the right code is refused once locked');
+select identity.stepup_start('e3000000-0000-4000-8000-000000000003', 'esign', 'doc2', repeat('e', 64));
+select identity.stepup_verify('e3000000-0000-4000-8000-000000000003', repeat('0', 64)) from generate_series(1, 5);
+select is(pg_temp.err($$select identity.stepup_start('e3000000-0000-4000-8000-000000000004', 'esign', 'doc3', repeat('f', 64))$$), '55000|rate_limited', 'two locked challenges in a day stop further codes (overall guess budget)');
 select pg_temp.as_user('e1000000-0000-4000-8000-000000000001');
 select is(identity.stepup_verify('e3000000-0000-4000-8000-000000000001', repeat('a', 64)), 'not_found', 'another borrower cannot touch the challenge');
 

@@ -110,6 +110,7 @@ Events that should cause this decision to be reopened.
 | [0021](0021-design-tokens-and-tenant-branding-limits.md)             | Design tokens and limits on lender branding                          | Accepted (baseline, pending owner approval) | UI                |
 | [0022](0022-multi-lender-offer-comparison.md)                        | Multi-lender offer comparison                                        | Proposed                                    | Conduct           |
 | [0023](0023-collections-and-dlg-separation.md)                       | Collections and DLG kept separate                                    | Proposed                                    | Conduct / finance |
+| [0029](0029-borrower-onboarding-and-loan-request.md)                 | Borrower onboarding, consent evidence, loan requests, step-up        | Accepted (pending owner review of the Phase 05 PR) | Borrower, conduct |
 | [0027](0027-idempotency-in-postgres.md)                              | Idempotency records in Postgres, in the business transaction         | Accepted                                    | API, database     |
 | [0026](0026-portal-sessions-bff-cookies.md)                          | Portal sessions through a backend-for-frontend with HttpOnly cookies | Accepted                                    | Portals, auth     |
 | [0025](0025-two-person-change-control.md)                            | Two-person change control for administrative changes                 | Accepted                                    | Tenancy, audit    |

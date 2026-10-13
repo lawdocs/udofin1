@@ -36,6 +36,7 @@ import {
   CONSENT_PURPOSES_REQUIRED,
   LANGUAGES,
 } from '@udofin/contracts';
+import { createUnconfiguredSmsSender, withSmsTimeout } from '@udofin/adapters';
 import { z } from 'zod';
 import { ApiError } from '../../http/api-error.js';
 import { decodeCursor, encodeCursor, PageQuerySchema } from '../../http/pagination.js';
@@ -117,7 +118,31 @@ const HookBody = z.object({
  * Borrower-facing API. Every route takes the borrower from the verified token (never from the request),
  * reads under row-level security, and writes through the checked database functions.
  */
+/** Remembers message ids for ten minutes (longer than the signature window). Bounded so it cannot grow without limit. */
+export function createSeenIds(ttlMs = 600_000, max = 10_000, now: () => number = Date.now) {
+  const seen = new Map<string, number>();
+  return {
+    /** True the first time an id is seen; false for a repeat. */
+    claim(id: string): boolean {
+      const t = now();
+      for (const [key, at] of seen) {
+        if (t - at > ttlMs || seen.size > max) seen.delete(key);
+        else break;
+      }
+      if (!id || seen.has(id)) return false;
+      seen.set(id, t);
+      return true;
+    },
+  };
+}
+
 export function borrowerRoutes(deps?: BorrowerDeps): RouteDefinition[] {
+  // Every provider call is bounded: the Supabase hook has a 5 s budget and a slow provider must not hang a request.
+  const seenHookIds = createSeenIds();
+  const sms = withSmsTimeout(
+    deps?.sms ?? createUnconfiguredSmsSender(),
+    deps?.smsTimeoutMs ?? 4000,
+  );
   const unavailable = (what: string) =>
     new ApiError(
       503,
@@ -583,7 +608,7 @@ export function borrowerRoutes(deps?: BorrowerDeps): RouteDefinition[] {
             hashCode(deps.stepUpPepper, challengeId, code),
           ],
         );
-        const result = await deps.sms.send({
+        const result = await sms.send({
           template: 'stepup_otp',
           to: toE164(phone),
           language: lang,
@@ -771,7 +796,12 @@ export function borrowerRoutes(deps?: BorrowerDeps): RouteDefinition[] {
           body: raw,
         });
         if (!ok) throw new ApiError(401, 'invalid_signature', 'Unauthorized');
-        const result = await deps.sms.send({
+        // A signed request can be captured; refuse a second delivery of the same message id inside the window.
+        // (Per process: with several API instances a replay could land on another one; the 300 s window and the
+        // provider-side idempotency key remain the other limits.)
+        const messageId = typeof h['webhook-id'] === 'string' ? h['webhook-id'] : '';
+        if (!seenHookIds.claim(messageId)) throw new ApiError(401, 'replayed', 'Unauthorized');
+        const result = await sms.send({
           template: 'login_otp',
           to: toE164(body.user.phone),
           language: 'en',

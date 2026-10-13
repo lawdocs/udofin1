@@ -480,6 +480,20 @@ describe.skipIf(!enabled)('borrower API against a real database', () => {
       expect(res.statusCode, res.body).toBe(200);
       expect(sms.sent.length).toBe(before + 1);
       expect(sms.sent[before]?.template).toBe('login_otp');
+      // The same signed message delivered again is refused and sends nothing more.
+      const replay = await call(body, {
+        'webhook-id': 'msg_1',
+        'webhook-timestamp': String(ts),
+        'webhook-signature': sign('msg_1', ts, body),
+      });
+      expect(replay.statusCode).toBe(401);
+      expect(sms.sent.length).toBe(before + 1);
+    });
+
+    it('answers malformed JSON with a fixed message that echoes none of the body', async () => {
+      const res = await call('{"user":{"phone":"+919000000009"', {});
+      expect(res.statusCode).toBe(400);
+      expect(res.body).not.toContain('919000000009');
     });
 
     it('refuses a bad signature, a wrong secret and a stale timestamp, sending nothing', async () => {
@@ -511,6 +525,60 @@ describe.skipIf(!enabled)('borrower API against a real database', () => {
       expect(stale.statusCode).toBe(401);
       expect((await call(body, {})).statusCode).toBe(401);
       expect(sms.sent.length).toBe(before);
+    });
+  });
+
+  describe('slow or failing SMS provider', () => {
+    it('fails the hook cleanly within the budget and reports no code as sent', async () => {
+      const slow = {
+        descriptor: sms.descriptor,
+        send: () => new Promise<never>(() => undefined),
+      };
+      const slowApp = await buildApp(loadConfig({ APP_ENV: 'test' }), {
+        auth: { verifier: fakeVerifier, context: createUserContext(apiPool) },
+        borrower: {
+          sms: slow,
+          integrity: createMockIntegrityVerifier('test'),
+          stepUpPepper: PEPPER,
+          sendSmsHookSecret: HOOK_SECRET,
+          smsTimeoutMs: 150,
+        },
+      });
+      const body = JSON.stringify({ user: { phone: '+919000000002' }, sms: { otp: '123456' } });
+      const ts = Math.floor(Date.now() / 1000);
+      const signature = `v1,${createHmac(
+        'sha256',
+        Buffer.from(HOOK_SECRET.replace('v1,whsec_', ''), 'base64'),
+      )
+        .update(`msg_slow.${ts}.${body}`)
+        .digest('base64')}`;
+      const started = Date.now();
+      const res = await slowApp.inject({
+        method: 'POST',
+        url: '/v1/hooks/send-sms',
+        remoteAddress: freshAddress(),
+        headers: {
+          'content-type': 'application/json',
+          'webhook-id': 'msg_slow',
+          'webhook-timestamp': String(ts),
+          'webhook-signature': signature,
+        },
+        payload: body,
+      });
+      expect(res.statusCode).toBe(500);
+      expect(Date.now() - started).toBeLessThan(2000);
+      expect(res.body).not.toContain('123456');
+      // A step-up with the slow provider records "timeout", never "accepted".
+      const challenge = await slowApp.inject({
+        method: 'POST',
+        url: '/v1/stepup/challenges',
+        remoteAddress: freshAddress(),
+        headers: { ...token(ids.b2), 'idempotency-key': `it-${randomUUID()}` },
+        payload: { action: 'esign', contextRef: 'slow1' },
+      });
+      expect(challenge.statusCode, challenge.body).toBe(201);
+      expect(challenge.json<{ delivery: string }>().delivery).toBe('timeout');
+      await slowApp.close();
     });
   });
 

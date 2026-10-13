@@ -73,3 +73,16 @@ Two-person change control needs two people before anyone can be added. A named e
 - `GET /health/ready` on the API reports the database as `ok`.
 - Run the Phase 02 integration tests against the **staging** project's login (never production).
 - Supabase _Advisors_ (security and performance) show no unaddressed warnings for the domain schemas.
+
+## 9. Send SMS hook for sign-in codes (Phase 05)
+
+Supabase Auth delivers phone codes through an SMS provider. Udofin uses the **Send SMS** auth hook so the provider, the sender header and the DLT templates stay under Udofin's control and out of the code.
+
+1. Choose the provider and complete the DLT registration under the legal entity (D-02, D-35). None is chosen yet; until then the API has only a labelled mock that is refused in staging and production, and real codes cannot be sent.
+2. In _Authentication → Hooks → Send SMS_ choose an **HTTPS** hook pointing to `https://<api-host>/v1/hooks/send-sms`. Generate the signing secret in the dashboard (`v1,whsec_…`).
+3. Store that secret as `SEND_SMS_HOOK_SECRET` in the API's secrets manager. Also create `STEPUP_OTP_PEPPER` (32+ random characters) there. Neither value is ever committed, logged or sent to an app.
+4. The hook has a 5-second budget. The API gives the provider about 4 seconds; on timeout it answers `500` so Supabase reports the failure and the app offers a retry. Do not raise the provider timeout.
+5. Provider credentials, DLT principal-entity and template identifiers are environment configuration read by the provider adapter. They must not appear in the repository, a migration, a log or an error message.
+6. Verify in staging with a Supabase test number first, never with a real borrower's number in a non-production project.
+
+The hook can be disabled at any time from the dashboard; nothing else depends on it, but borrowers cannot sign in without a delivered code.

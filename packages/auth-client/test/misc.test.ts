@@ -147,6 +147,8 @@ describe('generic call allow-list', () => {
     '/v1/admin/change-requests',
     '/v1/me',
     '/v1/borrower/../admin/x',
+    '/v1/borrower/%2e%2e/admin/x',
+    '/v1/borrower/%2E%2E/admin/x',
     '/v1/loan-purposes-extra',
     '/v1/consentx',
     '/v2/borrower/me',

@@ -122,7 +122,7 @@ export function createApiClient(options: ApiClientOptions) {
 const ONBOARDING_PATH =
   /^\/v1\/(?:(?:onboarding|lender)\/|(?:borrower|consent|loan-requests|stepup|integrity)(?:\/|\?|$)|loan-purposes(?:\?|$))[A-Za-z0-9/_?=&.,%-]*$/;
 const onboardingPath = (path: string): boolean =>
-  ONBOARDING_PATH.test(path) && !path.includes('..');
+  ONBOARDING_PATH.test(path) && !path.includes('..') && !/%2e/i.test(path);
 const blocked = (): { ok: false; status: number; code: string } => ({
   ok: false,
   status: 0,
