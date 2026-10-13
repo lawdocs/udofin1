@@ -16,12 +16,12 @@ Every route except the Supabase hook takes the borrower from the verified token.
 
 ## Account and profile
 
-| Route                                | Purpose                                                                                                                                        |
-| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /v1/borrower/me`                | Profile, journey facts, current consents, preferences, marketing availability, integrity level                                                |
-| `POST /v1/borrower/profile`          | Optional display name and language                                                                                                             |
-| `POST /v1/borrower/profile/complete` | Mark the profile complete                                                                                                                      |
-| `POST /v1/borrower/preferences`      | Whether optional service updates go by SMS (security codes are always sent)                                                                    |
+| Route                                | Purpose                                                                                        |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| `GET /v1/borrower/me`                | Profile, journey facts, current consents, preferences, marketing availability, integrity level |
+| `POST /v1/borrower/profile`          | Optional display name and language                                                             |
+| `POST /v1/borrower/profile/complete` | Mark the profile complete                                                                      |
+| `POST /v1/borrower/preferences`      | Whether optional service updates go by SMS (security codes are always sent)                    |
 
 The journey is reported as separate facts: `accountCreated`, `profileStarted`, `profileCompleted`, `consentsCompleted`, counts of drafts and submitted requests. `lenderKyc` is always `not_started` and `eligibility` always `not_assessed`: nothing in this phase verifies or assesses anyone.
 
@@ -33,16 +33,16 @@ The journey is reported as separate facts: `accountCreated`, `profileStarted`, `
 
 ## Loan requests
 
-| Route                                  | Notes                                                                                                                       |
-| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Route                                  | Notes                                                                                                                             |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `GET /v1/loan-purposes?language=`      | The fixed purpose list with stable keys. **Empty until the owner supplies it (D-34).** Others are rejected `422 purpose_unknown`. |
-| `GET /v1/borrower/categories`          | Enabled categories and their minimum tenure                                                                                 |
-| `GET /v1/borrower/products`            | Visibility only, read from the Phase 04 view (live lenders, approved versions). Not an offer.                               |
-| `POST /v1/loan-requests`               | Create a draft. Optional `productVersionId` (must be borrower-visible); the product version is snapshotted.                 |
-| `POST /v1/loan-requests/{id}/draft`    | Edit a draft with `expectedVersion`; stale edits answer `409 version_conflict`. Editing never extends the expiry.           |
-| `POST /v1/loan-requests/{id}/submit`   | Needs `expectedVersion`. Returns the reference (`UR-` + 10 hex). Repeats return the same reference.                         |
-| `POST /v1/loan-requests/{id}/withdraw` | Draft or submitted                                                                                                          |
-| `GET /v1/loan-requests`, `…/{id}`      | List (keyset cursor) and detail with events                                                                                 |
+| `GET /v1/borrower/categories`          | Enabled categories and their minimum tenure                                                                                       |
+| `GET /v1/borrower/products`            | Visibility only, read from the Phase 04 view (live lenders, approved versions). Not an offer.                                     |
+| `POST /v1/loan-requests`               | Create a draft. Optional `productVersionId` (must be borrower-visible); the product version is snapshotted.                       |
+| `POST /v1/loan-requests/{id}/draft`    | Edit a draft with `expectedVersion`; stale edits answer `409 version_conflict`. Editing never extends the expiry.                 |
+| `POST /v1/loan-requests/{id}/submit`   | Needs `expectedVersion`. Returns the reference (`UR-` + 10 hex). Repeats return the same reference.                               |
+| `POST /v1/loan-requests/{id}/withdraw` | Draft or submitted                                                                                                                |
+| `GET /v1/loan-requests`, `…/{id}`      | List (keyset cursor) and detail with events                                                                                       |
 
 States: `draft`, `submitted`, `offer_selected`, `withdrawn`, `expired`, `closed` (later phases use the last two beyond `expired`). A draft expires 30 days after creation. This is enforced by the database on read (an overdue draft reads as `expired`) and on write (`409 draft_expired`), not only by a housekeeping job; expiry does not delete anything.
 

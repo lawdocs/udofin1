@@ -1,100 +1,67 @@
-# Phase 05 specification: borrower onboarding and loan request
+# Phase 05 specification and implementation record: borrower onboarding and loan request
 
-**Status:** draft v1 for owner approval (13 Oct 2026). Nothing in this phase is implemented.
-**Depends on:** Phases 01–04 (all on PR 1). **Roadmap:** `docs/product/roadmap.md`, Phase 05.
-**Decisions this spec needs from you:** D-14 (marketing), D-15 (languages), D-24 (device integrity), and the questions in section 10.
+**Status:** implemented on the feature branch (PR 1) on 13 Oct 2026 after the owner's Phase 05 brief; awaiting owner review. Nothing is deployed, nothing has been run on a device, and no regulatory compliance or production readiness is claimed.
+**Replaces** the draft v1 of this spec. **Depends on:** Phases 01–04. **Decisions:** D-14, D-15, D-24 decided; D-25 partly; D-34 to D-38 open (`../product/open-decisions.md`).
 
 ## 1. Objective in plain English
 
-A borrower opens the app, enters a mobile number, gets an SMS code (filled in automatically on Android), reads and accepts a few separate consents, says what they need (category, amount, tenure, purpose) and submits a **loan request**, in four or five deliberate taps. If they close the app they come back to exactly where they stopped. Udofin keeps only name and contact details at this stage. No PAN, Aadhaar, date of birth, documents, KYC or credit data is collected or stored; that begins in Phase 06 and belongs to the lender.
+A borrower signs in with a mobile number and a one-time code, optionally gives a name to be addressed by, picks English or Hindi, gives separate consents, and sends a loan request (category, amount, period, purpose). They can save a draft (it closes 30 days after it was created), see their requests and history, change communication preferences and ask to delete their account. Udofin keeps only a display name, language and message preferences. No PAN, Aadhaar, date of birth, bank details, KYC or credit data is collected; age and eligibility are for the lender in Phase 06. A request is not an application result: nothing is scored, matched, approved or offered.
 
-The request is **not** an application to a lender and nothing is shown, scored or decided yet. Matching to lenders and offers is Phase 06.
+## 2. Corrections to the draft
 
-## 2. What exists already (not rebuilt)
+- The draft (Q7) said a fixed loan-purpose list "exists". No such list exists in the repository or earlier specs. That statement is withdrawn. The purpose table and API ship empty and refuse requests until the owner supplies the list (D-34).
+- The draft named D-26 as the SMS provider choice; D-26 is the ecosystem-boundaries decision. The provider and DLT question is now D-35.
+- The draft's trust page, grievance-contact activation condition, staff notice-publishing screens, SMS Retriever app hash and Phone Number Hint, and the "four interactions" target are **not** in the Phase 05 brief and were not built (section 8).
 
-| Area                                                                                                                                                               | State                                                           |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- |
-| Mobile phone sign-in screens, secure session storage, guarded routes                                                                                               | Built in Phase 03 against Supabase Auth; real SMS not connected |
-| `identity.borrowers` (no identifiers), `consent.notices` (versioned, hashed, approved) and `consent.records` (append-only), `lending.loan_requests` with lifecycle | Built (Phase 01)                                                |
-| Lender go-live control and `lending.borrower_visible_product_versions`                                                                                             | Built (Phase 04): only live lenders can ever appear             |
-| API route registry, idempotency, outbox worker, audit                                                                                                              | Built (Phase 03)                                                |
+## 3. What was built
 
-## 3. Scope
+| Area     | Built                                                                                                                                                                                                                                                                                                                                                                           |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Database | `20261014000790_borrower_onboarding.sql`, `…791_borrower_helpers.sql`: profile columns and onboarding states; communication preferences; consent evidence function; `lending.loan_purposes`; loan-request columns, submission trigger, events and a view that shows overdue drafts as expired; step-up, integrity, attestation and deletion tables and functions; grants; audit |
+| API      | `services/api/src/modules/borrower`: profile, consent, reference data, loan requests, step-up, integrity, deletion, signed Send SMS hook; `docs/api/borrower.md`                                                                                                                                                                                                                |
+| Worker   | `borrower.deletion_requested` handler, draft-expiry housekeeping every 15 minutes                                                                                                                                                                                                                                                                                               |
+| Ports    | `SmsSender` (+ timeout wrapper, unconfigured and labelled mock) and `IntegrityVerifier` (+ unavailable and labelled mock); mocks refused in staging and production                                                                                                                                                                                                              |
+| Mobile   | Sign-in and code screens (localised), home, profile, consents, request wizard, my requests and detail with history and expiry warnings, settings, two-step account deletion, step-up screen; English and Hindi; form held above translated screens                                                                                                                              |
+| Shared   | Contracts in `packages/contracts/src/http/borrower.ts`; generic API client allow-list extended to borrower paths                                                                                                                                                                                                                                                                |
 
-1. **Phone OTP delivery.** Supabase "Send SMS" hook (an API endpoint) calls a TRAI-DLT-registered SMS provider. Template carries the Android app hash (SMS Retriever, no SMS permission); iOS uses one-time-code autofill; Android Phone Number Hint instead of phone permissions. The hook has a 5-second budget; if the provider is slower the hook returns an error and the app offers a clear retry and (after two failures) an alternative route. OTP rate limits per number, per device and per IP; no OTP or number in logs.
-2. **Consents.** Separate, unbundled, none pre-ticked, each recorded in `consent.records` against the exact published notice version and language shown: (a) terms of use, (b) privacy notice, (c) sharing the loan request with the named live lenders, (d) marketing (optional, separate; default off). Declining (d) blocks nothing. Notices are written, versioned and approved through the existing notice workflow (a Udofin staff screen to draft and publish them is included).
-3. **Minimal profile.** Name (as the borrower wishes to be addressed) and preferred language. The phone number stays in the auth system only. No other personal data.
-4. **Loan request.** Category (only categories the platform has enabled, from `lending.product_categories`), amount in rupees converted to integer paise, tenure, purpose from a fixed list. Validation on the server against category minimum tenure and against the union of limits of live lenders' approved products ("is anyone likely to offer this"), without revealing lender-specific rules.
-5. **Resumable journey.** The server stores the step reached; the app resumes after restart or on another device. Drafts expire after a configurable period.
-6. **Trust page,** reachable in at most two taps from every screen: Udofin's role as a lending service provider (not a lender), the live partner lenders with their registered names, Udofin's and each lender's grievance contact, how to complain and escalate, and where the privacy notice is.
-7. **Account deletion in the app.** A borrower can request closure; the screen explains what is deleted now and what law requires to be kept (retention schedule D-25; until D-25 is decided, the screen says retention is "as required by law and by the lender" and lists the categories). Closure is a two-step flow with a confirmation, executed by the worker, audited, and refuses while a loan account is active.
-8. **Device integrity (D-24).** Play Integrity token collected at sign-in and on high-risk actions, verified server-side; tiered policy per your decision.
-9. **Admin and lender visibility.** Ops sees counts and states of requests without personal data; lenders see nothing until Phase 06.
+## 4. Design points
 
-## 4. Out of scope
+1. **Rules in the database, repeated in the API.** See ADR 0029.
+2. **Journey facts are separate:** account created, profile started, profile completed, consents completed, drafts, submitted. KYC and eligibility are always "not started" and "not assessed".
+3. **Consent:** one row per decision with notice id, version, hash, language, channel, screen, app version; withdrawal is an event; marketing cannot be recorded while disabled; the three required consents are terms, privacy notice and sharing with lenders.
+4. **Loan request:** states `draft`, `submitted`, `offer_selected`, `withdrawn`, `expired`, `closed`; product reference and snapshot only when a borrower-visible product is chosen; optimistic concurrency by `expectedVersion`; submission idempotent with reference `UR-` plus 10 hex characters.
+5. **Step-up and integrity** are separate (D-24). The step-up code is hashed, bound to action and object, single use, five tries, five minutes, with a daily budget of two locked challenges. Integrity levels come from the server's verifier only.
+6. **Deletion** anonymises and keeps consent and audit records; the phone identity in the auth provider is pending (D-38).
+7. **Language:** the choice is stored on the device and on the account; once the account holds a preference it wins on every device; switching never resets a form.
+8. **Product discovery** reads only `lending.borrower_visible_product_versions`.
 
-KYC, bureau, offers, matching (Phase 06); e-sign and agreements (Phase 07); marketing notifications (only the consent ledger entry exists); iOS App Store release (Android first); languages beyond the decision in D-15.
+## 5. Acceptance criteria and result
 
-## 5. Design decisions (my proposals)
+| #   | Criterion (from the Phase 05 brief and the draft)                                        | Result                                                                                                                                                                         |
+| --- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | Account/profile states are separate and never mean verified or eligible                  | Met in database and API (tests)                                                                                                                                                |
+| 2   | Consents separate, unticked, recorded against exact wording; withdrawal is an event      | Met in database/API (tests). No notice text exists yet (D-37). The mobile screen leaves every box unticked (by review, not by a UI test)                                       |
+| 3   | Marketing off; ledger ready                                                              | Met (tests)                                                                                                                                                                    |
+| 4   | English and Hindi everywhere; preference persisted; form survives a language switch      | Catalogues, parity test and reducer test pass. Hindi text is a draft awaiting review. Not tried on a device                                                                    |
+| 5   | Request cannot be submitted after expiry, without consents, with unknown purpose         | Met (pgTAP and HTTP tests). Purpose list empty until D-34                                                                                                                      |
+| 6   | Drafts expire 30 days after creation, not extended; enforced on read and write           | Met (tests)                                                                                                                                                                    |
+| 7   | Duplicate/concurrent submission safe                                                     | Met for repeated and replayed submits (tests); a true parallel race is covered by the database lock and idempotency design but has no dedicated concurrency test in this phase |
+| 8   | Step-up OTP bound, hashed, limited; integrity distinct; client claims not trusted        | Met (tests). No sensitive action calls it yet                                                                                                                                  |
+| 9   | SMS port; no provider; no live SMS; no hard-coded DLT values; acceptance is not delivery | Met. Real delivery is untested because no provider exists                                                                                                                      |
+| 10  | Account deletion safe, auditable, retry-safe; no invented retention                      | Met (tests); sign-in identity removal pending (D-38)                                                                                                                           |
+| 11  | Cross-borrower and staff isolation                                                       | Met (pgTAP, HTTP tests, independent static review)                                                                                                                             |
+| 12  | Mocks cannot run in staging or production                                                | Met (config and adapter checks, tests)                                                                                                                                         |
+| 13  | Mobile screens with loading, error, retry and empty states, accessibility labels         | Built; the Android bundle compiles; **not rendered, not run on a device, no screen-reader test**                                                                               |
+| 14  | Manifest has no SMS, contacts, phone, storage or media permission                        | `pnpm --filter @udofin/mobile config:check` passes (29 permissions blocked, none declared); the merged manifest of a built app was not inspected                               |
 
-| #   | Decision                                                                                                                                                                            | Why                                                                  |
-| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| 1   | SMS provider called from a small API route set as the Supabase hook, with the provider behind a port (`SmsSender`) and a labelled mock for tests that is blocked outside local/test | Provider can change; no mock can reach production (CLAUDE.md rule 9) |
-| 2   | OTP lives only in Supabase Auth; Udofin never stores or logs it or the full number (masked last 4 in audit)                                                                         | Data minimisation                                                    |
-| 3   | The journey state is a table `identity.onboarding_progress` (step, language, updated_at) written through functions, borrower-owned via RLS                                          | Resumable on any device, no client-side trust                        |
-| 4   | A loan request is created in `draft`, becomes `submitted` only after all required consents are recorded in the same transaction                                                     | The ledger always matches what was submitted                         |
-| 5   | Consent text lives in `consent.notices`, fetched by version and hash; the app shows the hash-verified text and records the notice id                                                | Proof of exactly what the borrower saw                               |
-| 6   | Language packs are plain translation files reviewed by counsel; adding a language needs no code                                                                                     | D-15                                                                 |
-| 7   | Integrity verdicts are stored as a coarse level (none/basic/device/strong) per session, never raw tokens                                                                            | Privacy and size                                                     |
-| 8   | The trust page reads live data (lenders, grievance contacts) from the Phase 04 records; a lender without a grievance contact cannot go live (added as an activation condition)      | The page can never show an empty or stale promise                    |
+## 6. Out of scope (not built)
 
-## 6. Data and API
+KYC, PAN, Aadhaar, date of birth, bureau, scoring, underwriting, eligibility, sanction, disbursement, e-sign provider, bank verification, mandates, marketing messages, new products or terms, lender matching and offers (Phase 06), the trust page and grievance contacts, staff notice-publishing screens, SMS Retriever and Phone Number Hint, a production SMS provider and a production device-integrity verifier.
 
-New: `identity.onboarding_progress`, `identity.device_attestations` (level only), `identity.deletion_requests`; additions to `consent.notices` seeds (terms, privacy, share-with-lenders, marketing, in the chosen languages); lender grievance contact fields (extension of the Phase 04 profile) and one new activation condition. All new tables: RLS enabled and forced, explicit grants, pgTAP including cross-borrower negative tests, added to the authorisation matrix.
+## 7. Open items
 
-New routes (borrower session, all idempotent POSTs where they write): `GET /v1/borrower/journey`, `POST /v1/borrower/profile`, `GET /v1/consent/notices`, `POST /v1/consent/decisions`, `GET /v1/categories`, `POST /v1/loan-requests` (+ `GET`, `POST …/submit`, `POST …/withdraw`), `GET /v1/trust`, `POST /v1/borrower/deletion-requests`, `POST /v1/integrity/verify`, and the SMS hook endpoint (called only by Supabase, authenticated by its signed header). Staff: draft/publish consent notices (two-person, existing change request type).
+D-34 purpose list; D-35 SMS provider and DLT; D-36 tenure convention; D-37 consent and Hindi approval; D-38 sign-in identity removal; D-25 retention schedule; D-08 app identity and Play Integrity; open security items in `../security/review-2026-10-13-phase05.md`.
 
-## 7. Mobile
+## 8. Risks
 
-Screens: welcome, number entry (Phone Number Hint), code (autofill), consents (one screen per consent or one list of independent switches: to be user-tested), name and language, request (category, amount slider with exact numeric entry, tenure, purpose), review and submit, status. Trust page and "Delete my account" in a persistent menu. Accessibility: screen-reader labels, text scaling, colour-independent states, no countdown that cannot be extended. The OTP screen keeps screenshot blocking. No permission is requested; the merged-manifest check from Phase 03's backlog is built here and must pass.
-
-## 8. Acceptance criteria (each is a test)
-
-1. First launch to a submitted request needs at most 4 deliberate interactions when autofill works (UI test; typing the amount excluded).
-2. The merged AndroidManifest contains no SMS, contacts, phone, storage or media permission (release check); the OTP autofills on a test device.
-3. If the SMS provider exceeds the hook budget, the hook fails cleanly, the app shows a retry, and no OTP is reported as sent.
-4. Declining marketing consent blocks nothing; no consent box is pre-ticked; each consent is a separate ledger row with notice id and hash.
-5. A request cannot be submitted without the terms, privacy and share-with-lenders consents recorded; withdrawing share consent stops any later routing.
-6. Kill and reopen the app (and open on another device): the journey resumes at the last completed step.
-7. Trust page within two taps from every screen; shows only live lenders; a lender without a grievance contact is not live.
-8. A database scan of Udofin's core schemas finds no PAN-format, Aadhaar-format or date-of-birth data; logs and audit contain no OTP or full phone number (test with canary values).
-9. Borrower A cannot read or change borrower B's journey, requests, consents or deletion request (pgTAP and API tests).
-10. Account deletion refuses with an active loan account, otherwise completes via the worker and is audited.
-11. Integrity policy behaves as decided (verdict levels, step-up on high-risk actions) with server-side verification.
-12. The mock SMS sender and mock attestation cannot be enabled in staging or production (guard test).
-
-## 9. External dependencies
-
-Legal entity as DLT principal entity (D-02), registered sender header and templates, SMS provider contract (D-26 provider choice), app identity and signing for Play Integrity (D-08), privacy notice and consent wording approved by counsel, a production Supabase project in Mumbai with the paid plan, a Google Play developer account. Until these exist the flow runs against the labelled mock in local and test only, and production readiness is not claimed.
-
-## 10. Questions for you (each with my recommendation)
-
-| #   | Question                                                                                           | Recommendation                                                                                                                            |
-| --- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Q1  | **D-14 Marketing.** Service messages only at launch, with the ledger ready for per-product opt-in? | Yes (option a). No marketing sends in this phase.                                                                                         |
-| Q2  | **D-15 Languages.** English only, English + Hindi, or more?                                        | English and Hindi; any other language later by translation file.                                                                          |
-| Q3  | **D-24 Integrity.** Block, tiered, or none?                                                        | Tiered: allow with limits; require step-up OTP for offer acceptance, e-sign, bank-account change, mandate.                                |
-| Q4  | Which SMS provider and who registers the DLT sender header and templates?                          | Choose from the two or three quotes you obtain; I will build behind the port so the choice is reversible.                                 |
-| Q5  | Should the borrower give a name at all in this phase?                                              | Yes, as an optional "what should we call you" display name; the legal name is collected by the lender at KYC.                             |
-| Q6  | Draft expiry for unsubmitted requests?                                                             | 30 days, then quietly closed.                                                                                                             |
-| Q7  | Purpose list: use the existing list (education, medical, home renovation, …) or define your own?   | Start with the existing fixed list; lenders' products may restrict later.                                                                 |
-| Q8  | Should an applicant under 18 or outside India be blocked?                                          | The age check needs date of birth, which we do not hold; leave it to the lender's KYC in Phase 06 and state the eligibility in the terms. |
-| Q9  | Deletion while retention law applies: delete, anonymise, or hold?                                  | Anonymise the profile and unlink the phone immediately; keep consent and audit records for the period D-25 sets.                          |
-
-## 11. Proposed commits
-
-1. Spec approval and consent notice seeds. 2. Database: journey, attestations, deletion tables, grievance fields, activation condition, tests and matrix. 3. SMS port, mock, hook endpoint and rate limits. 4. Borrower API routes and tests. 5. Consent and notice staff screens. 6. Mobile screens and journey. 7. Integrity verification. 8. Deletion worker. 9. Manifest check, trust page, accessibility pass. 10. Docs, controls matrix, security review.
-
-## 12. Risks
-
-SMS delivery failures or DLT delays block launch (mitigation: provider chosen early, fallback retry route); consent text legal review time; Play Integrity coverage on older devices (tiered policy); the 2027 per-product consent rules may change the consent screen (ledger already supports per-product rows); and the unresolved bank-category and retention decisions (D-31, D-25) must not be assumed by this phase.
+SMS delivery and DLT registration may block launch. Hindi borrowers must use approved English consent text until Hindi is approved. The 2027 per-product consent rules may change the consent screen. The app wizard takes more than four taps; whether that is acceptable needs user testing. Mobile screens are untested on devices.
