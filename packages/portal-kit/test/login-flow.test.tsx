@@ -48,7 +48,7 @@ describe('LoginFlow', () => {
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toBe('The email or password is not correct.');
     expect(alert.textContent).not.toMatch(/exist|account found|unknown/i);
-    expect((screen.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled).toBe(
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Continue' }).disabled).toBe(
       false,
     );
     expect(screen.getByLabelText('Work email').getAttribute('aria-describedby')).toBe(alert.id);
