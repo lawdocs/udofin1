@@ -860,7 +860,7 @@ export function onboardingRoutes(documents: DocumentStore | undefined): RouteDef
       tags: ['Onboarding'],
       auth: 'staff',
       idempotent: true,
-      idempotencyTenant: ({ params }) => (params).lenderId,
+      idempotencyTenant: ({ params }) => params.lenderId,
       params: Lender,
       body: z.strictObject({ reason: z.string().trim().min(30).max(2000) }),
       responses: { 201: Created },

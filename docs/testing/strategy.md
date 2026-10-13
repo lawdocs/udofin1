@@ -35,7 +35,7 @@ Counted on 2026-10-13 (end of Phase 03) by running each suite. All pass. (The 20
 | Mobile (`apps/mobile`)                     | vitest (pure modules)                       | **16**               | Configuration refuses privileged keys, keystore chunking and torn writes, phone normalisation, OTP guard rails. UI is type-checked, linted and bundled (`expo export`) but **not run on a device**; `config:check` asserts the permission policy.                                                                  |
 | Domain, contracts, design tokens, adapters | vitest                                      | 36 + 12 + 8 + 3      | As before.                                                                                                                                                                                                                                                                                                         |
 
-Total (counted 2026-10-13, Phase 04 addendum A): **238 vitest tests** run by default, plus **40 API integration tests** (when a database is configured), **10 browser tests** (`E2E=1`; none cover the onboarding screens yet) and **376 pgTAP assertions** (239 + 137 in `008_onboarding`).
+Total (counted 2026-10-13, Phase 04 addendum A): **248 vitest tests** run by default, plus **56 API integration tests** (when a database is configured), **10 browser tests** (`E2E=1`; none cover the onboarding, product or transactions screens yet) and **403 pgTAP assertions** (376 + 27 in `009_panel_and_waiver`).
 
 Not yet covered: screen-reader and axe scans, mobile component tests on a device, k6 performance, backup and DR drills, a true staging end-to-end run against a real Supabase project.
 

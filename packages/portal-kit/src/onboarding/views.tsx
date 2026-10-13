@@ -41,6 +41,8 @@ export interface ViewContext {
   action: FormAction;
   /** Page the action returns to. */
   returnTo: string;
+  /** The signed-in person, used only to hide controls they could not use (the API decides). */
+  userId?: string;
 }
 
 const options = (values: readonly string[]) => values.map((v) => ({ value: v, label: label(v) }));
@@ -655,6 +657,7 @@ export function AccountingTab({
               </section>
             ) : null}
 
+            <WaiverSection data={data} lenderId={lenderId} ctx={ctx} />
             <section className="card">
               <h2>All versions</h2>
               <table>
@@ -1745,5 +1748,107 @@ export function LenderBody({
       ) : null}
       {tab === 'gates' ? <GatesTab data={data} lenderId={lenderId} ctx={ctx} /> : null}
     </>
+  );
+}
+
+/** Optional, controlled waiver of the verified accounting record (owner decision D-33). */
+function WaiverSection({
+  data,
+  lenderId,
+  ctx,
+}: {
+  data: TabData;
+  lenderId: string;
+  ctx: ViewContext;
+}) {
+  const enabled = data.settings?.ok
+    ? data.settings.data.items.find((i) => i.key === 'accounting_waiver_allowed')?.value === true
+    : false;
+  const waivers = data.waivers?.ok ? data.waivers.data.items : [];
+  if (!ctx.caps.read || ctx.portal !== 'ops') return null;
+  return (
+    <section className="card">
+      <h2>Waiver of the verified accounting record</h2>
+      <p className="muted">
+        By default production readiness needs a verified record. The compliance officer can allow
+        waivers; each waiver needs a written reason, a second person to approve it, and stops
+        counting if the option is switched off.
+      </p>
+      <p>
+        Option currently: <strong>{enabled ? 'allowed' : 'not allowed'}</strong>
+      </p>
+      {ctx.caps.compliance ? (
+        <OpForm
+          op="setting.set"
+          action={ctx.action}
+          returnTo={ctx.returnTo}
+          hidden={{ key: 'accounting_waiver_allowed', value: enabled ? 'false' : 'true' }}
+          submit={enabled ? 'Switch off' : 'Switch on'}
+          secondary
+        >
+          <TextField name="reason" label="Reason for the change (20+ characters)" required />
+        </OpForm>
+      ) : null}
+      {waivers.length > 0 ? (
+        <ul className="plain">
+          {waivers.map((w) => (
+            <li key={w.id}>
+              {label(w.status)} — {w.reason}
+              {ctx.caps.approve && w.status === 'pending' ? (
+                <>
+                  <OpForm
+                    op="waiver.decide"
+                    action={ctx.action}
+                    returnTo={ctx.returnTo}
+                    hidden={{ id: w.id, approve: 'true' }}
+                    submit="Approve"
+                    inline
+                  />
+                  <OpForm
+                    op="waiver.decide"
+                    action={ctx.action}
+                    returnTo={ctx.returnTo}
+                    hidden={{ id: w.id, approve: 'false' }}
+                    submit="Reject"
+                    secondary
+                    inline
+                  />
+                </>
+              ) : null}
+              {ctx.caps.approve && w.status === 'approved' ? (
+                <OpForm
+                  op="waiver.decide"
+                  action={ctx.action}
+                  returnTo={ctx.returnTo}
+                  hidden={{ id: w.id, approve: 'false', revoke: 'true' }}
+                  submit="Revoke"
+                  secondary
+                  inline
+                >
+                  <TextField name="note" label="Reason" required />
+                </OpForm>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {ctx.caps.manage &&
+      enabled &&
+      !waivers.some((w) => w.status === 'pending' || w.status === 'approved') ? (
+        <OpForm
+          op="waiver.request"
+          action={ctx.action}
+          returnTo={ctx.returnTo}
+          hidden={{ lenderId }}
+          submit="Request a waiver"
+        >
+          <AreaField
+            name="reason"
+            label="Why the verified record is not required for go-live (30+ characters)"
+            required
+          />
+        </OpForm>
+      ) : null}
+    </section>
   );
 }

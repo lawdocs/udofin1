@@ -25,3 +25,7 @@ Interim transfer: base64 in JSON, at most 8 MiB decoded, PDF/PNG/JPEG checked by
 ## Lists
 
 Per-lender lists are bounded (documents and histories return the newest 200) and are not cursor-paginated.
+
+## Accounting waiver (D-33)
+
+`GET /v1/onboarding/settings`, `POST /v1/onboarding/settings/:key` (compliance officer, reason of 20+ characters), `GET/POST /v1/onboarding/lenders/:id/accounting-waivers`, `POST /v1/onboarding/accounting-waivers/:id/decision` (approve, reject, or `revoke: true`). Code `waiver_not_allowed` (409) when the option is off.

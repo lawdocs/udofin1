@@ -1,4 +1,5 @@
 import { z, type ZodType } from 'zod';
+import { PRODUCT_OPERATIONS } from '../products/operations.js';
 import { type OnboardingApi, type OnboardingResult, type PortalKind } from './api.js';
 
 /**
@@ -16,7 +17,7 @@ const bool = z.enum(['true', 'false']).transform((v) => v === 'true');
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const MIME_TYPES = ['application/pdf', 'image/png', 'image/jpeg'] as const;
 
-interface Operation {
+export interface Operation {
   portals: readonly PortalKind[];
   run(
     api: OnboardingApi,
@@ -131,7 +132,7 @@ function withSupporting(form: FormData, body: Record<string, unknown>): Record<s
   return supporting.length > 0 ? { ...body, supportingParties: supporting } : body;
 }
 
-export const OPERATIONS: Readonly<Record<string, Operation>> = {
+const BASE_OPERATIONS: Readonly<Record<string, Operation>> = {
   'profile.create': define(
     ops,
     z.object({ lenderOrgId: uuid, categoryKey: text(40), ...profileFields }),
@@ -354,6 +355,21 @@ export const OPERATIONS: Readonly<Record<string, Operation>> = {
         key,
       ),
   ),
+  'waiver.request': define(ops, z.object({ lenderId: uuid, reason: text() }), (api, v, key) =>
+    post(api, `/v1/onboarding/lenders/${v.lenderId}/accounting-waivers`, { reason: v.reason }, key),
+  ),
+  'waiver.decide': define(
+    ops,
+    z.object({ id: uuid, approve: bool, revoke: bool.optional(), note: optText() }),
+    (api, { id, ...rest }, key) =>
+      post(api, `/v1/onboarding/accounting-waivers/${id}/decision`, present(rest), key),
+  ),
+  'setting.set': define(
+    ops,
+    z.object({ key: z.string().regex(/^[a-z][a-z0-9_]{2,60}$/), value: bool, reason: text() }),
+    (api, v, key) =>
+      post(api, `/v1/onboarding/settings/${v.key}`, { value: v.value, reason: v.reason }, key),
+  ),
   'gate.request': define(
     ops,
     z.object({ lenderId: uuid, targetStage: text(40), note: optText() }),
@@ -374,6 +390,11 @@ export const OPERATIONS: Readonly<Record<string, Operation>> = {
   'gate.cancel': define(ops, z.object({ id: uuid }), (api, v, key) =>
     post(api, `/v1/onboarding/gate-requests/${v.id}/cancel`, {}, key),
   ),
+};
+
+export const OPERATIONS: Readonly<Record<string, Operation>> = {
+  ...BASE_OPERATIONS,
+  ...PRODUCT_OPERATIONS,
 };
 
 export type OperationOutcome = { ok: true } | { ok: false; code: string };
@@ -400,7 +421,9 @@ export async function runOperation(
 /** Only same-portal onboarding pages may be returned to (prevents open redirects). */
 export function safeReturnPath(value: unknown): string {
   return typeof value === 'string' &&
-    /^\/onboarding(\/categories|\/[0-9a-f-]{36}(\?tab=[a-z]{3,20})?)?$/.test(value)
+    (/^\/onboarding(\/categories|\/[0-9a-f-]{36}(\?tab=[a-z]{3,20})?)?$/.test(value) ||
+      /^\/products$/.test(value) ||
+      /^\/transactions(\?[A-Za-z0-9=&,_.%:-]{0,600})?$/.test(value))
     ? value
     : '/onboarding';
 }

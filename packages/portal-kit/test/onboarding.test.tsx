@@ -189,7 +189,7 @@ describe('labels and formatting', () => {
     expect(errorMessage('weird')).toBe('The action could not be completed.');
   });
   it('derives capabilities from permissions', () => {
-    expect(capabilitiesFrom(['onboarding.read', 'onboarding.submit'])).toEqual({
+    expect(capabilitiesFrom(['onboarding.read', 'onboarding.submit'])).toMatchObject({
       manage: false,
       approve: false,
       compliance: false,

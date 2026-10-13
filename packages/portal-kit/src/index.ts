@@ -3,3 +3,8 @@ export * from './shell.js';
 export * from './sign-out-button.js';
 export * from './states.js';
 export * from './onboarding/index.js';
+export * from './products/data.js';
+export * from './products/views.js';
+export * from './panel/data.js';
+export * from './panel/views.js';
+export { buildVersionBody } from './products/operations.js';

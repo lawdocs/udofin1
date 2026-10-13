@@ -476,13 +476,13 @@ Also on 13 October 2026: the first lenders to onboard are **MGM Financiers Priva
 
 ## D-32 Ind AS applicability rules and who may verify the declaration
 
-- **Question.** Which authoritative rule set should reviewers use to check a lender's Ind AS declaration, and must evidence be audited statements or may an auditor letter or management declaration suffice?
-- **Why it matters.** The system records and verifies declarations but deliberately concludes nothing; the gate "production readiness" requires a verified record, so the evidence standard decides how strict that is. Thresholds for NBFCs and the position of banks are not on file (unverified).
-- **Recommendation.** Require audited statements or an auditor confirmation for "verified"; treat a management declaration as recorded but not sufficient for production readiness until counsel advises otherwise.
-- **Deadline.** Before the first lender goes to production.
+- **Status.** Decided 13 Oct 2026: the owner agreed with the recommendation. "Verified" needs audited statements or an auditor confirmation; a management declaration is recorded but is not sufficient for production readiness. (Enforcement of the evidence type by reviewers is a procedure; the system requires evidence and a confirmed source and records which source was used.)
+- **Still open.** The authoritative applicability thresholds for NBFCs and banks are not on file (unverified); the system never concludes applicability itself.
 
 ## D-33 Production readiness: accounting record and exceptions
 
-- **Question.** Should an unconfirmed accounting record ever be waivable for go-live, and who may waive a mandatory requirement?
-- **Recommendation.** No waiver of the verified accounting record; mandatory requirements may be waived only by an independent approver with a written reason (as built).
-- **Deadline.** Before the first lender goes to production.
+- **Status.** Decided 13 Oct 2026: the owner asked for an option to waive. Built as a compliance-controlled setting, default off (`accounting_waiver_allowed`). When on, a waiver per lender needs a written reason of 30+ characters, a second person to approve, and counts only while the setting stays on; it can be revoked. Mandatory requirements remain waivable only by an independent approver with a reason.
+
+## D-31 update
+
+The owner will supply the bank / co-operative bank directions near the final stage, because RBI amends them regularly. Until then those categories stay non-activatable.

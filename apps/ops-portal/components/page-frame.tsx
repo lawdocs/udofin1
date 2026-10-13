@@ -16,6 +16,14 @@ function navFor(me: MeResponse, current: string): NavItem[] {
   if (permissions.has('onboarding.read')) {
     items.push({ href: '/onboarding', label: 'Lender onboarding' });
   }
+  if (
+    permissions.has('application.read') ||
+    permissions.has('loan.read') ||
+    permissions.has('payment.read')
+  ) {
+    items.push({ href: '/transactions', label: 'Transactions' });
+  }
+  if (permissions.has('product.read')) items.push({ href: '/products', label: 'Products' });
   return items.map((item) => ({ ...item, current: item.href === current }));
 }
 

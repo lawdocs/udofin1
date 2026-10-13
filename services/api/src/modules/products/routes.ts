@@ -206,6 +206,34 @@ export const productRoutes: RouteDefinition[] = [
 
   userRoute({
     method: 'get',
+    path: '/v1/lender/product-categories',
+    operationId: 'listProductCategories',
+    summary: 'Product categories the platform currently supports',
+    tags: ['Products'],
+    auth: 'staff',
+    responses: {
+      200: z.object({
+        items: z.array(
+          z.object({
+            key: z.string(),
+            name: z.string(),
+            availability: z.string(),
+            minTenureDays: z.number().int(),
+          }),
+        ),
+      }),
+    },
+    errors: [401, 403],
+    handler: async ({ tx }) => {
+      const r = await tx.query(
+        `select key, name, availability, min_tenure_days as "minTenureDays" from lending.product_categories order by (availability = 'enabled') desc, name`,
+      );
+      return { status: 200, body: { items: r.rows } };
+    },
+  }),
+
+  userRoute({
+    method: 'get',
     path: '/v1/lender/products',
     operationId: 'listLenderProducts',
     summary: 'Products and all their versions for lenders the caller may see',

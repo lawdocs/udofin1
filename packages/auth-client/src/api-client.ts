@@ -79,7 +79,7 @@ export function createApiClient(options: ApiClientOptions) {
 
   return {
     me: (): Promise<ApiResult<MeResponseType>> => request('GET', '/v1/me', MeResponse),
-    /** Generic reads and writes for the onboarding screens (paths are restricted to /v1/onboarding/). */
+    /** Generic reads and writes for the onboarding screens (paths are restricted to /v1/onboarding/ and /v1/lender/). */
     get: <T>(path: string, schema: ZodType<T>): Promise<ApiResult<T>> =>
       onboardingPath(path) ? request('GET', path, schema) : Promise.resolve(blocked()),
     post: <T>(
@@ -118,7 +118,7 @@ export function createApiClient(options: ApiClientOptions) {
   };
 }
 
-const ONBOARDING_PATH = /^\/v1\/onboarding\/[A-Za-z0-9/_?=&.-]+$/;
+const ONBOARDING_PATH = /^\/v1\/(onboarding|lender)\/[A-Za-z0-9/_?=&.,%-]+$/;
 const onboardingPath = (path: string): boolean =>
   ONBOARDING_PATH.test(path) && !path.includes('..');
 const blocked = (): { ok: false; status: number; code: string } => ({

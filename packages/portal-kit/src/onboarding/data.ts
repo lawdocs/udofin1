@@ -14,7 +14,7 @@ import {
   ServiceCategoryList,
   VerificationHistory,
 } from '@udofin/contracts';
-import { type z } from 'zod';
+import { z } from 'zod';
 import { type OnboardingApi, type OnboardingResult } from './api.js';
 
 export const TABS = [
@@ -27,6 +27,29 @@ export const TABS = [
   'documents',
   'gates',
 ] as const;
+const WaiverList = z.object({
+  items: z.array(
+    z.object({
+      id: z.uuid(),
+      status: z.string(),
+      reason: z.string(),
+      requestedAt: z.string(),
+      decidedAt: z.string().nullable(),
+      decisionNote: z.string().nullable(),
+    }),
+  ),
+});
+const SettingList = z.object({
+  items: z.array(
+    z.object({
+      key: z.string(),
+      value: z.boolean(),
+      description: z.string(),
+      reason: z.string().nullable(),
+    }),
+  ),
+});
+
 export type Tab = (typeof TABS)[number];
 
 export const TAB_LABELS: Record<Tab, string> = {
@@ -58,6 +81,8 @@ export interface TabData {
   conditions?: Loaded<typeof GateConditions>;
   gateRequests?: Loaded<typeof GateRequestList>;
   categories?: Loaded<typeof InstitutionCategoryList>;
+  waivers?: Loaded<typeof WaiverList>;
+  settings?: Loaded<typeof SettingList>;
 }
 
 /** Loads exactly what one tab shows. Each part succeeds or fails on its own. */
@@ -80,12 +105,14 @@ export async function loadLenderTab(
       return { overview: o, documents, history, categories };
     }
     case 'accounting': {
-      const [o, accounting, documents] = await Promise.all([
+      const [o, accounting, documents, waivers, settings] = await Promise.all([
         overview,
         api.get(`${base}/accounting-profiles`, AccountingProfileList),
         docs(),
+        api.get(`${base}/accounting-waivers`, WaiverList),
+        api.get('/v1/onboarding/settings', SettingList),
       ]);
-      return { overview: o, accounting, documents };
+      return { overview: o, accounting, documents, waivers, settings };
     }
     case 'services': {
       const [o, services, serviceCategories] = await Promise.all([
@@ -151,6 +178,9 @@ export interface Capabilities {
   compliance: boolean;
   submit: boolean;
   read: boolean;
+  productConfigure?: boolean;
+  productApprove?: boolean;
+  panel?: boolean;
 }
 
 export function capabilitiesFrom(permissions: readonly string[]): Capabilities {
@@ -161,6 +191,9 @@ export function capabilitiesFrom(permissions: readonly string[]): Capabilities {
     compliance: has('onboarding.compliance_signoff'),
     submit: has('onboarding.submit'),
     read: has('onboarding.read'),
+    productConfigure: has('product.configure'),
+    productApprove: has('product.approve'),
+    panel: has('application.read') || has('loan.read') || has('payment.read'),
   };
 }
 
