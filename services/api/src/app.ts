@@ -4,8 +4,12 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import { PROBLEM_CONTENT_TYPE, type ProblemDetails } from '@udofin/contracts';
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply } from 'fastify';
+import { type AuthDeps } from './auth/deps.js';
 import { type AppConfig } from './config.js';
 import { loggerOptions } from './logger.js';
+import { registerAdminRoutes } from './modules/admin/routes.js';
+import { registerMeRoutes } from './modules/me/routes.js';
+import { type ChangeRequestApplier } from './system/change-requests.js';
 
 /** A dependency the API needs before it can serve traffic (database, queue, ...). */
 export interface ReadinessCheck {
@@ -15,6 +19,10 @@ export interface ReadinessCheck {
 
 export interface AppDependencies {
   readinessChecks?: readonly ReadinessCheck[];
+  /** Token verification and the per-request database context. Routes under /v1 exist only when set. */
+  auth?: AuthDeps;
+  /** Applies approved change requests (system role). Admin routes exist only when set. */
+  changeRequestApplier?: ChangeRequestApplier;
 }
 
 const READINESS_TIMEOUT_MS = 2_000;
@@ -155,6 +163,11 @@ export async function buildApp(
       });
     },
   );
+
+  if (deps.auth) {
+    registerMeRoutes(app, deps.auth);
+    if (deps.changeRequestApplier) registerAdminRoutes(app, deps.auth, deps.changeRequestApplier);
+  }
 
   return app;
 }

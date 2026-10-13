@@ -93,6 +93,24 @@ export default tseslint.config(
     },
   },
   {
+    // Only src/system and src/workers may touch the service_role pool (spec W5).
+    files: ['services/api/src/**/*.ts'],
+    ignores: ['services/api/src/system/**', 'services/api/src/workers/**'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['**/system/pool.js', '**/system/pool'],
+              message: 'The system (service_role) pool is private to src/system and src/workers.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ['apps/**/*.{ts,tsx}'],
     plugins: { 'react-hooks': reactHooks },
     languageOptions: { globals: { ...globals.browser } },

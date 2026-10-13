@@ -23,6 +23,8 @@ const ConfigSchema = z
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
     /** Postgres connection string for the API's restricted database role. */
     DATABASE_URL: z.url().optional(),
+    /** Postgres connection string for the system login (workers, change-request application). Optional until used. */
+    SYSTEM_DATABASE_URL: z.url().optional(),
     /** Supabase project URL; used to derive the JWKS endpoint for verifying access tokens. */
     SUPABASE_URL: z.url().optional(),
     /** Browser origins allowed to call the API (the two portals). Mobile apps do not use CORS. */
@@ -53,15 +55,21 @@ const ConfigSchema = z
         message: 'must be a postgres:// URL',
       });
     }
-    if (
-      deployed &&
-      config.DATABASE_URL &&
-      !/[?&]sslmode=(require|verify-ca|verify-full)(&|$)/.test(config.DATABASE_URL)
-    ) {
+    for (const key of ['DATABASE_URL', 'SYSTEM_DATABASE_URL'] as const) {
+      const value = config[key];
+      if (deployed && value && !/[?&]sslmode=(require|verify-ca|verify-full)(&|$)/.test(value)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [key],
+          message: 'must enforce TLS (sslmode=require, verify-ca or verify-full) when deployed',
+        });
+      }
+    }
+    if (config.SYSTEM_DATABASE_URL && config.SYSTEM_DATABASE_URL === config.DATABASE_URL) {
       ctx.addIssue({
         code: 'custom',
-        path: ['DATABASE_URL'],
-        message: 'must enforce TLS (sslmode=require, verify-ca or verify-full) when deployed',
+        path: ['SYSTEM_DATABASE_URL'],
+        message: 'must differ from DATABASE_URL (separate logins for user and system work)',
       });
     }
     if (deployed && config.SUPABASE_URL && !config.SUPABASE_URL.startsWith('https://')) {
