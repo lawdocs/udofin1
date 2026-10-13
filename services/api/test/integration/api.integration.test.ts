@@ -10,6 +10,9 @@ import { TokenError, type TokenVerifier } from '../../src/auth/token-verifier.js
 import { loadConfig } from '../../src/config.js';
 import { assertUserLoginPosture, LoginPostureError } from '../../src/db/login-posture.js';
 import { createUserContext } from '../../src/db/user-context.js';
+import { createMockLenderConnector } from '@udofin/adapters';
+import { createRoutingProcessor } from '../../src/system/routing.js';
+import { createConnectorResolver } from '../../src/workers/routing-handlers.js';
 import { createBorrowerProcessor } from '../../src/system/borrower.js';
 import { createChangeRequestApplier } from '../../src/system/change-requests.js';
 import { createSystemPool, type SystemPool } from '../../src/system/pool.js';
@@ -135,6 +138,11 @@ describe.skipIf(!enabled)('API against a real database', () => {
       handlers: createHandlers({
         applier,
         borrower: createBorrowerProcessor(systemPool),
+        routing: createRoutingProcessor(systemPool),
+        connectors: createConnectorResolver({
+          environment: 'test',
+          createMock: () => createMockLenderConnector('test'),
+        }),
         changeRequestStatus: (id) =>
           systemPool.withSystem(async (tx) => {
             const r = await tx.query<{ status: string }>(

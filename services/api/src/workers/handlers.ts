@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { type BorrowerProcessor } from '../system/borrower.js';
 import { type ChangeRequestApplier } from '../system/change-requests.js';
 import { PermanentError, type HandlerDefinition } from './outbox-worker.js';
+import { createRoutingHandlers, type ConnectorResolver } from './routing-handlers.js';
+import { type RoutingProcessor } from '../system/routing.js';
 
 const ChangeRequestApproved = z.strictObject({ change_request_id: z.uuid() });
 const DeletionRequested = z.strictObject({ deletion_request_id: z.uuid() });
@@ -19,8 +21,11 @@ export function createHandlers(deps: {
   /** Returns the request's status, or undefined if it does not exist. */
   changeRequestStatus: (id: string) => Promise<string | undefined>;
   borrower: BorrowerProcessor;
+  routing: RoutingProcessor;
+  connectors: ConnectorResolver;
 }): Record<string, HandlerDefinition> {
   return {
+    ...createRoutingHandlers({ routing: deps.routing, connectors: deps.connectors }),
     'borrower.deletion_requested': {
       schema: DeletionRequested,
       run: async (payload) => {

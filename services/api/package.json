@@ -16,6 +16,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "worker": "tsx src/workers/main.ts",
+    "callbacks": "tsx src/workers/callbacks-main.ts",
     "worker:start": "node dist/workers/main.js",
     "openapi": "tsx scripts/generate-openapi.ts"
   },

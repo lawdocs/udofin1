@@ -1070,10 +1070,12 @@ begin
       reason_class = case when v_hint ~ '^[a-z_]{2,50}$' then v_hint else 'invalid_event' end where id = v_msg;
     return jsonb_build_object('outcome', 'rejected', 'reason', case when v_hint ~ '^[a-z_]{2,50}$' then v_hint else 'invalid_event' end);
   end;
-  update lending.inbound_messages set outcome = case when coalesce((v_res ->> 'applied')::boolean, true) then 'applied' else 'quarantined' end,
-    reason_class = v_res ->> 'note' where id = v_msg;
+  -- Quarantined only when something was set aside on purpose (a late answer awaiting policy). A held offer WAS processed:
+  -- it is stored, shown to the lender as needing correction, and the result carries the issues.
+  update lending.inbound_messages set outcome = case when v_res ->> 'note' is not null then 'quarantined' else 'applied' end,
+    reason_class = coalesce(v_res ->> 'note', case when v_res ->> 'status' = 'held' then 'offer_held' end) where id = v_msg;
   perform lending.audit_event('lending.callback.processed', 'application', v_r.application_id::text, jsonb_build_object('type', p_type, 'applied', v_res -> 'applied'));
-  return jsonb_build_object('outcome', case when coalesce((v_res ->> 'applied')::boolean, true) then 'applied' else 'quarantined' end, 'result', v_res);
+  return jsonb_build_object('outcome', case when v_res ->> 'note' is not null then 'quarantined' else 'applied' end, 'result', v_res);
 end
 $$;
 

@@ -2,7 +2,10 @@ import { loadConfig } from '../config.js';
 import { createBorrowerProcessor } from '../system/borrower.js';
 import { createChangeRequestApplier } from '../system/change-requests.js';
 import { createSystemPool } from '../system/pool.js';
+import { createMockLenderConnector } from '@udofin/adapters';
+import { createRoutingProcessor } from '../system/routing.js';
 import { createHandlers } from './handlers.js';
+import { createConnectorResolver } from './routing-handlers.js';
 import { OutboxWorker, type WorkerLogger } from './outbox-worker.js';
 import { createPgOutboxStore } from './pg-outbox-store.js';
 
@@ -23,9 +26,16 @@ const log: WorkerLogger = { info: out('info'), warn: out('warn'), error: out('er
 const pool = createSystemPool(config.SYSTEM_DATABASE_URL);
 const applier = createChangeRequestApplier(pool);
 const borrower = createBorrowerProcessor(pool);
+const routing = createRoutingProcessor(pool);
 const handlers = createHandlers({
   applier,
   borrower,
+  routing,
+  // No real lender connector exists yet. `mock` rows are refused outside local and test (see createConnectorResolver).
+  connectors: createConnectorResolver({
+    environment: config.APP_ENV,
+    createMock: () => createMockLenderConnector(config.APP_ENV),
+  }),
   changeRequestStatus: (id) =>
     pool.withSystem(async (tx) => {
       const r = await tx.query<{ status: string }>(
@@ -62,12 +72,17 @@ const housekeeping = setInterval(
       .expireDrafts()
       .then((n) => {
         if (n > 0) log.info({ expired: n }, 'drafts expired');
+        return routing.processDeadlines();
+      })
+      .then((r) => {
+        if (r.noResponse > 0 || r.offersExpired > 0)
+          log.info({ ...r }, 'lender deadlines processed');
       })
       .catch((error: unknown) => {
         log.warn({ type: (error as Error).name }, 'draft expiry housekeeping failed');
       });
   },
-  15 * 60 * 1000,
+  5 * 60 * 1000,
 );
 housekeeping.unref();
 

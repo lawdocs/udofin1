@@ -2,7 +2,7 @@
 -- Synthetic data only. Lenders are made genuinely "live" through the same facts private.lender_is_live reads.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(157);
+select plan(159);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -461,6 +461,8 @@ alter table lending.application_routing enable trigger application_routing_updat
 select pg_temp.as_system();
 select is(lending.begin_transmission(pg_temp.get('appB1')::uuid) ->> 'skip', 'uncertain', 'an interrupted send is treated as uncertain, not as unsent');
 select is((select last_error_class from lending.application_routing where application_id = pg_temp.get('appB1')::uuid), 'worker_interrupted', 'and the reason is kept');
+select is(lending.reconcile_context(pg_temp.get('appB1')::uuid) ->> 'connectorKind', 'api', 'the worker can ask the lender about an uncertain application');
+select is(lending.reconcile_context(pg_temp.get('appA1')::uuid), null, 'and nothing is returned for an application that is not uncertain');
 
 -- Consent withdrawn after the data was sent: recorded, not pretended undone; the lender can no longer read the contact detail.
 select pg_temp.as_user('aaaaaaaa-0000-4000-8000-000000000001');

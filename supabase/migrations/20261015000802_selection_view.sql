@@ -38,3 +38,21 @@ end
 $$;
 revoke all on function lending.selection_view(uuid, text) from public;
 grant execute on function lending.selection_view(uuid, text) to authenticated;
+
+-- Worker: what is needed to ask a lender whether an uncertain application arrived. Null when it is no longer uncertain.
+create or replace function lending.reconcile_context(p_app uuid)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if private.invoking_role() <> 'service_role' then raise exception 'system only' using errcode = '42501'; end if;
+  return (select jsonb_build_object('lenderId', r.lender_org_id, 'correlationRef', r.correlation_ref, 'connectorKind', c.kind)
+            from lending.application_routing r join lending.lender_connectors c on c.lender_org_id = r.lender_org_id
+           where r.application_id = p_app and r.transmission_status = 'uncertain' and c.kind in ('api', 'mock'));
+end
+$$;
+revoke all on function lending.reconcile_context(uuid) from public;
+grant execute on function lending.reconcile_context(uuid) to service_role;

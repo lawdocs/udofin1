@@ -1,6 +1,7 @@
 import { type DocumentStore } from '@udofin/adapters';
 import { borrowerRoutes } from '../modules/borrower/routes.js';
 import { type BorrowerDeps } from '../modules/borrower/deps.js';
+import { routingRoutes } from '../modules/routing/routes.js';
 import { adminRoutes } from '../modules/admin/routes.js';
 import { meRoutes } from '../modules/me/routes.js';
 import { panelRoutes } from '../modules/panel/routes.js';
@@ -19,5 +20,6 @@ export function authenticatedRoutes(
     ...productRoutes,
     ...panelRoutes,
     ...borrowerRoutes(deps.borrower),
+    ...routingRoutes,
   ];
 }
