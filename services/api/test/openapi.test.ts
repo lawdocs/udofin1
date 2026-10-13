@@ -46,7 +46,7 @@ describe('OpenAPI contract', () => {
           `${method} ${path} success`,
         ).toBe(true);
         expect(statuses, `${method} ${path} 500`).toContain('500');
-        if (!path.startsWith('/health'))
+        if (!path.startsWith('/health') && path !== '/v1/hooks/send-sms')
           expect(op.security, `${method} ${path} security`).toEqual([{ bearerAuth: [] }]);
       }
     }

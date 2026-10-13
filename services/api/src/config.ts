@@ -34,9 +34,24 @@ const ConfigSchema = z
     RATE_LIMIT_MAX_PER_MINUTE: z.coerce.number().int().min(1).default(120),
     /** Directory for the development-only document store (unencrypted files). Refused when deployed. */
     LOCAL_DOCUMENT_DIR: z.string().min(1).optional(),
+    /** SMS provider adapter. `none` refuses to send; `mock` records messages in memory (local and tests only). */
+    SMS_PROVIDER: z.enum(['none', 'mock']).default('none'),
+    /** Device-integrity verifier. `none` reports "unavailable"; `mock` is local and tests only. */
+    INTEGRITY_PROVIDER: z.enum(['none', 'mock']).default('none'),
+    /** Server secret that keys the hash of step-up codes. Required to start a step-up challenge. */
+    STEPUP_OTP_PEPPER: z.string().min(32).optional(),
+    /** Signing secret of the Supabase "Send SMS" auth hook (Standard Webhooks format, v1,whsec_...). */
+    SEND_SMS_HOOK_SECRET: z.string().min(16).optional(),
   })
   .superRefine((config, ctx) => {
     const deployed = config.APP_ENV === 'staging' || config.APP_ENV === 'production';
+    if (deployed && (config.SMS_PROVIDER === 'mock' || config.INTEGRITY_PROVIDER === 'mock')) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['SMS_PROVIDER'],
+        message: 'mock providers are for local development and tests only',
+      });
+    }
     if (deployed && config.LOCAL_DOCUMENT_DIR) {
       ctx.addIssue({
         code: 'custom',

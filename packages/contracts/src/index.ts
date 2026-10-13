@@ -6,3 +6,4 @@ export * from './http/change-requests.js';
 export * from './http/onboarding.js';
 export * from './http/products.js';
 export * from './http/panel.js';
+export * from './http/borrower.js';

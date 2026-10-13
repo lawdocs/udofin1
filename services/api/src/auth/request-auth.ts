@@ -11,7 +11,7 @@ export interface Authenticated {
   actor: ActorKind;
 }
 
-export type AuthRequirement = 'user' | 'staff';
+export type AuthRequirement = 'user' | 'staff' | 'borrower';
 
 /**
  * Verifies the bearer token, asks the DATABASE who the caller is (never the token), and enforces
@@ -44,6 +44,8 @@ export async function runAsUser<T>(
     const staff = actor === 'lender' || actor === 'platform';
     if (staff && claims.aal !== 'aal2') throw new ApiError(401, 'mfa_required', 'Unauthorized');
     if (requirement === 'staff' && !staff) throw new ApiError(403, 'staff_only', 'Forbidden');
+    if (requirement === 'borrower' && actor !== 'borrower')
+      throw new ApiError(403, 'borrower_only', 'Forbidden');
     return handler(tx, { claims, actor });
   });
 }
