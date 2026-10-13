@@ -20,13 +20,13 @@ Important framing: these Directions bind the **NBFC (the lender)**. Udofin is no
 
 ### 1.2 What each layer must meet (para 6, 10, 11, 17, 54)
 
-| Layer | Minimum capital and related requirements in this text |
-| --- | --- |
-| NBFC-BL, lending against gold jewellery (50% or more of financial assets, para 4(8)) | Tier 1 12% and CRAR 15% of RWAs; Tier 2 not above 100% of Tier 1 (para 6(1)) |
-| NBFC-BL, other lenders | **No CRAR or Tier 1 minimum is stated in this text.** Leverage ratio "shall not be more than seven at any point of time" (para 17; leverage ratio = total outside liabilities divided by owned fund, para 4(7)). Whether any other BL capital floor (e.g. net owned fund) applies sits in other Directions (see 8.1) |
-| NBFC-ML and above | Tier 1 at least 10% of aggregate RWAs (para 6(2)); CRAR at least 15% of RWAs, Tier 2 not above 100% of Tier 1 (para 6(3)); ICAAP (para 54, Chapter V "Applicable to NBFC-ML and above") |
-| NBFC-UL (additional) | CET1 at least 9% of RWAs (para 6(4)); Tier 1 composition per para 11 |
-| Top Layer | "higher capital charge ... specifically communicated" (para 6(5)) |
+| Layer                                                                                | Minimum capital and related requirements in this text                                                                                                                                                                                                                                                                |
+| ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| NBFC-BL, lending against gold jewellery (50% or more of financial assets, para 4(8)) | Tier 1 12% and CRAR 15% of RWAs; Tier 2 not above 100% of Tier 1 (para 6(1))                                                                                                                                                                                                                                         |
+| NBFC-BL, other lenders                                                               | **No CRAR or Tier 1 minimum is stated in this text.** Leverage ratio "shall not be more than seven at any point of time" (para 17; leverage ratio = total outside liabilities divided by owned fund, para 4(7)). Whether any other BL capital floor (e.g. net owned fund) applies sits in other Directions (see 8.1) |
+| NBFC-ML and above                                                                    | Tier 1 at least 10% of aggregate RWAs (para 6(2)); CRAR at least 15% of RWAs, Tier 2 not above 100% of Tier 1 (para 6(3)); ICAAP (para 54, Chapter V "Applicable to NBFC-ML and above")                                                                                                                              |
+| NBFC-UL (additional)                                                                 | CET1 at least 9% of RWAs (para 6(4)); Tier 1 composition per para 11                                                                                                                                                                                                                                                 |
+| Top Layer                                                                            | "higher capital charge ... specifically communicated" (para 6(5))                                                                                                                                                                                                                                                    |
 
 CRAR formula (para 6(1) explanation): (Tier 1 + Tier 2) divided by RWAs. Tier 1 ratio and CET1 ratio similarly defined (paras 6(1)-6(4)).
 
@@ -47,16 +47,16 @@ CRAR formula (para 6(1) explanation): (Tier 1 + Tier 2) divided by RWAs. Tier 1 
 
 ### 3.1 The risk weight (quoted from the table, page 22, verified on the image)
 
-| Item | Description | Risk weight |
-| --- | --- | --- |
-| 3(e) | "Other secured loans and advances considered good [Except at (6) below]" | 100% |
-| **3(e)(i)** | "Consumer credit exposure categorised as retail loans, excluding housing loans, educational loans, vehicle loans, loans against gold jewellery and microfinance / SHG loans" | **125%** |
-| 3(e)(ii) | "Credit card receivables" | 125% |
-| 3(c) | "Loans and advances fully secured against deposits held" | 0% |
-| 3(f) | "Bills purchased / discounted" | 100% |
-| 3(g) | "Others (To be specified)" | 100% |
-| 3(b) | "Inter corporate loans / deposits" | 100% |
-| 3(d) | "Loans to staff" | 0% |
+| Item        | Description                                                                                                                                                                  | Risk weight |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| 3(e)        | "Other secured loans and advances considered good [Except at (6) below]"                                                                                                     | 100%        |
+| **3(e)(i)** | "Consumer credit exposure categorised as retail loans, excluding housing loans, educational loans, vehicle loans, loans against gold jewellery and microfinance / SHG loans" | **125%**    |
+| 3(e)(ii)    | "Credit card receivables"                                                                                                                                                    | 125%        |
+| 3(c)        | "Loans and advances fully secured against deposits held"                                                                                                                     | 0%          |
+| 3(f)        | "Bills purchased / discounted"                                                                                                                                               | 100%        |
+| 3(g)        | "Others (To be specified)"                                                                                                                                                   | 100%        |
+| 3(b)        | "Inter corporate loans / deposits"                                                                                                                                           | 100%        |
+| 3(d)        | "Loans to staff"                                                                                                                                                             | 0%          |
 
 Reading: an unsecured personal or consumer loan to an individual falls in 3(e)(i) at **125%**, unless it is a housing, educational, vehicle, gold or microfinance/SHG loan. The text does not define "consumer credit exposure" or "retail loans" (see 8.2). The table places 3(e)(i) under the heading "Current assets / Other financial assets" as printed.
 
@@ -152,14 +152,14 @@ Para 18(2)(iii) nets "cash margin / caution money / security deposits ... held a
 
 ### 8.2 Against `docs/architecture/collections-and-dlg.md` and `docs/regulatory/controls-matrix.md`
 
-| Statement in our docs | What this text says | Verdict |
-| --- | --- | --- |
-| Credit Facilities para 26 (note 01): "Capital treatment follows the Capital Adequacy Directions; an NBFC that is a DLG provider deducts the outstanding DLG from capital." | CAD para 15(3), quoted in 4.1. | **Confirmed**; the CAD sentence is about NBFC providers only. |
-| Collections doc/matrix: lender benefits are described mainly through cap, invocation and ECL | No capital benefit in CAD. The lender's RWA is unchanged by DLG. | **Add a note**: do not market DLG as a capital-relief or "risk-free" product for lenders; value is in ECL (note 09 para 36A) and economics. Sales and contract language must avoid "credit risk mitigation" or "risk transfer for capital purposes". |
-| Matrix DLG-01 open question "capital at ..." (OPC capital) | CAD does not prescribe capital for a non-NBFC provider. | **Consistent**; capacity is by Credit Facilities para 20(3) (auditor declaration), not CAD. |
-| Matrix open question 9 (whether large guarantee exposure changes Udofin's regulatory characterisation) | CAD silent on characterisation; applies para 15(3) only if the provider is an NBFC. | **Not answered by this text**; keep open. |
-| Matrix DLG-06 / collections doc: no revolving credit under DLG | CAD 125% rows for credit cards confirm RBI's separate treatment of revolving credit. | **Consistent.** |
-| Collections doc: DLG `cover_instruments` as cash, FD lien, bank guarantee | CAD gives no RWA netting for any of them on retail loans (4.2, 4.5). | **No contradiction**; do not describe the instruments as "collateral" that reduces the lender's capital. |
+| Statement in our docs                                                                                                                                                      | What this text says                                                                  | Verdict                                                                                                                                                                                                                                              |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Credit Facilities para 26 (note 01): "Capital treatment follows the Capital Adequacy Directions; an NBFC that is a DLG provider deducts the outstanding DLG from capital." | CAD para 15(3), quoted in 4.1.                                                       | **Confirmed**; the CAD sentence is about NBFC providers only.                                                                                                                                                                                        |
+| Collections doc/matrix: lender benefits are described mainly through cap, invocation and ECL                                                                               | No capital benefit in CAD. The lender's RWA is unchanged by DLG.                     | **Add a note**: do not market DLG as a capital-relief or "risk-free" product for lenders; value is in ECL (note 09 para 36A) and economics. Sales and contract language must avoid "credit risk mitigation" or "risk transfer for capital purposes". |
+| Matrix DLG-01 open question "capital at ..." (OPC capital)                                                                                                                 | CAD does not prescribe capital for a non-NBFC provider.                              | **Consistent**; capacity is by Credit Facilities para 20(3) (auditor declaration), not CAD.                                                                                                                                                          |
+| Matrix open question 9 (whether large guarantee exposure changes Udofin's regulatory characterisation)                                                                     | CAD silent on characterisation; applies para 15(3) only if the provider is an NBFC.  | **Not answered by this text**; keep open.                                                                                                                                                                                                            |
+| Matrix DLG-06 / collections doc: no revolving credit under DLG                                                                                                             | CAD 125% rows for credit cards confirm RBI's separate treatment of revolving credit. | **Consistent.**                                                                                                                                                                                                                                      |
+| Collections doc: DLG `cover_instruments` as cash, FD lien, bank guarantee                                                                                                  | CAD gives no RWA netting for any of them on retail loans (4.2, 4.5).                 | **No contradiction**; do not describe the instruments as "collateral" that reduces the lender's capital.                                                                                                                                             |
 
 No direct contradiction with `collections-and-dlg.md` or `controls-matrix.md` was found in this instrument. The matrix has no capital-adequacy row; propose adding CAP-01 to CAP-05 (section 9).
 
@@ -167,13 +167,13 @@ No direct contradiction with `collections-and-dlg.md` or `controls-matrix.md` wa
 
 ## 9. Proposed control rows for `controls-matrix.md` (our reading; status "interpretation" unless stated)
 
-| Proposed ID | Requirement | Source para | Status |
-| --- | --- | --- | --- |
-| CAP-01 | Record each lender's layer and minimum capital regime (BL, BL-gold, ML, UL) at onboarding; do not assume a CRAR floor for non-gold BL. | 6, 17 | confirmed (text); applicability per lender interpretation |
-| CAP-02 | Unsecured consumer loans are risk-weighted at 125% by the lender; the DLG gives no RWA relief; marketing and contracts must not claim capital relief. | 18(1) item 3(e)(i); 15(3) and absence of CRM | confirmed (rate); absence of DLG relief is our reading |
-| CAP-03 | If the DLG provider were an NBFC it would deduct the full outstanding DLG from capital; Udofin must not become or contract through an NBFC DLG provider without counsel review. | 15(3) | confirmed |
-| CAP-04 | DLG invocation data (amount, remaining cover, date) is provided to each lender so it can recompute ECL, which flows into Tier 2 / RWA through 12-month versus lifetime ECL. | 16(6); IRACP 36A, 36C | interpretation |
-| CAP-05 | Lenders using a DLG and selling or securitising the pool must test the DLG as implicit support or credit enhancement; Udofin does not extend DLG to such pools without counsel review. | 27, 32 | interpretation |
+| Proposed ID | Requirement                                                                                                                                                                            | Source para                                  | Status                                                    |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- | --------------------------------------------------------- |
+| CAP-01      | Record each lender's layer and minimum capital regime (BL, BL-gold, ML, UL) at onboarding; do not assume a CRAR floor for non-gold BL.                                                 | 6, 17                                        | confirmed (text); applicability per lender interpretation |
+| CAP-02      | Unsecured consumer loans are risk-weighted at 125% by the lender; the DLG gives no RWA relief; marketing and contracts must not claim capital relief.                                  | 18(1) item 3(e)(i); 15(3) and absence of CRM | confirmed (rate); absence of DLG relief is our reading    |
+| CAP-03      | If the DLG provider were an NBFC it would deduct the full outstanding DLG from capital; Udofin must not become or contract through an NBFC DLG provider without counsel review.        | 15(3)                                        | confirmed                                                 |
+| CAP-04      | DLG invocation data (amount, remaining cover, date) is provided to each lender so it can recompute ECL, which flows into Tier 2 / RWA through 12-month versus lifetime ECL.            | 16(6); IRACP 36A, 36C                        | interpretation                                            |
+| CAP-05      | Lenders using a DLG and selling or securitising the pool must test the DLG as implicit support or credit enhancement; Udofin does not extend DLG to such pools without counsel review. | 27, 32                                       | interpretation                                            |
 
 ---
 

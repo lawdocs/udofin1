@@ -1,65 +1,51 @@
 # ADR-0023: Collections and default loss guarantee (DLG) kept separate
 
-- **Status:** Proposed — nothing is built; whether Udofin will provide DLG and/or act as a recovery agent are open owner decisions
-- **Date:** 2026-10-10
-- **Related:** ADR-0007, ADR-0008, ADR-0016, ADR-0018
+- **Status:** Accepted (13 October 2026). Owner decision: Udofin provides a 5% DLG and acts as a recovery agent for lenders, and other recovery agencies may also be used. Implementation is Phase 08; Phase 02 adds only the permission keys and the segregation rule.
+- **Date:** 2026-10-10, rewritten 2026-10-13 against the primary RBI texts
+- **Related:** ADR-0007, ADR-0008, ADR-0016, ADR-0018, ADR-0025. Detailed design: [`../architecture/collections-and-dlg.md`](../architecture/collections-and-dlg.md). Sources: `docs/regulatory/primary/01`, `06`, `09`, `10`.
 
 ## Context
 
-Research findings (`docs/research/2026-10-10/rbi-digital-lending.md` §3.14–3.15, DL-22 to DL-28; `grievance-adr-collections.md`):
+What the supplied RBI texts say (paragraph numbers are in the primary notes):
 
-- **DLG creates no right or duty to collect.** Collection is a separate function the lender outsources (confirmed (secondary)).
-- **DLG rules:** the provider must be an LSP (or a lender acting as LSP) incorporated under the Companies Act, 2013; the lender needs a board-approved DLG policy and an enforceable contract; total cover on a portfolio may not exceed **5% of the amount disbursed** out of that portfolio (the "DLG set"), fixed once earmarked, not reinstated after invocation; permitted forms are cash with the lender, a fixed deposit with a scheduled commercial bank under lien to the lender, or a bank guarantee; invocation within **120 days overdue**; the lender still recognises NPAs and provisions; the LSP must publish on its website the number of portfolios covered and the amount of each; no DLG on digitally offered revolving credit, credit-guarantee-scheme loans or P2P (confirmed (secondary)). From 13 Feb 2026 NBFCs using ECL may count DLG only if it is integral to the loan contract (confirmed (secondary); reference number unverified).
-- **Recovery:** an LSP may collect only as the lender's disclosed recovery agent under the outsourcing contract; the lender names the recovery agent at sanction and notifies the borrower before a new agent makes contact (confirmed (secondary) in `rbi-digital-lending.md`; likely in `grievance-adr-collections.md`). Calls only 08:00–19:00, no harassment or third-party contact (likely). The 6 Aug 2026 recovery Amendment Directions, effective 1 Jan 2027, add IIBF certification, advance notice of first visit, recorded calls kept 6 months, an agency list updated within 7 days and device-lock limits (confirmed (secondary); details need the text).
-- Being both the loss absorber and the collector creates an incentive toward aggressive collection (research interpretation).
+- **DLG** (Credit Facilities Directions, Chapter III): cover capped at **5% of the amount disbursed out of a fixed "DLG set"**, activated proportionally as loans are disbursed; forms limited to **cash with the lender, a lien-marked fixed deposit, or a bank guarantee**; invocation within **120 days overdue**; no reinstatement after recoveries; the lender's policy sets provider eligibility and every arrangement needs a **declaration certified by the provider's statutory auditor** (para 20(3)); monthly disclosure within seven working days; the provider must be a Companies Act, 2013 company. A DLG is not a substitute for credit appraisal.
+- **Provisioning (IRAC 36A–36C):** a lender may count a DLG in expected credit loss only if it is integral to the loan contract. Nothing in the text lets DLG change days past due, SMA or NPA dates or upgrade eligibility.
+- **Capital (Capital Adequacy):** no recognition of a private DLG as credit risk mitigation for retail loans. An NBFC that provides a DLG must deduct it from its own capital (para 15(3)), so Udofin must not become an NBFC provider. Do not market DLG as capital relief.
+- **Recovery:** a recovery agent is any agency the lender engages, and Udofin is one; the lender answers for its conduct. Hard platform limits: **no recovery calls before 08:00 or after 19:00**, no intimidation, humiliation or contact with family or friends, no persistent calling, agent details given to the borrower before recovery starts, police verification of collectors, an agent undertaking and training (RBC paras 91–100). Penal charges are flat, on the overdue amount only, and each reminder must state them (RBC para 30). Money moves only into the lender's account (Chapter III paras 10(2)–(3)).
+- Being both loss absorber and collector is a conflict of interest the text does not forbid but a lender will examine.
 
 ## Decision
 
-1. **DLG and collections are separate modules with separate switches.** Providing DLG to a lender never enables collections. Collections for a lender are enabled only by a separate, recorded recovery-agent mandate from that lender, and stop when the mandate is withdrawn, even if DLG remains.
-2. **DLG ledger (Phase 7/9):** per lender and per DLG set: disbursed amount, cover, form (enumerated to cash, FD with lien, bank guarantee only), contract and policy references, invocations; automatic cap check that blocks cover above 5% of disbursed; no reinstatement entries; days-past-due alerts before the 120-day limit; a generated public disclosure page.
-3. **Udofin's own books** for DLG exposure, fees and collection income use double-entry accounting (ADR-0007), not the lender's LMS.
-4. **Collections (only if appointed):** run under each lender's recovery policy; contact windows, frequency caps and recorded calls enforced by the system; borrower notified before first contact; agent registry with certification and expiry; only the lender's repayment rails, never a Udofin account (ADR-0008); no access to the borrower's contacts or device data (ADR-0016); no use of DLG status in borrower communications.
-5. Complaints about collection conduct follow the grievance path (ADR-0018) and are monitored per lender.
+1. **DLG and collections are separate modules with separate switches.** Providing DLG to a lender never enables collections. Collections are enabled per lender by a recorded **recovery-agent mandate**, and stop when it is withdrawn, even if the DLG remains.
+2. **Udofin may act in both roles. The architecture enforces the separation:**
+   - one login cannot hold both `collections.work` and `dlg.manage` (database rule, migration `0700`);
+   - collections staff cannot read DLG tables or per-loan invocation status; DLG staff cannot contact borrowers;
+   - DLG status is never used in borrower communications, and recovery incentives never depend on DLG exposure;
+   - every contact attempt is an append-only record.
+3. **DLG ledger (`dlg` schema, Phase 08):** arrangement, set, member loans, disbursement events, cover instruments, invocations, recovery shares, disclosures, auditor declarations. Cover above 5% of disbursed in a set is refused; cover instruments must be one of the three permitted forms; no reinstatement entries; invocation after day 120 is refused unless the lender records an exception (flagged for review); a shortfall between cap and committed cover blocks new disbursements into the set (the lender decides).
+4. **Servicing facts stay lender-owned.** DPD, SMA and NPA dates come from the lender's LMS; the DLG ledger stores invocation amount, remaining cover and date so the lender can recompute expected credit loss. A collections grace period may delay **contact**, never the overdue date.
+5. **Collections (`collections` schema, Phase 08):** case state machine with a `notice_pending → contactable` gate (agent details and notice sent first); calling hours clamped to the regulatory window whatever the lender's policy; the contact log and complaints link; payment links only in the lender's name against the lender's account (ADR-0008); settlement and restructuring requests are forwarded to the lender, which alone decides; sub-collection agencies are sub-contractors that need the lender's consent (outsourcing directions).
+6. **The legal entity is Infrabyx Consultancy OPC Private Limited.** The owner's position is that an OPC may act as DLG provider. Counsel must confirm this together with the auditor certification and the capital to support cover; the system records the legal entity and the evidence, and never presents Udofin as a lender or guarantor of the borrower.
 
 ## Alternatives considered
 
-| Option                                               | Why rejected                                                       |
-| ---------------------------------------------------- | ------------------------------------------------------------------ |
-| "Udofin provides 5% FLDG, therefore Udofin collects" | DLG gives no collection right (research); conflict of interest.    |
-| Track DLG in spreadsheets                            | Cap breaches and missed invocations are likely; no evidence trail. |
-| One combined "risk and recovery" module              | Makes it easy to couple DLG exposure to collection intensity.      |
+| Option                                            | Why rejected                                                                  |
+| ------------------------------------------------- | ----------------------------------------------------------------------------- |
+| "Udofin provides DLG, therefore it collects"      | DLG gives no collection right and the roles stay separate.                    |
+| One combined "risk and recovery" module           | Makes it easy to couple DLG exposure to collection intensity.                 |
+| Track DLG in spreadsheets                         | Cap breaches and missed invocations are likely; no evidence trail.            |
+| Udofin collects money and passes it to the lender | Prohibited: no pass-through or pool accounts (ADR-0008; Chapter III para 10). |
 
 ## Consequences
 
-**Positive**
-
-- Udofin's DLG exposure and collections conduct can be evidenced separately to lenders and auditors.
-- Collections can be switched off per lender without touching DLG.
-
-**Negative**
-
-- Two modules, two contracts per lender, separate reporting.
-- DLG ties up Udofin capital across lenders; capacity must be modelled before offering it.
-
-**Risks**
-
-- Legal characterisation of large guarantee exposures for Udofin needs advice (research open question).
-- If Udofin is not incorporated under the Companies Act, 2013, it cannot provide DLG (owner decision on legal entity).
-
-## Compliance and security notes
-
-- Supports the reported DLG and recovery rules (labels above). The recovery rules effective 1 Jan 2027 must be read in the primary text before the collections module is designed in detail. Primary-source verification gate applies (README).
+**Positive** — DLG exposure and collections conduct can be evidenced separately to lenders and auditors; collections can be switched off per lender without touching DLG.
+**Negative** — two modules and two contracts per lender; cover instruments tie up Udofin capital (cash, a lien-marked FD or a bank guarantee from the first disbursement), so capacity must be modelled before a lender is signed.
+**Risks** — the legal capacity of an OPC to give large guarantees, the statutory-auditor certification, and the conflict of interest if segregation is weakened. The amendments after 1 April 2026 (recovery rules of 6 August 2026) are not in the supplied text and must be obtained.
 
 ## Verification
 
-Planned (research DL-22 to DL-27, GR-10, GR-15):
-
-- Adding cover above 5% of a set's disbursed amount fails; a "corporate guarantee" DLG record cannot be created; recoveries do not restore cover.
-- Withdrawing the recovery mandate stops collections even with DLG active.
-- A call scheduled at 19:01 is blocked; contact before the agent-assignment notice is blocked.
+Planned acceptance tests (Phase 08) reproduce the three DLG illustrations in Chapter III para 24(3); cover above 5% fails; a corporate-guarantee instrument cannot be created; recoveries do not restore cover; a call scheduled at 19:01 is blocked; contact before the agent notice is blocked; withdrawing the mandate stops collections with DLG still active. Phase 02 already tests the segregation rule in `supabase/tests/005_phase02_change_control.test.sql`.
 
 ## Revisit triggers
 
-- Owner decisions on the legal entity, DLG provision and recovery-agent role.
-- Primary-text review of the 1 Jan 2027 recovery rules.
-- Final rules on NBFC revolving credit (affects DLG eligibility of products).
+Primary text of the 6 August 2026 recovery amendment; final rules on revolving credit; counsel's view on the OPC as provider; any lender that requires different cover forms.

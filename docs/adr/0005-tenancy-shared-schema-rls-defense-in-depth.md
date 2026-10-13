@@ -69,3 +69,10 @@
 - A lender contractually requires physical separation (own database or project).
 - Policy cost shows up in query plans at production volume.
 - Any of the known gaps above is closed by a migration (update this ADR's gap list through a superseding ADR if the model changes).
+
+## Amendment (13 October 2026, Phase 02)
+
+- The API connects as `udofin_api`, which can only `SET ROLE authenticated`; workers and the change-request module connect as `udofin_system`, which can only `SET ROLE service_role`. Neither is a superuser, owner or `BYPASSRLS`. The API refuses to start if the user login could skip row-level security or assume `service_role`.
+- Every user request runs through `withUserContext`: one transaction, `SET LOCAL ROLE authenticated`, verified claims set for that transaction only; the query handle stops working when the transaction ends, so it cannot be reused. Claims carry identity and assurance level only: **permissions are resolved from the database on every request**, so a suspended member loses access on the next request.
+- Only `src/system` and `src/workers` may import the system pool (lint rule and unit test).
+- Organisations, memberships and role grants change only through two-person change requests (ADR-0025).

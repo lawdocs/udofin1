@@ -2,7 +2,7 @@
 
 **Status:** design for owner approval. Implementation is **Phase 08** (servicing, payments, mandates and collections), with the data-model review in Phase 02. Nothing described here exists in code yet.
 **Decision basis:** owner decisions of 13 October 2026: Udofin (Infrabyx Consultancy OPC Private Limited) provides a **5% DLG** to partner NBFCs and acts as the lenders' **recovery agent**.
-**Regulatory basis:** RBI Credit Facilities Directions, 2025, Chapter III, read from the primary text (paragraph numbers below), see [`../regulatory/primary/01-credit-facilities-chapter-III-digital-lending.md`](../regulatory/primary/01-credit-facilities-chapter-III-digital-lending.md). Recovery-agent _conduct_ rules (calling hours, certification, call recording) are in the Responsible Business Conduct Directions, which have **not yet been supplied**; this design contains hooks for them but does not guess their content.
+**Regulatory basis:** RBI Credit Facilities Directions, 2025, Chapter III, read from the primary text (paragraph numbers below), see [`../regulatory/primary/01-credit-facilities-chapter-III-digital-lending.md`](../regulatory/primary/01-credit-facilities-chapter-III-digital-lending.md). Recovery-agent _conduct_ rules are in the Responsible Business Conduct Directions, 2025 (updated 1 Apr 2026), now read from the primary text: [`../regulatory/primary/06-responsible-business-conduct-directions-2025.md`](../regulatory/primary/06-responsible-business-conduct-directions-2025.md). Provisioning and capital effects of DLG: notes `09` and `10`. Amendments after 1 April 2026 (including the 6 August 2026 recovery amendment) are **not** in the supplied text.
 
 ## 1. Three things that must not be confused
 
@@ -121,10 +121,14 @@ Derived view `dlg.cover_position` per set: `cap = 5% × Σ disbursed`, `invoked`
 
 ## 5. Collection case lifecycle
 
+**Dating rule (IRAC paras 11(2), 18):** the overdue date is the due date itself, flagged at that day-end, with no grace period for dating, days past due, SMA or NPA. A collections _grace period_ may delay the first **contact** only; it must never move any lender-reported date.
+
+**Platform limits that lender policy can narrow but never widen (RBC paras 91–100):** recovery calls only between 08:00 and 19:00 (microfinance 09:00–18:00); no intimidation, humiliation, anonymous or persistent calls, no contact with family, referees or friends to pressure, no publishing of borrower names; the borrower receives the agent's details before recovery starts; every collector carries the notice, an authorisation letter and an ID card; police verification with re-verification due dates, a signed undertaking and training are recorded per collector. Every reminder states the applicable penal charge (RBC para 30(7)); collections never levies a fee of its own. The lender's recovery-grievance details are given to the borrower at disbursal (para 92). Whether SMS, e-mail and messaging fall under the hours rule is a counsel question; the platform applies the same window to all channels until advised otherwise.
+
 ```mermaid
 stateDiagram-v2
   [*] --> due: instalment due
-  due --> overdue: unpaid after grace
+  due --> overdue: unpaid at day-end (the due date is the overdue date)
   overdue --> agent_assigned: lender policy triggers
   agent_assigned --> notice_pending: assignment created
   notice_pending --> contactable: agent particulars sent (email/SMS)\nand delivery recorded
@@ -178,16 +182,16 @@ Udofin loses money when loans default (DLG) and is paid to collect them (agent).
 
 ## 8. Open items before Phase 08 can start
 
-| #   | Item                                                                                                                                  | Needed from              |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
-| 1   | Responsible Business Conduct Directions, 2025 and amendments (recovery-agent conduct, KFS, penal charges)                             | Owner / compliance owner |
-| 2   | Income Recognition, Asset Classification and Provisioning Directions, 2025 (how DLG interacts with provisioning, amended 13 Feb 2026) | Owner / compliance owner |
-| 3   | Counsel's view on an OPC as DLG provider and recovery agent (capital, auditor, limits)                                                | Counsel                  |
-| 4   | Whether recovery commissions based on amounts collected are permitted, and any lender-specific caps                                   | Counsel, each lender     |
-| 5   | Cash recovery: will any lender use it, and who holds cash                                                                             | Each lender              |
-| 6   | Cover instruments Udofin can actually put up (bank guarantee limits, FD) and the portfolio size they support                          | Owner / finance          |
-| 7   | Who is the nodal grievance officer for Udofin (decision D-12) and the collections head                                                | Owner                    |
-| 8   | Statutory auditor and the format of the 20(3) declaration                                                                             | Owner / auditor          |
+| #   | Item                                                                                                                                                                                                                                  | Needed from              |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| 1   | **Received 13 Oct 2026 (text as updated 1 Apr 2026).** Still needed: amendments after that date, including the Second Amendment of 15 Jun 2026 and the 6 Aug 2026 recovery amendment (IIBF certificate, call recording, visit notice) | Owner / compliance owner |
+| 2   | **Answered** from the IRAC text (paras 36A–36C): DLG may count in expected credit loss only if integral to the loan contract; it never changes DPD or classification. See `primary/09`.                                               | —                        |
+| 3   | Counsel's view on an OPC as DLG provider and recovery agent (capital, auditor, limits)                                                                                                                                                | Counsel                  |
+| 4   | Whether recovery commissions based on amounts collected are permitted, and any lender-specific caps                                                                                                                                   | Counsel, each lender     |
+| 5   | Cash recovery: will any lender use it, and who holds cash                                                                                                                                                                             | Each lender              |
+| 6   | Cover instruments Udofin can actually put up (bank guarantee limits, FD) and the portfolio size they support                                                                                                                          | Owner / finance          |
+| 7   | Who is the nodal grievance officer for Udofin (decision D-12) and the collections head                                                                                                                                                | Owner                    |
+| 8   | Statutory auditor and the format of the 20(3) declaration                                                                                                                                                                             | Owner / auditor          |
 
 ## 9. Acceptance tests (to be written with Phase 08)
 

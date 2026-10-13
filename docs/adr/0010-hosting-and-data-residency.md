@@ -73,3 +73,10 @@ Research findings (`docs/research/2026-10-10/infra-stack.md`, `rbi-digital-lendi
 - Supabase's written answer on backup and log location.
 - Primary-text review of the 24-hour rule and its scope.
 - A partner lender requires a different setup (for example its own cloud account).
+
+## Amendment (13 October 2026, primary-text review)
+
+- Owner decision: production on AWS, but **any India-based server is acceptable to save cost**, provided data localisation is met; the paid Supabase plan is for network restrictions (inbound allow-list). A static **outbound** address for the API host is a separate requirement.
+- The "24-hour return" rule and the "48-hour log export" figure cited earlier are **not in the Outsourcing Directions 2025**; the text says "reasonable time". Treat them as our own targets, not RBI requirements.
+- **Gap found:** for cloud services the Directions require encryption keys and HSMs to be "under the control of the NBFC" (para 97(vii)(b)). A single key held by Udofin is likely a blocker for lenders. Per-lender keys (the planned AWS KMS envelope encryption, ADR-0009) with lender-controlled key policy must be designed in Phase 06 and confirmed with counsel.
+- Chapter IV (IT outsourcing and cloud) of the Outsourcing Directions applies to Middle-layer and above lenders; the master contract should assume the stricter set.

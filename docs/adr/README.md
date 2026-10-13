@@ -110,6 +110,7 @@ Events that should cause this decision to be reopened.
 | [0021](0021-design-tokens-and-tenant-branding-limits.md)             | Design tokens and limits on lender branding                  | Accepted (baseline, pending owner approval) | UI                |
 | [0022](0022-multi-lender-offer-comparison.md)                        | Multi-lender offer comparison                                | Proposed                                    | Conduct           |
 | [0023](0023-collections-and-dlg-separation.md)                       | Collections and DLG kept separate                            | Proposed                                    | Conduct / finance |
+| [0025](0025-two-person-change-control.md)                            | Two-person change control for administrative changes         | Accepted                                    | Tenancy, audit    |
 | [0024](0024-ecosystem-product-boundaries.md)                         | Boundaries between Udofin, Finbyx, LawDocsComply and Equator | Proposed                                    | Ecosystem         |
 
 ## Owner actions

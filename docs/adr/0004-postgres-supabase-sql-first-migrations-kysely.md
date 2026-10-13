@@ -74,3 +74,9 @@
 - Need for in-country disaster recovery that Supabase cannot provide in India (research: Supabase lists only ap-south-1 for India, likely).
 - Supabase Auth limits (plan features such as MFA hooks, SAML pricing) or a move of the database to AWS.
 - Kysely becomes unmaintained, or the type-generation path breaks.
+
+## Amendment (13 October 2026, Phase 02)
+
+- **Kysely is deferred.** Phase 02 has only a few fixed, parameterised queries, written as plain SQL through a thin typed handle (`UserTx`). Kysely and generated types arrive with the first module that has many queries (Phase 04); until then every query uses bound parameters and no request data is concatenated into SQL.
+- **No custom access-token hook.** Claims in the token would stay valid after a membership is suspended; permissions are read from the database on each request instead.
+- Migration logins and application logins are separate (`udofin_api`, `udofin_system`; see ADR-0005 and `docs/operations/supabase-setup.md`). Passwords are never in migrations.

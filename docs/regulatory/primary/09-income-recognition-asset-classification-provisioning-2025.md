@@ -24,12 +24,12 @@ Important framing: these Directions bind the **NBFC (the lender)**, not Udofin. 
 
 ### 1.2 Layer structure (what applies to which lender)
 
-| Chapter | Applies to | Content |
-| --- | --- | --- |
-| II (paras 15-41) | All NBFCs | Loan agreement content, day-end process, SMA/NPA dating, upgrade rules, provisioning mechanics, DLG provisioning (36A-36C), income recognition |
-| III (paras 42-49) | NBFC-BL (additional) | NPA = more than 180 days overdue, with a glide path to 90 days (para 44); sub-standard up to 18 months; standard-asset provision 0.25% |
-| IV (paras 50-55) | NBFC-ML (additional) | NPA = more than 90 days overdue; sub-standard up to 12 months; standard-asset provision 0.40% |
-| V (paras 56-60) | NBFC-UL | Para 56 applies Chapter IV paras 50-53 "mutatis mutandis"; standard-asset rates at para 58 |
+| Chapter           | Applies to           | Content                                                                                                                                        |
+| ----------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| II (paras 15-41)  | All NBFCs            | Loan agreement content, day-end process, SMA/NPA dating, upgrade rules, provisioning mechanics, DLG provisioning (36A-36C), income recognition |
+| III (paras 42-49) | NBFC-BL (additional) | NPA = more than 180 days overdue, with a glide path to 90 days (para 44); sub-standard up to 18 months; standard-asset provision 0.25%         |
+| IV (paras 50-55)  | NBFC-ML (additional) | NPA = more than 90 days overdue; sub-standard up to 12 months; standard-asset provision 0.40%                                                  |
+| V (paras 56-60)   | NBFC-UL              | Para 56 applies Chapter IV paras 50-53 "mutatis mutandis"; standard-asset rates at para 58                                                     |
 
 **Consequence:** each partner lender's layer must be a lender-level configuration (BL / ML / UL). See 8.1 for the BL anomaly.
 
@@ -75,24 +75,24 @@ Para 11(2) and para 18 make a missed due date overdue at that day's day-end. The
 
 ### 3.2 NPA definition by layer
 
-| Item | NBFC-BL (para 43) | NBFC-ML and UL (para 51; para 56) |
-| --- | --- | --- |
-| Interest overdue | more than 180 days (43(1)) | more than 90 days (51(1)) |
-| Term loan, instalment or unpaid interest overdue | more than 180 days (43(2)) | more than 90 days (51(2)) |
-| Demand or call loan | more than 180 days from demand/call, or interest overdue more than 180 days (43(3)) | 90 days (51(3)) |
-| Bill, other short-term advances, dues for sale of assets or services | more than 180 days (43(4)-(6)) | 90 days (51(4)-(6)) |
-| Lease rental, HP instalment | more than 180 days, each account classified "on the basis of its record of recovery" (43(7)) | 90 days, same proviso (51(7)) |
-| All other facilities of the same borrower | become NPA when any one becomes NPA (43(8)) | same (51(8)) |
+| Item                                                                 | NBFC-BL (para 43)                                                                            | NBFC-ML and UL (para 51; para 56) |
+| -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | --------------------------------- |
+| Interest overdue                                                     | more than 180 days (43(1))                                                                   | more than 90 days (51(1))         |
+| Term loan, instalment or unpaid interest overdue                     | more than 180 days (43(2))                                                                   | more than 90 days (51(2))         |
+| Demand or call loan                                                  | more than 180 days from demand/call, or interest overdue more than 180 days (43(3))          | 90 days (51(3))                   |
+| Bill, other short-term advances, dues for sale of assets or services | more than 180 days (43(4)-(6))                                                               | 90 days (51(4)-(6))               |
+| Lease rental, HP instalment                                          | more than 180 days, each account classified "on the basis of its record of recovery" (43(7)) | 90 days, same proviso (51(7))     |
+| All other facilities of the same borrower                            | become NPA when any one becomes NPA (43(8))                                                  | same (51(8))                      |
 
 Para 44 (BL): "The period of more than 180 days for NPA classification as in paragraph 43 stands changed to the overdue period of more than 90 days for applicable NBFCs with the following glide path": more than 150 days by 31 March 2024; more than 120 days by 31 March 2025; "> 90 days" by 31 March 2026. Explanation: the glide path does not apply to NBFCs "already required to follow the 90-day NPA norm". The date of this extract's use is after 31 March 2026, so the **90-day test is the operative default for every layer**. Para 43 still prints 180 days and para 44 amends it; keep both visible in the lender configuration and default to 90 (see 8.1).
 
 ### 3.3 Sub-standard and doubtful (age of NPA)
 
-| Item | BL | ML / UL |
-| --- | --- | --- |
-| Sub-standard | NPA for a period "not exceeding 18 months" (45(1)) | "not exceeding 12 months" (52(1)) |
-| Restructured sub-standard | "until the expiry of one year of satisfactory performance under the renegotiated or rescheduled or restructured terms" (45(2)) | same (52(2)) |
-| Doubtful | sub-standard "for a period exceeding 18 months" (46) | "exceeding twelve months" (53) |
+| Item                      | BL                                                                                                                             | ML / UL                           |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------- |
+| Sub-standard              | NPA for a period "not exceeding 18 months" (45(1))                                                                             | "not exceeding 12 months" (52(1)) |
+| Restructured sub-standard | "until the expiry of one year of satisfactory performance under the renegotiated or rescheduled or restructured terms" (45(2)) | same (52(2))                      |
+| Doubtful                  | sub-standard "for a period exceeding 18 months" (46)                                                                           | "exceeding twelve months" (53)    |
 
 Loss asset: para 11(1) above, and para 32(3) below. The text has **no fixed day-count for "loss"** other than identification by the NBFC, its auditors or RBI.
 
@@ -115,11 +115,11 @@ For loans sanctioned on or after 31 December 2021 (para 15): the loan agreement 
 
 ### 4.1 Standard assets (general provision)
 
-| Layer | Rate | Para |
-| --- | --- | --- |
-| NBFC-BL | 0.25% of the outstanding, "shall not be reckoned for arriving at net NPAs" | 48 |
-| NBFC-ML | 0.40% of the outstanding (same explanation); "applicable in respect of microfinance loans as well" | 55 |
-| NBFC-UL (funded amount outstanding, para 58) | Individual housing loans and loans to SMEs 0.25%; teaser-rate housing 2.00% falling to 0.40% after one year; CRE-RH 0.75%; CRE 1.00%; restructured advances as per the Resolution Directions; **"All other loans and advances not included above, including loans to Medium Enterprises" 0.40%** | 58 |
+| Layer                                        | Rate                                                                                                                                                                                                                                                                                             | Para |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---- |
+| NBFC-BL                                      | 0.25% of the outstanding, "shall not be reckoned for arriving at net NPAs"                                                                                                                                                                                                                       | 48   |
+| NBFC-ML                                      | 0.40% of the outstanding (same explanation); "applicable in respect of microfinance loans as well"                                                                                                                                                                                               | 55   |
+| NBFC-UL (funded amount outstanding, para 58) | Individual housing loans and loans to SMEs 0.25%; teaser-rate housing 2.00% falling to 0.40% after one year; CRE-RH 0.75%; CRE 1.00%; restructured advances as per the Resolution Directions; **"All other loans and advances not included above, including loans to Medium Enterprises" 0.40%** | 58   |
 
 **There is no separate or higher standard-asset rate for unsecured, retail, personal, consumer or digital loans** in any layer. A retail unsecured loan sits in "all other" (0.40% for ML and UL) or the BL 0.25%. Para 28: standard-asset provision is shown separately as "Contingent Provisions against Standard Assets".
 
@@ -203,31 +203,31 @@ Consequences (interpretation): (a) on classification as NPA the lender reverses 
 
 ### 8.2 Against `docs/architecture/collections-and-dlg.md` and `docs/regulatory/controls-matrix.md`
 
-| Statement in our docs | What this text says | Verdict |
-| --- | --- | --- |
-| Collections doc section 5: `due --> overdue: unpaid after grace` | Para 11(2), 18: overdue from the due date fixed by the NBFC, flagged at that day-end. No grace in the text. | **Contradiction risk.** Any grace period must be a collections-contact policy only; it must never delay `overdue_since`, DPD, or SMA/NPA dates. Rename the state or add a separate `regulatory_overdue_date`. |
-| DLG-04: "NBFCs using ECL may count DLG only if integral to the loan contract and must recompute ECL on each invocation" | Paras 36A, 36C match. The "integral" test comes from Ind AS, and the lender "may" consider DLG. | **Confirmed**, with the added point that the contract must embed the DLG (not a side letter). |
-| DLG-04: "NPA recognition and provisioning continue regardless" | Not in this text. 36A only concerns ECL provisioning. | **Not found here**; source it to the Credit Facilities Directions if it is there, else relabel "interpretation". |
-| DLG-04 source "RBI/2025-26/210 unverified" | The amendment reference in the text is "Reserve Bank of India (Non-Banking Financial Companies – Income Recognition, Asset Classification and Provisioning) Amendment Directions, 2026 dated February 13, 2026". No circular number is printed in the file. | **Correct the citation** to "IRACP Directions 2025, paras 36A-36C, inserted 13 Feb 2026". |
-| Collections doc: alerts at 90, 110 and 120 days past due for DLG | 90 days is the NPA line (ML/UL, and BL since 31 Mar 2026). 120 days is from Credit Facilities para 27(1). | **Consistent**, but the 90-day alert is also the NPA classification trigger; show both in the case view and lender report. |
-| Collections doc: DLG invocation leaves "reported status unchanged" | Para 36A-36C affect ECL provisioning only; classification (paras 19, 23-25) continues to depend on the borrower's arrears. | **Consistent.** Add a test that DLG invocation does not change DPD, SMA tag, NPA date or upgrade eligibility. |
-| Collections doc section 8 item 2 ("how DLG interacts with provisioning") | Answered in section 5 above. | Close this item, with the caveats in 5(4), 5(5) and 5(6). |
-| Controls matrix: no IRAC controls row | The text creates lender duties that rely on servicing data (paras 15, 18-19, 24-25, 38, 36C). | **Gap.** Add rows (proposed IDs IRC-01 to IRC-08, section 9) mapped to this instrument. |
+| Statement in our docs                                                                                                   | What this text says                                                                                                                                                                                                                                         | Verdict                                                                                                                                                                                                       |
+| ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Collections doc section 5: `due --> overdue: unpaid after grace`                                                        | Para 11(2), 18: overdue from the due date fixed by the NBFC, flagged at that day-end. No grace in the text.                                                                                                                                                 | **Contradiction risk.** Any grace period must be a collections-contact policy only; it must never delay `overdue_since`, DPD, or SMA/NPA dates. Rename the state or add a separate `regulatory_overdue_date`. |
+| DLG-04: "NBFCs using ECL may count DLG only if integral to the loan contract and must recompute ECL on each invocation" | Paras 36A, 36C match. The "integral" test comes from Ind AS, and the lender "may" consider DLG.                                                                                                                                                             | **Confirmed**, with the added point that the contract must embed the DLG (not a side letter).                                                                                                                 |
+| DLG-04: "NPA recognition and provisioning continue regardless"                                                          | Not in this text. 36A only concerns ECL provisioning.                                                                                                                                                                                                       | **Not found here**; source it to the Credit Facilities Directions if it is there, else relabel "interpretation".                                                                                              |
+| DLG-04 source "RBI/2025-26/210 unverified"                                                                              | The amendment reference in the text is "Reserve Bank of India (Non-Banking Financial Companies – Income Recognition, Asset Classification and Provisioning) Amendment Directions, 2026 dated February 13, 2026". No circular number is printed in the file. | **Correct the citation** to "IRACP Directions 2025, paras 36A-36C, inserted 13 Feb 2026".                                                                                                                     |
+| Collections doc: alerts at 90, 110 and 120 days past due for DLG                                                        | 90 days is the NPA line (ML/UL, and BL since 31 Mar 2026). 120 days is from Credit Facilities para 27(1).                                                                                                                                                   | **Consistent**, but the 90-day alert is also the NPA classification trigger; show both in the case view and lender report.                                                                                    |
+| Collections doc: DLG invocation leaves "reported status unchanged"                                                      | Para 36A-36C affect ECL provisioning only; classification (paras 19, 23-25) continues to depend on the borrower's arrears.                                                                                                                                  | **Consistent.** Add a test that DLG invocation does not change DPD, SMA tag, NPA date or upgrade eligibility.                                                                                                 |
+| Collections doc section 8 item 2 ("how DLG interacts with provisioning")                                                | Answered in section 5 above.                                                                                                                                                                                                                                | Close this item, with the caveats in 5(4), 5(5) and 5(6).                                                                                                                                                     |
+| Controls matrix: no IRAC controls row                                                                                   | The text creates lender duties that rely on servicing data (paras 15, 18-19, 24-25, 38, 36C).                                                                                                                                                               | **Gap.** Add rows (proposed IDs IRC-01 to IRC-08, section 9) mapped to this instrument.                                                                                                                       |
 
 ---
 
 ## 9. Proposed control rows for `controls-matrix.md` (our reading; status "interpretation" unless noted)
 
-| Proposed ID | Requirement for the lender, supported by Udofin data | Source para | Status |
-| --- | --- | --- | --- |
-| IRC-01 | Flag an account overdue at the day-end of the due date and keep the **overdue date** as that calendar date. | 11(2), 18, 19 | confirmed |
-| IRC-02 | Compute SMA-1, SMA-2 and NPA as of the day-end of the 30th, 60th and 90th calendar day after the due date (Illustration I); store each classification date. | 19, Illustration I, 51 | confirmed (dating); band labels unverified |
-| IRC-03 | Classify borrower-wise: if any facility of a borrower with a lender is NPA, all that lender's facilities of the borrower are NPA. | 23, 51(8) | confirmed |
-| IRC-04 | Upgrade from NPA only when **all** arrears of principal and interest on **all** facilities are paid. | 24, 25 | confirmed |
-| IRC-05 | Loan agreement states due dates, frequency, principal/interest split, SMA/NPA examples; borrower informed at sanction and at each change. | 15, 16 | confirmed |
-| IRC-06 | Reverse unrealised accrued income on NPA classification; recognise further income on cash realisation only. | 38 | confirmed |
-| IRC-07 | For DLG-covered loans, DLG is integral to the loan contract (for ECL relief) and the lender recomputes ECL after every invocation. | 36A, 36C | confirmed |
-| IRC-08 | Maintain prudential-floor classification and provisions in parallel to Ind AS impairment. | 34-36 | confirmed |
+| Proposed ID | Requirement for the lender, supported by Udofin data                                                                                                        | Source para            | Status                                     |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- | ------------------------------------------ |
+| IRC-01      | Flag an account overdue at the day-end of the due date and keep the **overdue date** as that calendar date.                                                 | 11(2), 18, 19          | confirmed                                  |
+| IRC-02      | Compute SMA-1, SMA-2 and NPA as of the day-end of the 30th, 60th and 90th calendar day after the due date (Illustration I); store each classification date. | 19, Illustration I, 51 | confirmed (dating); band labels unverified |
+| IRC-03      | Classify borrower-wise: if any facility of a borrower with a lender is NPA, all that lender's facilities of the borrower are NPA.                           | 23, 51(8)              | confirmed                                  |
+| IRC-04      | Upgrade from NPA only when **all** arrears of principal and interest on **all** facilities are paid.                                                        | 24, 25                 | confirmed                                  |
+| IRC-05      | Loan agreement states due dates, frequency, principal/interest split, SMA/NPA examples; borrower informed at sanction and at each change.                   | 15, 16                 | confirmed                                  |
+| IRC-06      | Reverse unrealised accrued income on NPA classification; recognise further income on cash realisation only.                                                 | 38                     | confirmed                                  |
+| IRC-07      | For DLG-covered loans, DLG is integral to the loan contract (for ECL relief) and the lender recomputes ECL after every invocation.                          | 36A, 36C               | confirmed                                  |
+| IRC-08      | Maintain prudential-floor classification and provisions in parallel to Ind AS impairment.                                                                   | 34-36                  | confirmed                                  |
 
 ---
 
