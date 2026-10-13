@@ -34,3 +34,4 @@
 - [`api/idempotency-and-outbox.md`](api/idempotency-and-outbox.md) and [`api/openapi.json`](api/openapi.json): idempotency, outbox and the generated API description.
 - [`operations/local-development.md`](operations/local-development.md): commands to run and test everything locally.
 - [`specs/03-application-foundation.md`](specs/03-application-foundation.md): what was built, limits and the verification list.
+- [`specs/04-lender-onboarding-configuration.md`](specs/04-lender-onboarding-configuration.md): Phase 04 specification (draft, awaiting approval).

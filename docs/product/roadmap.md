@@ -294,6 +294,8 @@ secret scanning green; staff MFA enforced in both portals.
 
 ### Phase 04 — Lender onboarding and configuration
 
+> **Spec drafted 13 Oct 2026:** [`../specs/04-lender-onboarding-configuration.md`](../specs/04-lender-onboarding-configuration.md) — awaiting owner approval. It widens this section to multiple lender types (NBFC now, banks gated), Ind AS handling and the lender transactions panel.
+
 **Objective.** Let Udofin onboard each partner lender with everything needed to show its offers
 lawfully: who the lender is, how it is regulated, whom borrowers complain to, what it lends, on what
 terms, with what consent wording, and through which provider accounts held in its own name.
