@@ -52,6 +52,24 @@ jobs:
           version: 2.120.0
       - run: supabase db start
       - run: supabase test db
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: API integration tests against the real migrated database
+        env:
+          # Throwaway local CI database only; these are not secrets.
+          PGPASSWORD: postgres
+          INTEGRATION_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+          INTEGRATION_API_URL: postgresql://udofin_api:ci-api-only@127.0.0.1:54322/postgres
+          INTEGRATION_SYSTEM_URL: postgresql://udofin_system:ci-system-only@127.0.0.1:54322/postgres
+        run: |
+          psql -h 127.0.0.1 -p 54322 -U postgres -d postgres -v ON_ERROR_STOP=1 \
+            -c "alter role udofin_api password 'ci-api-only'" \
+            -c "alter role udofin_system password 'ci-system-only'"
+          pnpm --filter @udofin/api test
 
   secrets:
     name: Secret scan (gitleaks)

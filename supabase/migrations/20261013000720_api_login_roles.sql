@@ -21,8 +21,17 @@ end
 $$;
 
 -- SET only: the login cannot use the privileges of the role without switching to it explicitly.
-grant authenticated to udofin_api with inherit false, set true;
-grant service_role to udofin_system with inherit false, set true;
+-- On a managed Supabase project the migration role may not be allowed to grant the platform roles. The
+-- migration then warns instead of failing, and the owner runs the two GRANT statements once as the
+-- project owner (docs/operations/supabase-setup.md, step 3). Tests prove the result either way.
+do $$
+begin
+  grant authenticated to udofin_api with inherit false, set true;
+  grant service_role to udofin_system with inherit false, set true;
+exception when insufficient_privilege then
+  raise warning 'could not grant platform roles to the application logins; run docs/operations/supabase-setup.md step 3 as the project owner';
+end
+$$;
 
 alter role udofin_api set statement_timeout = '30s';
 alter role udofin_api set idle_in_transaction_session_timeout = '30s';
