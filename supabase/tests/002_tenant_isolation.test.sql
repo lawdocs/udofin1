@@ -7,7 +7,7 @@ select plan(34);
 -- Shared fixture (identical in 002 and 003; keep in sync). Synthetic data only.
 --   Orgs:  platform P, lender A (Alpha), lender B (Beta)
 --   Users: borrowers b1, b2; A officer, A approver, A admin (drafter), A viewer;
---          B officer; platform ops agent; staff user with no role
+--          B officer, B approver, B admin (drafter); platform ops agent; staff user with no role
 -- ---------------------------------------------------------------------------------------------
 create function pg_temp.as_user(uid uuid) returns void language plpgsql as $fn$
 begin
@@ -41,6 +41,8 @@ insert into auth.users (id, phone, raw_app_meta_data) values
   ('aaaaaaaa-0000-4000-8000-000000000003', null, '{"actor_type":"staff"}'),
   ('aaaaaaaa-0000-4000-8000-000000000004', null, '{"actor_type":"staff"}'),
   ('bbbbbbbb-0000-4000-8000-000000000001', null, '{"actor_type":"staff"}'),
+  ('bbbbbbbb-0000-4000-8000-000000000002', null, '{"actor_type":"staff"}'),
+  ('bbbbbbbb-0000-4000-8000-000000000003', null, '{"actor_type":"staff"}'),
   ('0e0e0e0e-0000-4000-8000-000000000001', null, '{"actor_type":"staff"}'),
   ('0f0f0f0f-0000-4000-8000-000000000001', null, '{"actor_type":"staff"}');
 
@@ -57,6 +59,8 @@ insert into tenancy.memberships (id, org_id, user_id, status) values
   ('a1a10000-0000-4000-8000-000000000003', 'a1000000-0000-4000-8000-000000000000', 'aaaaaaaa-0000-4000-8000-000000000003', 'active'),
   ('a1a10000-0000-4000-8000-000000000004', 'a1000000-0000-4000-8000-000000000000', 'aaaaaaaa-0000-4000-8000-000000000004', 'active'),
   ('b1b10000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000000', 'bbbbbbbb-0000-4000-8000-000000000001', 'active'),
+  ('b1b10000-0000-4000-8000-000000000002', 'b1000000-0000-4000-8000-000000000000', 'bbbbbbbb-0000-4000-8000-000000000002', 'active'),
+  ('b1b10000-0000-4000-8000-000000000003', 'b1000000-0000-4000-8000-000000000000', 'bbbbbbbb-0000-4000-8000-000000000003', 'active'),
   ('a0a00000-0000-4000-8000-000000000001', 'a0000000-0000-4000-8000-000000000000', '0e0e0e0e-0000-4000-8000-000000000001', 'active'),
   ('a0a00000-0000-4000-8000-000000000002', 'a0000000-0000-4000-8000-000000000000', '0f0f0f0f-0000-4000-8000-000000000001', 'active');
 
@@ -68,6 +72,8 @@ from (values
   ('a1a10000-0000-4000-8000-000000000003'::uuid, 'lender', 'lender_admin'),
   ('a1a10000-0000-4000-8000-000000000004'::uuid, 'lender', 'viewer'),
   ('b1b10000-0000-4000-8000-000000000001'::uuid, 'lender', 'credit_officer'),
+  ('b1b10000-0000-4000-8000-000000000002'::uuid, 'lender', 'product_approver'),
+  ('b1b10000-0000-4000-8000-000000000003'::uuid, 'lender', 'lender_admin'),
   ('a0a00000-0000-4000-8000-000000000001'::uuid, 'platform', 'operations_agent')
 ) as g (m, k, r);
 
@@ -80,7 +86,7 @@ insert into lending.loan_product_versions (id, product_id, lender_org_id, versio
   ('a1910000-0000-4000-8000-000000000001', 'a1900000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000000', 1, 'approved',
    1000000, 50000000, 180, 1825, 'fixed', 1400, 2400, 'aaaaaaaa-0000-4000-8000-000000000003', 'aaaaaaaa-0000-4000-8000-000000000002', now(), now()),
   ('b1910000-0000-4000-8000-000000000001', 'b1900000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000000', 1, 'approved',
-   1000000, 50000000, 180, 1825, 'fixed', 1500, 2600, 'bbbbbbbb-0000-4000-8000-000000000001', 'aaaaaaaa-0000-4000-8000-000000000002', now(), now());
+   1000000, 50000000, 180, 1825, 'fixed', 1500, 2600, 'bbbbbbbb-0000-4000-8000-000000000003', 'bbbbbbbb-0000-4000-8000-000000000002', now(), now());
 
 insert into lending.loan_requests (id, borrower_id, category_key, requested_amount_minor, requested_tenure_days, purpose_code, status) values
   ('70000000-0000-4000-8000-000000000001', (select id from identity.borrowers where user_id = '11111111-1111-4111-8111-111111111111'), 'personal', 20000000, 720, 'home_renovation', 'submitted'),
@@ -125,9 +131,9 @@ insert into payments.payment_intents (id, lender_org_id, loan_account_id, borrow
   ('b6000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000000', 'b4000000-0000-4000-8000-000000000001',
    (select id from identity.borrowers where user_id = '22222222-2222-4222-8222-222222222222'), 'installment', 960000, 'beta-collections', 'mock_gateway', 'idem-b-0000000000001');
 
-insert into consent.notices (id, purpose, version, language, title, body_markdown, status, published_at, approved_by) values
+insert into consent.notices (id, purpose, version, language, title, body_markdown, status, published_at, drafted_by, approved_by) values
   ('c0000000-0000-4000-8000-000000000001', 'share_with_lenders', 1, 'en', 'Share my request with lenders', 'Test notice body.', 'published', now(),
-   '0e0e0e0e-0000-4000-8000-000000000001');
+   '0f0f0f0f-0000-4000-8000-000000000001', '0e0e0e0e-0000-4000-8000-000000000001');
 insert into consent.records (borrower_id, notice_id, lender_org_id, decision, channel) values
   ((select id from identity.borrowers where user_id = '11111111-1111-4111-8111-111111111111'), 'c0000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000000', 'granted', 'mobile_app'),
   ((select id from identity.borrowers where user_id = '22222222-2222-4222-8222-222222222222'), 'c0000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000000', 'granted', 'mobile_app');
@@ -202,7 +208,7 @@ select throws_ok(
     values ('b1000000-0000-4000-8000-000000000000', 'b4000000-0000-4000-8000-000000000001',
       (select id from identity.borrowers b where b.user_id = '11111111-1111-4111-8111-111111111111'), 'installment', 100, 'x', 'mock_gateway',
       'idem-attack-000000001', '11111111-1111-4111-8111-111111111111')$$,
-  '23514', null, 'borrower 1 cannot create a payment against borrower 2''s loan');
+  '42501', null, 'borrowers cannot create payment instructions at all (the system resolves the lender''s account)');
 select throws_ok(
   $$update lending.applications set lender_reference = 'forged' where id = 'a2000000-0000-4000-8000-000000000001'$$,
   '42501', null, 'borrower cannot rewrite the lender reference on own application');
