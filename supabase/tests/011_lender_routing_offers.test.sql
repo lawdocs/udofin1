@@ -2,7 +2,7 @@
 -- Synthetic data only. Lenders are made genuinely "live" through the same facts private.lender_is_live reads.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(152);
+select plan(157);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -195,6 +195,9 @@ select is((select count(*) from lending.lender_selection_items where selection_i
 select is((select count(*) from lending.applications where loan_request_id = '70000000-0000-4000-8000-000000000001'), 0::bigint, 'selecting creates no application');
 
 -- 3. Per-lender consent ------------------------------------------------------------------------------------------
+select is(jsonb_array_length(lending.selection_view('70000000-0000-4000-8000-000000000001', 'en') -> 'items'), 3, 'the selection screen lists the three chosen lenders');
+select is((select i -> 'notice' ->> 'reviewStatus' from jsonb_array_elements(lending.selection_view('70000000-0000-4000-8000-000000000001', 'en') -> 'items') i where i ->> 'lenderName' = 'Beta Capital'), 'requires_review', 'unapproved lender wording is shown as such');
+select is((select i -> 'notice' ->> 'languageFallback' from jsonb_array_elements(lending.selection_view('70000000-0000-4000-8000-000000000001', 'hi') -> 'items') i where i ->> 'lenderName' = 'Alpha Finance'), 'true', 'a language without published wording falls back to English and says so');
 select is(pg_temp.err($$select lending.route_selection(pg_temp.get('sel1')::uuid)$$), '55000|consent_required', 'routing is refused without consent');
 select is(pg_temp.err($$select consent.record_lender_decision('70000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000000', 'f1000000-0000-4000-8000-00000000000b', 'granted', '1.0.0', 'consent')$$), 'P0002|', 'another lender''s wording cannot authorise sharing with this lender');
 select is(pg_temp.err($$select consent.record_lender_decision('70000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000000', 'f1000000-0000-4000-8000-00000000000b', 'granted', '1.0.0', 'consent')$$), '55000|wording_not_approved', 'unapproved lender wording cannot be the basis of consent');
@@ -449,6 +452,15 @@ values ('f3000000-0000-4000-8000-00000000000b', 'share_with_lender', 3, 'en', 'b
         'aaaaaaaa-0000-4000-8000-000000000001', 'bbbbbbbb-0000-4000-8000-000000000001', 'approved');
 select pg_temp.as_system();
 select is(lending.begin_transmission((pg_temp.get('routed4')::jsonb -> 0 ->> 'applicationId')::uuid) ->> 'skip', 'stopped_consent', 'consent given on superseded wording does not authorise a new transmission');
+
+-- A worker that died after beginning to send: after five minutes the outcome counts as unknown, never as "not sent".
+select pg_temp.as_owner();
+alter table lending.application_routing disable trigger application_routing_updated;
+update lending.application_routing set transmission_status = 'transmitting', updated_at = now() - interval '6 minutes' where application_id = pg_temp.get('appB1')::uuid;
+alter table lending.application_routing enable trigger application_routing_updated;
+select pg_temp.as_system();
+select is(lending.begin_transmission(pg_temp.get('appB1')::uuid) ->> 'skip', 'uncertain', 'an interrupted send is treated as uncertain, not as unsent');
+select is((select last_error_class from lending.application_routing where application_id = pg_temp.get('appB1')::uuid), 'worker_interrupted', 'and the reason is kept');
 
 -- Consent withdrawn after the data was sent: recorded, not pretended undone; the lender can no longer read the contact detail.
 select pg_temp.as_user('aaaaaaaa-0000-4000-8000-000000000001');

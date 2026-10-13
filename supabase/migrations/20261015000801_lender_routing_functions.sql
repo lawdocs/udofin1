@@ -520,10 +520,17 @@ declare
   v_req lending.loan_requests;
   v_b identity.borrowers;
   v_phone text;
+  v_kind text;
 begin
   if private.invoking_role() <> 'service_role' then raise exception 'system only' using errcode = '42501'; end if;
   select * into v_r from lending.application_routing where application_id = p_app for update;
   if not found then raise exception 'not found' using errcode = 'P0002'; end if;
+  -- A worker that died after starting to send leaves 'transmitting' behind. After five minutes that means the outcome is unknown.
+  if v_r.transmission_status = 'transmitting' and v_r.updated_at < now() - interval '5 minutes' then
+    update lending.application_routing set transmission_status = 'uncertain', last_error_class = 'worker_interrupted' where application_id = p_app;
+    perform private.routing_event(p_app, v_r.lender_org_id, 'uncertain', '{"class":"worker_interrupted"}'::jsonb);
+    return jsonb_build_object('skip', 'uncertain');
+  end if;
   if v_r.transmission_status <> 'queued' then
     return jsonb_build_object('skip', v_r.transmission_status);
   end if;
@@ -541,12 +548,18 @@ begin
     perform private.routing_event(p_app, v_r.lender_org_id, 'stopped_consent', '{"at":"send"}'::jsonb);
     return jsonb_build_object('skip', 'stopped_consent');
   end if;
+  select c.kind into v_kind from lending.lender_connectors c where c.lender_org_id = v_r.lender_org_id and c.status = 'active';
+  if v_kind is null or v_kind = 'manual' then
+    update lending.application_routing set transmission_status = 'failed', last_error_class = 'connector_inactive' where application_id = p_app;
+    perform private.routing_event(p_app, v_r.lender_org_id, 'failed', '{"class":"connector_inactive"}'::jsonb);
+    return jsonb_build_object('skip', 'failed');
+  end if;
   select u.phone into v_phone from auth.users u where u.id = v_b.user_id;
   update lending.application_routing set transmission_status = 'transmitting', attempts = attempts + 1, last_error_class = null where application_id = p_app;
   perform private.routing_event(p_app, v_r.lender_org_id, 'sending', jsonb_build_object('attempt', v_r.attempts + 1));
   -- The approved fixed payload (scope minimum_payload_v1): nothing else is read from the borrower's records.
   return jsonb_build_object(
-    'applicationId', p_app, 'lenderId', v_r.lender_org_id, 'correlationRef', v_r.correlation_ref, 'attempt', v_r.attempts + 1,
+    'applicationId', p_app, 'lenderId', v_r.lender_org_id, 'connectorKind', v_kind, 'correlationRef', v_r.correlation_ref, 'attempt', v_r.attempts + 1,
     'scope', lending.payload_scope(),
     'payload', jsonb_build_object(
       'udofinReference', v_req.submission_reference,

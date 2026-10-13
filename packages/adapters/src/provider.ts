@@ -32,7 +32,9 @@ export type ProviderCapability =
   | 'dispute_resolution'
   | 'compliance_feed'
   | 'ai_inference'
-  | 'device_integrity';
+  | 'device_integrity'
+  | 'lender_connector'
+  | 'key_management';
 
 export interface ProviderDescriptor {
   /** Stable key, e.g. `surepass`, `razorpay`, `finbyx`, `mock_kyc`. */
