@@ -1,0 +1,12 @@
+# gitleaks configuration. Extends the default rules; the single allowance below is for synthetic
+# placeholder keys that tests feed to the "refuse privileged or malformed keys" checks. They are
+# fixed fake strings (not credentials for anything) and must keep this exact value; any other
+# secret-shaped string still fails the scan.
+title = "Udofin gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic Supabase key placeholders used in tests"
+regexes = ['''sb_(publishable|secret)_0123456789abcdef''']
