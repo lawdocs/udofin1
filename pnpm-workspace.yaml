@@ -2,6 +2,7 @@ packages:
   - apps/*
   - services/*
   - packages/*
+  - tests/*
 
 # pnpm 10 blocks dependency lifecycle scripts by default; allow only what is needed.
 onlyBuiltDependencies:

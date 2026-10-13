@@ -275,7 +275,14 @@ export function createAuthHandlers(options: BffOptions) {
         };
       } catch (error) {
         if (error instanceof AuthFailure && error.code === 'invalid_session') {
-          return { setCookies: clearCookies() };
+          // Forget the dead session for this request too, so the page renders the signed-out state.
+          const header = parseCookieHeader(request.headers.get('cookie'));
+          header.delete(names.access);
+          header.delete(names.refresh);
+          return {
+            setCookies: clearCookies(),
+            cookieHeader: [...header].map(([k, v]) => `${k}=${v}`).join('; '),
+          };
         }
         return { setCookies: [] }; // temporary trouble: keep cookies, the page shows its error state
       }

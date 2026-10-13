@@ -9,7 +9,13 @@ export const CHANGE_REQUEST_TYPES = [
   'role.revoke',
   'consent_notice.publish',
 ] as const;
-export const CHANGE_REQUEST_STATUSES = ['pending', 'approved', 'rejected', 'applied', 'expired'] as const;
+export const CHANGE_REQUEST_STATUSES = [
+  'pending',
+  'approved',
+  'rejected',
+  'applied',
+  'expired',
+] as const;
 
 export const ChangeRequest = z.object({
   id: z.uuid(),

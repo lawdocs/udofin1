@@ -407,6 +407,7 @@ describe('refreshIfNeeded', () => {
     });
     const a = await rejected.h.refreshIfNeeded(req(accessToken({ exp: NOW - 5 })));
     expect(a.setCookies.every((c) => c.includes('Max-Age=0'))).toBe(true);
+    expect(a.cookieHeader).toBe('other=1');
     const flaky = handlers({
       gotrue: gotrueFake({ refresh: () => Promise.reject(new AuthFailure('unavailable')) }),
     });

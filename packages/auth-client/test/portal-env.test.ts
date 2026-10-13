@@ -42,6 +42,19 @@ describe('portal configuration', () => {
       /https/,
     );
     expect(attempt({ NODE_ENV: 'production', COOKIE_SECURE: 'false' })).toThrow(/COOKIE_SECURE/);
+    // Loopback addresses never leave the machine, so plain http is tolerated there (browser tests).
+    expect(
+      attempt({
+        NODE_ENV: 'production',
+        PORTAL_ORIGIN: 'http://127.0.0.1:3001',
+        API_BASE_URL: 'http://127.0.0.1:8080',
+        SUPABASE_URL: 'http://127.0.0.1:54321',
+        COOKIE_SECURE: 'false',
+      }),
+    ).not.toThrow();
+    expect(attempt({ NODE_ENV: 'production', PORTAL_ORIGIN: 'http://ops.udofin.example' })).toThrow(
+      /https/,
+    );
     expect(
       attempt({
         NODE_ENV: 'development',

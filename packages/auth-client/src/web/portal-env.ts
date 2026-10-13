@@ -24,15 +24,19 @@ const PortalEnvSchema = z
   })
   .superRefine((env, ctx) => {
     const production = env.NODE_ENV === 'production';
+    // Plain http is tolerated only for loopback addresses (local development and browser tests):
+    // traffic to those never leaves the machine.
+    const loopback = (value: string) =>
+      ['localhost', '127.0.0.1', '[::1]'].includes(new URL(value).hostname);
     for (const key of ['SUPABASE_URL', 'API_BASE_URL', 'PORTAL_ORIGIN'] as const) {
-      if (production && !env[key].startsWith('https://')) {
+      if (production && !env[key].startsWith('https://') && !loopback(env[key])) {
         ctx.addIssue({ code: 'custom', path: [key], message: 'must be https in production' });
       }
     }
     if (new URL(env.PORTAL_ORIGIN).pathname !== '/') {
       ctx.addIssue({ code: 'custom', path: ['PORTAL_ORIGIN'], message: 'must not include a path' });
     }
-    if (production && env.COOKIE_SECURE === false) {
+    if (production && env.COOKIE_SECURE === false && !loopback(env.PORTAL_ORIGIN)) {
       ctx.addIssue({
         code: 'custom',
         path: ['COOKIE_SECURE'],
