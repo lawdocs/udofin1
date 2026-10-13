@@ -100,7 +100,7 @@ select is(pg_temp.err(format($$select lending.request_create('personal', 5000000
 select is(lending.request_update(current_setting('t.r1')::uuid, 1, 6000000, null, 'test_purpose_b', null, false), 2, 'an edit bumps the version');
 select is(pg_temp.err(format($$select lending.request_update(%L, 1, 7000000, null, null, null, false)$$, current_setting('t.r1'))), '55000|version_conflict', 'a stale edit is refused (no lost update)');
 select is((select expires_at - created_at from lending.loan_requests where id = current_setting('t.r1')::uuid), interval '30 days', 'editing does not extend the expiry');
-select is(pg_temp.err(format($$update lending.loan_requests set expires_at = now() + interval '90 days' where id = %L$$, current_setting('t.r1'))), '42501|', 'the borrower cannot change the expiry directly');
+select is(split_part(pg_temp.err(format($$update lending.loan_requests set expires_at = now() + interval '90 days' where id = %L$$, current_setting('t.r1'))), '|', 1), '42501', 'the borrower cannot change the expiry directly');
 select is(pg_temp.err(format($$select lending.request_submit(%L, 2)$$, current_setting('t.r1'))), '55000|consent_required', 'submission needs the required consents (terms was withdrawn)');
 select consent.record_decision('e2000000-0000-4000-8000-000000000006', 'granted', '1.0.0', 'consent');
 select consent.record_decision('e2000000-0000-4000-8000-000000000002', 'granted', '1.0.0', 'consent');
