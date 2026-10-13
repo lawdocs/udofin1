@@ -164,3 +164,77 @@ form.inline {
   display: flex;
   gap: var(--space-xs);
 }
+
+/* Onboarding screens (shared with the lender portal). */
+.field {
+  display: grid;
+  gap: var(--space-xs);
+  margin-bottom: var(--space-sm);
+}
+.field input,
+.field select,
+.field textarea,
+select,
+textarea {
+  font: inherit;
+  padding: var(--space-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-background);
+  color: var(--color-text);
+}
+.facts {
+  display: grid;
+  gap: var(--space-xs);
+  margin: 0 0 var(--space-md);
+}
+.facts > div {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1fr) 2fr;
+  gap: var(--space-md);
+}
+.facts dt {
+  font-weight: 600;
+}
+.facts dd {
+  margin: 0;
+  white-space: pre-wrap;
+}
+.stages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  list-style: none;
+  padding: 0;
+}
+.stages li {
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+.stages li.done::before {
+  content: '✓ ';
+}
+.stages li.current {
+  font-weight: 700;
+  border-color: var(--color-primary);
+}
+.tabs ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+  list-style: none;
+  padding: 0;
+}
+.tabs a[aria-current='page'] {
+  font-weight: 700;
+  border-bottom: 2px solid var(--color-primary);
+  text-decoration: none;
+}
+fieldset {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+details {
+  margin-top: var(--space-sm);
+}

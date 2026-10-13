@@ -18,6 +18,8 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   output: 'standalone',
+  // Evidence documents are uploaded through a server action (8 MiB file plus form fields).
+  experimental: { serverActions: { bodySizeLimit: '9mb' } },
   outputFileTracingRoot: path.join(import.meta.dirname, '../..'),
   headers() {
     return Promise.resolve([{ source: '/:path*', headers: securityHeaders }]);

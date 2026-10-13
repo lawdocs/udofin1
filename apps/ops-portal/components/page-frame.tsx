@@ -13,6 +13,9 @@ function navFor(me: MeResponse, current: string): NavItem[] {
   ) {
     items.push({ href: '/change-requests', label: 'Change requests' });
   }
+  if (permissions.has('onboarding.read')) {
+    items.push({ href: '/onboarding', label: 'Lender onboarding' });
+  }
   return items.map((item) => ({ ...item, current: item.href === current }));
 }
 

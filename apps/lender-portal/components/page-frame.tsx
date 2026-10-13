@@ -6,8 +6,9 @@ import { SignOut } from './sign-out-client';
 /** Navigation reflects what the API says the user may do; every page and call is authorised again server-side. */
 function navFor(me: MeResponse, current: string): NavItem[] {
   // Lender features add items here, driven by me.memberships[].permissions (applications, products, ...).
-  void me;
+  const permissions = new Set(me.memberships.flatMap((m) => m.permissions));
   const items: NavItem[] = [{ href: '/', label: 'Home' }];
+  if (permissions.has('onboarding.read')) items.push({ href: '/onboarding', label: 'Onboarding' });
   return items.map((item) => ({ ...item, current: item.href === current }));
 }
 
