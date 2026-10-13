@@ -317,6 +317,65 @@ describe('second factor', () => {
 });
 
 describe('sign-out and session', () => {
+  it('revokes with a fresh token when the cookie token has expired', async () => {
+    let revokedWith = '';
+    const fresh = sessionOf({ accessToken: accessToken({ exp: NOW + 900 }) });
+    const { h } = handlers({
+      gotrue: gotrueFake({
+        refresh: () => Promise.resolve(fresh),
+        signOut: (token) => ((revokedWith = token), Promise.resolve()),
+      }),
+    });
+    const expired = accessToken({ exp: NOW - 100 });
+    const res = await h.signOut(
+      post(
+        '/auth/sign-out',
+        {},
+        { cookie: `__Host-udofin_at=${expired}; __Host-udofin_rt=refresh-token-1` },
+      ),
+    );
+    expect(res.status).toBe(200);
+    expect(revokedWith).toBe(fresh.accessToken);
+    expect(cookiesOf(res).every((c) => c.includes('Max-Age=0'))).toBe(true);
+  });
+
+  it('still clears cookies when the session cannot be refreshed for revocation', async () => {
+    const { h } = handlers({
+      gotrue: gotrueFake({ refresh: () => Promise.reject(new AuthFailure('invalid_session')) }),
+    });
+    const res = await h.signOut(
+      post(
+        '/auth/sign-out',
+        {},
+        { cookie: `__Host-udofin_at=${accessToken({ exp: NOW - 100 })}; __Host-udofin_rt=r` },
+      ),
+    );
+    expect(res.status).toBe(200);
+    expect(cookiesOf(res)).toHaveLength(2);
+  });
+
+  it('gives every TOTP enrolment a unique name so a second attempt cannot collide', async () => {
+    const names: string[] = [];
+    const g = gotrueFake({
+      enrolTotp: (_t, name) => (
+        names.push(name),
+        Promise.resolve({
+          factorId: 'f1',
+          qrCode: 'data:image/svg+xml;base64,AAA',
+          secret: 'S',
+          uri: 'u',
+        })
+      ),
+    });
+    const { h } = handlers({ gotrue: g });
+    const c = {
+      cookie: `__Host-udofin_at=${accessToken({ aal: 'aal1', exp: NOW + 900 })}; __Host-udofin_rt=r`,
+    };
+    await h.enrolMfa(post('/auth/mfa/enrol', {}, c));
+    await h.enrolMfa(post('/auth/mfa/enrol', {}, { ...c, 'x-test-ip': '198.51.100.9' }));
+    expect(new Set(names).size).toBe(2);
+  });
+
   it('clears both cookies even if the auth server fails', async () => {
     const { h } = handlers({
       gotrue: gotrueFake({ signOut: () => Promise.reject(new AuthFailure('unavailable')) }),

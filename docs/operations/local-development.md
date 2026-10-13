@@ -19,7 +19,7 @@ APP_ENV=production pnpm --filter @udofin/mobile config:check       # mobile perm
 ## Database tests (migrations + pgTAP)
 
 ```bash
-PGHOST=/tmp PGPORT=5432 PGUSER=postgres bash scripts/db-test-local.sh   # throwaway database; 236 assertions
+PGHOST=/tmp PGPORT=5432 PGUSER=postgres bash scripts/db-test-local.sh   # throwaway database; 239 assertions
 # or, on the Supabase stack (CI does this):  supabase db start && supabase test db
 ```
 
@@ -31,7 +31,7 @@ Needs a migrated, **disposable** database and the two application logins (they h
 export INTEGRATION_ADMIN_URL=postgresql://postgres@localhost:5432/udofin_test
 export INTEGRATION_API_URL=postgresql://udofin_api@localhost:5432/udofin_test
 export INTEGRATION_SYSTEM_URL=postgresql://udofin_system@localhost:5432/udofin_test
-pnpm --filter @udofin/api test          # without these variables the 26 integration tests are skipped
+pnpm --filter @udofin/api test          # without these variables the 27 integration tests are skipped
 ```
 
 ## Browser tests (portals, fake Supabase Auth and API)

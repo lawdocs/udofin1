@@ -243,6 +243,25 @@ describe.skipIf(!enabled)('API against a real database', () => {
       expect(items.every((i) => i.targetOrganizationId === ids.lenderB)).toBe(true);
     });
 
+    it('a cursor with an impossible date is a client error, not a server error', async () => {
+      const cursor = Buffer.from(
+        JSON.stringify({ t: '9999-99-99 99:99:99+00', id: randomUUID() }),
+      ).toString('base64url');
+      const res = await app.inject({
+        method: 'GET',
+        url: `/v1/admin/change-requests?cursor=${cursor}`,
+        headers: token(ids.p1),
+      });
+      expect(res.statusCode).toBe(422);
+      const junk = await app.inject({
+        method: 'GET',
+        url: '/v1/admin/change-requests?cursor=not-a-cursor',
+        headers: token(ids.p1),
+      });
+      expect(junk.statusCode).toBe(400);
+      expect(junk.json<{ code: string }>().code).toBe('invalid_cursor');
+    });
+
     it('validation errors do not echo submitted values', async () => {
       const res = await post('/v1/admin/change-requests', ids.p1, {
         type: 'organization.create',
@@ -662,7 +681,7 @@ describe.skipIf(!enabled)('API against a real database', () => {
       expect(logs.join('\n')).toContain('outbox event is dead');
     });
 
-    it('treats an unknown event type, an invalid payload and a refused rule as permanent', async () => {
+    it('retries an unknown event type; treats an invalid payload and a refused rule as permanent', async () => {
       const w = workerWith(testHandlers(new Map()));
       const unknown = await enqueue('test.nobody_handles_this', 'x');
       const invalid = (
@@ -678,8 +697,9 @@ describe.skipIf(!enabled)('API against a real database', () => {
         [[unknown, invalid, refused]],
       );
       const byId = new Map(rows.rows.map((r) => [r.id, r]));
+      // Unknown types are retried (a newer release may handle them) rather than dead-lettered at once.
       expect(byId.get(unknown)).toMatchObject({
-        status: 'dead',
+        status: 'pending',
         last_error_code: 'unknown_event_type',
       });
       expect(byId.get(invalid)).toMatchObject({

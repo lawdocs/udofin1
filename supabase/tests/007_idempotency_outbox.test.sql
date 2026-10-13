@@ -3,7 +3,7 @@
 -- the single-connection semantics, privileges and the atomic enqueue.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(44);
+select plan(47);
 
 create function pg_temp.as_staff(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -103,6 +103,9 @@ select is(ops.enqueue_event('test.thing_happened', '{"ref":"r1"}', null, 'dedupe
   'enqueueing the same business fact twice yields one event');
 select throws_ok($$select ops.enqueue_event('test.thing_happened', '{"phone":"x"}')$$, '23514', null, 'a payload with a personal-data key is refused');
 select throws_ok($$select ops.enqueue_event('test.thing_happened', '{"otp":"1"}')$$, '23514', null, 'a payload with an OTP key is refused');
+select throws_ok($$select ops.enqueue_event('test.thing_happened', '{"ref":{"contact":{"phone":"x"}}}')$$, '23514', null, 'a personal-data key nested in an object is refused');
+select throws_ok($$select ops.enqueue_event('test.thing_happened', '{"items":[{"accountNumber":"1"}]}')$$, '23514', null, 'a personal-data key inside an array element (camelCase) is refused');
+select is(ops.payload_is_safe('{"company_id":"c1","expand":true,"change_request_id":"x"}'), true, 'benign keys that merely contain letters like pan or name are accepted');
 select throws_ok($$select ops.enqueue_event('Bad Type', '{}')$$, '23514', null, 'a malformed event type is refused');
 select throws_ok($$select ops.enqueue_event('test.big', jsonb_build_object('ref', repeat('x', 5000)))$$, '23514', null, 'an oversized payload is refused');
 

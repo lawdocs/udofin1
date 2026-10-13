@@ -36,6 +36,8 @@ export class SessionManager {
   private state: AuthState = { status: 'loading' };
   private listeners = new Set<(state: AuthState) => void>();
   private refreshing: Promise<Session | null> | undefined;
+  /** Bumped whenever the session is ended, so a refresh that was already in flight cannot resurrect it. */
+  private generation = 0;
 
   constructor(
     private readonly deps: {
@@ -96,8 +98,14 @@ export class SessionManager {
 
   /** Accepts a new session (after sign-in or MFA) and persists it. */
   async setSession(session: Session): Promise<void> {
-    await this.deps.storage.save(JSON.stringify(session));
+    // In-memory first: if the keystore write fails (full disk, locked keystore) the user stays signed in
+    // for this run instead of losing a refresh token the server has already rotated.
     this.set({ status: 'signed_in', session });
+    try {
+      await this.deps.storage.save(JSON.stringify(session));
+    } catch {
+      // The next start-up will find no stored session and ask the user to sign in again.
+    }
   }
 
   /**
@@ -127,13 +135,19 @@ export class SessionManager {
     const current = this.state.session;
     if (!force && current.expiresAt - this.now() > REFRESH_MARGIN_SECONDS)
       return Promise.resolve(current);
+    const generation = this.generation;
     this.refreshing = (async () => {
       try {
         const next = await this.deps.gotrue.refresh(current.refreshToken);
+        if (generation !== this.generation) return null; // signed out while refreshing: discard the new tokens
         await this.setSession(next);
         return next;
       } catch (error) {
-        if (error instanceof AuthFailure && error.code === 'invalid_session') {
+        if (
+          error instanceof AuthFailure &&
+          error.code === 'invalid_session' &&
+          generation === this.generation
+        ) {
           await this.endSession('expired'); // the server rejected the refresh token: sign in again
         }
         return null; // network trouble or rate limit: keep the session, try later
@@ -145,6 +159,7 @@ export class SessionManager {
   }
 
   private async endSession(reason: 'expired' | 'revoked' | 'signed_out'): Promise<void> {
+    this.generation += 1;
     try {
       await this.deps.storage.clear();
     } finally {

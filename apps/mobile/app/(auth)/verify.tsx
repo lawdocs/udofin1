@@ -1,4 +1,4 @@
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Redirect, useRouter } from 'expo-router';
 import { usePreventScreenCapture } from 'expo-screen-capture';
 import { useState } from 'react';
 import { useAuth } from '../../src/auth/AuthProvider';
@@ -10,24 +10,25 @@ export default function VerifyScreen() {
   usePreventScreenCapture(); // the code and number must not end up in screenshots or the app switcher preview
   const router = useRouter();
   const { otp } = useAuth();
-  const { phone } = useLocalSearchParams<{ phone: string }>();
+  const phone = otp.pendingPhone();
   const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function submit() {
-    if (!phone) return;
     setBusy(true);
     setError(null);
-    const result = await otp.verifyCode(phone, code);
+    const result = await otp.verifyCode(code);
     setBusy(false);
     if (!result.ok) setError(OTP_MESSAGES[result.error]); // success: the session change swaps the navigator
   }
 
+  if (!phone) return <Redirect href="/sign-in" />; // opened directly (deep link) or after a restart: start again
+
   return (
     <Screen>
       <Heading>Enter the code</Heading>
-      <Body muted>We sent a 6-digit code to {phone ? maskPhone(phone) : 'your phone'}.</Body>
+      <Body muted>We sent a 6-digit code to {maskPhone(phone)}.</Body>
       <Field
         label="6-digit code"
         value={code}
@@ -45,7 +46,14 @@ export default function VerifyScreen() {
         busy={busy}
         disabled={code.replace(/\s/g, '').length < 6}
       />
-      <Button title="Use a different number" secondary onPress={() => router.back()} />
+      <Button
+        title="Use a different number"
+        secondary
+        onPress={() => {
+          otp.reset();
+          router.back();
+        }}
+      />
     </Screen>
   );
 }

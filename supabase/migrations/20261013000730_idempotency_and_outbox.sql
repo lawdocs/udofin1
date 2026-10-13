@@ -163,14 +163,35 @@ language sql
 immutable
 set search_path = ''
 as $$
+  -- Walks objects and arrays at every depth and rejects keys that name personal or secret data. A key is
+  -- split on non-alphanumerics and camelCase boundaries, so `company_id` and `expand` are fine while
+  -- `phone`, `contact_phone`, `accountNumber` and `aadhaar_no` are not. VALUES are not inspected:
+  -- payloads must carry references (ids), and review keeps it that way.
+  with recursive walk(v, depth) as (
+    select p, 0
+    union all
+    select c.child, w.depth + 1
+    from walk w
+    cross join lateral (
+      select e.value as child
+      from jsonb_each(case when jsonb_typeof(w.v) = 'object' then w.v else '{}'::jsonb end) e
+      union all
+      select a.value
+      from jsonb_array_elements(case when jsonb_typeof(w.v) = 'array' then w.v else '[]'::jsonb end) a
+    ) c
+    where w.depth < 8
+  ),
+  keys as (
+    select k as key
+    from walk w, lateral jsonb_object_keys(case when jsonb_typeof(w.v) = 'object' then w.v else '{}'::jsonb end) k
+  )
   select jsonb_typeof(p) = 'object'
      and length(p::text) <= 4096
      and not exists (
-       select 1 from jsonb_object_keys(p) k
-       where lower(k) ~ '(otp|password|passwd|secret|token|aadhaar|aadhar|pan|account_?number|phone|mobile|email|name|dob|address|card)'
+       select 1 from keys
+       where regexp_replace(key, '([a-z0-9])([A-Z])', '\1_\2', 'g') ~* '(^|[^a-z0-9])(otp|password|passwd|secret|token|aadhaar|aadhar|pan|phone|mobile|email|name|dob|address|card|account_?number|accountno)([^a-z0-9]|$)'
      )
 $$;
-
 grant execute on function ops.payload_is_safe(jsonb) to service_role;
 
 create table ops.outbox_events (

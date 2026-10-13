@@ -22,6 +22,8 @@ const RESEND_SECONDS = 30;
 export class OtpFlow {
   private wrongCodes = 0;
   private lastSent = 0;
+  /** The number a code was sent to. Kept here (not in a route parameter or URL) so it never appears in navigation state. */
+  private pending: string | null = null;
 
   constructor(
     private readonly deps: { gotrue: GoTrueClient; session: SessionManager; now?: () => number },
@@ -41,13 +43,26 @@ export class OtpFlow {
       await this.deps.gotrue.requestPhoneOtp(phone);
       this.lastSent = this.now();
       this.wrongCodes = 0;
+      this.pending = phone;
       return { ok: true, phone };
     } catch (error) {
       return { ok: false, error: this.map(error) };
     }
   }
 
-  async verifyCode(phone: string, rawCode: string): Promise<OtpResult> {
+  /** Masked-for-display use only; the number itself stays inside this object. */
+  pendingPhone(): string | null {
+    return this.pending;
+  }
+
+  /** Forget the pending number (the user chose to go back). */
+  reset(): void {
+    this.pending = null;
+  }
+
+  async verifyCode(rawCode: string): Promise<OtpResult> {
+    const phone = this.pending;
+    if (!phone) return { ok: false, error: 'invalid_phone' };
     if (this.wrongCodes >= MAX_WRONG_CODES) return { ok: false, error: 'too_many_attempts' };
     const code = rawCode.replace(/\s/g, '');
     if (!/^\d{6}$/.test(code)) return { ok: false, error: 'invalid_code' };
@@ -55,6 +70,7 @@ export class OtpFlow {
       const session = await this.deps.gotrue.verifyPhoneOtp(phone, code);
       await this.deps.session.setSession(session);
       this.wrongCodes = 0;
+      this.pending = null;
       return { ok: true };
     } catch (error) {
       const mapped = this.map(error);

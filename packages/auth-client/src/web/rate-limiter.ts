@@ -18,6 +18,11 @@ export function createMemoryRateLimiter(now: () => number = () => Date.now()): R
         windows.set(key, { start: t, count: 1 });
         if (windows.size > 10_000) {
           for (const [k, v] of windows) if (t - v.start >= windowSeconds * 1000) windows.delete(k);
+          // Still too many live keys (for example forged addresses): drop the oldest so memory stays bounded.
+          for (const k of windows.keys()) {
+            if (windows.size <= 8_000) break;
+            windows.delete(k);
+          }
         }
         return true;
       }

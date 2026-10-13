@@ -19,8 +19,11 @@ const PortalEnvSchema = z
     /** This portal's own public origin, e.g. https://ops.example.in (scheme and host, no path). */
     PORTAL_ORIGIN: z.url(),
     COOKIE_SECURE: bool.optional(),
-    /** Trust X-Forwarded-For (only behind a reverse proxy you control). */
-    TRUST_PROXY: bool.default(false),
+    /**
+     * Number of reverse proxies you control in front of the portal (0 = none). The client address is
+     * taken from X-Forwarded-For counting from the RIGHT, so entries a client forges are ignored.
+     */
+    TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
   })
   .superRefine((env, ctx) => {
     const production = env.NODE_ENV === 'production';
@@ -36,6 +39,14 @@ const PortalEnvSchema = z
     if (new URL(env.PORTAL_ORIGIN).pathname !== '/') {
       ctx.addIssue({ code: 'custom', path: ['PORTAL_ORIGIN'], message: 'must not include a path' });
     }
+    if (production && env.TRUSTED_PROXY_HOPS < 1 && !loopback(env.PORTAL_ORIGIN)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['TRUSTED_PROXY_HOPS'],
+        message:
+          'must be at least 1 in production (otherwise every visitor shares one rate-limit bucket)',
+      });
+    }
     if (production && env.COOKIE_SECURE === false && !loopback(env.PORTAL_ORIGIN)) {
       ctx.addIssue({
         code: 'custom',
@@ -44,6 +55,24 @@ const PortalEnvSchema = z
       });
     }
   });
+
+/** Plausible IPv4/IPv6 text only; anything else is not used as a rate-limit key. */
+const ADDRESS = /^[0-9a-fA-F:.]{2,45}$/;
+
+/**
+ * The client address as seen by the trusted proxy nearest the portal: the entry `hops` places from the
+ * right of X-Forwarded-For (each proxy appends the address it received the request from, so the
+ * leftmost entries are whatever the client claimed).
+ */
+export function clientAddress(forwardedFor: string | null, hops: number): string {
+  if (hops < 1) return 'direct';
+  const entries = (forwardedFor ?? '')
+    .split(',')
+    .map((e) => e.trim())
+    .filter(Boolean);
+  const candidate = entries[entries.length - hops];
+  return candidate && ADDRESS.test(candidate) ? candidate : 'unknown';
+}
 
 export class PortalConfigError extends Error {
   override readonly name = 'PortalConfigError';
@@ -85,10 +114,8 @@ export function createPortalAuth(
     audience,
     apiBaseUrl: cfg.API_BASE_URL,
     rateLimiter: createMemoryRateLimiter(),
-    clientIp: (request) => {
-      if (!cfg.TRUST_PROXY) return 'direct';
-      return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
-    },
+    clientIp: (request) =>
+      clientAddress(request.headers.get('x-forwarded-for'), cfg.TRUSTED_PROXY_HOPS),
     ...(deps.fetch ? { fetch: deps.fetch } : {}),
   });
   return { handlers, apiBaseUrl: cfg.API_BASE_URL.replace(/\/$/, ''), portalOrigin };

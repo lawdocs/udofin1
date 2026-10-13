@@ -50,6 +50,11 @@ export function mapDatabaseError(error: unknown): ApiError | undefined {
       );
     case 'P0002':
       return new ApiError(404, 'not_found', 'Not Found');
+    // Malformed values that passed the shape check but are not real dates/uuids/numbers.
+    case '22007':
+    case '22008':
+    case '22P02':
+      return new ApiError(422, 'invalid_request', 'Unprocessable Content');
     case '22023':
       return new ApiError(422, 'invalid_request', 'Unprocessable Content');
     case '23505':

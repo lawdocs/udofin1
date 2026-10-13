@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PortalConfigError, createPortalAuth } from '../src/web/portal-env.js';
+import { PortalConfigError, clientAddress, createPortalAuth } from '../src/web/portal-env.js';
 import { jwt } from './helpers.js';
 
 const good = {
@@ -13,7 +13,10 @@ const attempt = (over: Record<string, string | undefined>) => () =>
 
 describe('portal configuration', () => {
   it('accepts a complete configuration', () => {
-    const auth = createPortalAuth({ ...good, NODE_ENV: 'production' }, 'platform');
+    const auth = createPortalAuth(
+      { ...good, NODE_ENV: 'production', TRUSTED_PROXY_HOPS: '1' },
+      'platform',
+    );
     expect(auth.portalOrigin).toBe('https://ops.udofin.example');
     expect(auth.handlers.names.access).toBe('__Host-udofin_at');
   });
@@ -35,6 +38,22 @@ describe('portal configuration', () => {
     expect(attempt({ SUPABASE_PUBLISHABLE_KEY: jwt({ role: 'service_role' }) })).toThrow(
       /service_role/,
     );
+  });
+
+  it('takes the client address from the right of X-Forwarded-For, so forged entries are ignored', () => {
+    expect(clientAddress('1.1.1.1, 2.2.2.2', 0)).toBe('direct');
+    expect(clientAddress('6.6.6.6, 203.0.113.7', 1)).toBe('203.0.113.7'); // 6.6.6.6 was claimed by the client
+    expect(clientAddress('6.6.6.6, 203.0.113.7, 10.0.0.2', 2)).toBe('203.0.113.7');
+    expect(clientAddress(null, 1)).toBe('unknown');
+    expect(clientAddress('not an address', 1)).toBe('unknown');
+    expect(clientAddress('10.0.0.1', 3)).toBe('unknown');
+  });
+
+  it('requires at least one trusted proxy in production (otherwise visitors share a rate-limit bucket)', () => {
+    expect(attempt({ NODE_ENV: 'production', TRUSTED_PROXY_HOPS: '0' })).toThrow(
+      /TRUSTED_PROXY_HOPS/,
+    );
+    expect(attempt({ NODE_ENV: 'production', TRUSTED_PROXY_HOPS: '1' })).not.toThrow();
   });
 
   it('requires https and secure cookies in production', () => {

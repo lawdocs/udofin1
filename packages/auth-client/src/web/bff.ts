@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { type MeResponse } from '@udofin/contracts';
 import { z } from 'zod';
 import { createApiClient } from '../api-client.js';
@@ -208,7 +208,8 @@ export function createAuthHandlers(options: BffOptions) {
         }
         const enrolment = await options.gotrue.enrolTotp(
           access,
-          `Udofin ${new Date(now() * 1000).toISOString().slice(0, 10)}`,
+          // Names must be unique per user; a repeat attempt on the same day must not collide.
+          `Udofin ${new Date(now() * 1000).toISOString().slice(0, 10)} ${randomBytes(3).toString('hex')}`,
         );
         return json(200, {
           factorId: enrolment.factorId,
@@ -247,12 +248,24 @@ export function createAuthHandlers(options: BffOptions) {
       }
     },
 
-    /** POST {} — ends the session. Cookies are cleared even if the auth server cannot be reached. */
+    /**
+     * POST {} — ends the session. The session is revoked at the auth server using a FRESH access token
+     * (the cookie's token is often expired by sign-out time, which would leave the refresh token alive).
+     * Cookies are cleared even if the auth server cannot be reached.
+     */
     async signOut(request: Request): Promise<Response> {
       const blocked = guard(request);
       if (blocked) return blocked;
-      const { access } = readTokens(request);
-      if (access) await options.gotrue.signOut(access).catch(() => undefined);
+      const { access, refresh } = readTokens(request);
+      let token = access;
+      const claims = access ? readTokenClaims(access) : undefined;
+      if (refresh && (!claims || claims.exp - now() <= 60)) {
+        token = await options.gotrue.refresh(refresh).then(
+          (session) => session.accessToken,
+          () => undefined,
+        );
+      }
+      if (token) await options.gotrue.signOut(token).catch(() => undefined);
       return json(200, { next: 'signed_out' }, clearCookies());
     },
 

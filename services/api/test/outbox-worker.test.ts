@@ -76,10 +76,10 @@ describe('OutboxWorker', () => {
     expect(calls[0]).toMatchObject({ op: 'fail', code: 'invalid_payload', permanent: true });
   });
 
-  it('fails an unknown event type permanently', async () => {
+  it('retries an unknown event type (rolling deploys), without marking it permanent', async () => {
     const { store, calls } = fakeStore([event({ event_type: 'test.unknown' })]);
     await new OutboxWorker({ store, workerId: 'w', log, handlers: {} }).runOnce();
-    expect(calls[0]).toMatchObject({ code: 'unknown_event_type', permanent: true });
+    expect(calls[0]).toMatchObject({ code: 'unknown_event_type', permanent: false });
   });
 
   it('retries a transient handler error and keeps the error text out of storage and logs', async () => {

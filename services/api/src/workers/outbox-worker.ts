@@ -111,7 +111,9 @@ export class OutboxWorker {
     const fields = { eventId: event.id, eventType: event.event_type, attempt: event.attempts };
     const definition = this.options.handlers[event.event_type];
     if (!definition) {
-      return this.fail(event, 'unknown_event_type', true);
+      // Not permanent: during a rolling deploy an older worker can see a type only the new release
+      // handles. It backs off and retries; if nobody ever handles it, it ends up dead after max attempts.
+      return this.fail(event, 'unknown_event_type', false);
     }
     const parsed = definition.schema.safeParse(event.payload);
     if (!parsed.success) {

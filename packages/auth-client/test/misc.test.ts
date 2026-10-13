@@ -37,6 +37,14 @@ describe('rate limiter', () => {
     t = 61_000;
     expect(rl.hit('k', 3, 60)).toBe(true);
   });
+
+  it('stays bounded even when every key is new and none has expired (forged addresses)', () => {
+    const rl = createMemoryRateLimiter(() => 0);
+    for (let i = 0; i < 25_000; i += 1) rl.hit(`ip:${String(i)}`, 5, 900);
+    // The earliest keys were evicted to keep memory bounded, so they start fresh; recent ones are tracked.
+    expect(rl.hit('ip:24999', 1, 900)).toBe(false);
+    expect(rl.hit('ip:0', 1, 900)).toBe(true);
+  });
 });
 
 describe('API client', () => {

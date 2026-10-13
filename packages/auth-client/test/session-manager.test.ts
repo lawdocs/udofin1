@@ -162,4 +162,36 @@ describe('SessionManager', () => {
     await m.signOut();
     expect(seen).toEqual(['signed_out', 'signed_in', 'signed_out']);
   });
+
+  it('a refresh that finishes after sign-out cannot bring the session back', async () => {
+    let release: (s: Session) => void = () => undefined;
+    const store = memoryStorage();
+    const m = new SessionManager({
+      storage: store.storage,
+      gotrue: gotrue({ refresh: () => new Promise<Session>((resolve) => (release = resolve)) }),
+      now: () => NOW,
+    });
+    await m.setSession(fresh({ expiresAt: NOW + 5 }));
+    const pending = m.getAccessToken();
+    await m.signOut();
+    release(fresh({ refreshToken: 'late' }));
+    expect(await pending).toBeNull();
+    expect(m.getState()).toEqual({ status: 'signed_out', reason: 'signed_out' });
+    expect(store.peek()).toBeNull();
+  });
+
+  it('keeps the new session in memory when the keystore write fails', async () => {
+    const m = new SessionManager({
+      storage: {
+        load: () => Promise.resolve(null),
+        save: () => Promise.reject(new Error('keystore locked')),
+        clear: () => Promise.resolve(),
+      },
+      gotrue: gotrue(),
+      now: () => NOW,
+    });
+    const s = fresh();
+    await expect(m.setSession(s)).resolves.toBeUndefined();
+    expect(m.getState()).toEqual({ status: 'signed_in', session: s });
+  });
 });

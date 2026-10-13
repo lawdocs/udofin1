@@ -24,7 +24,9 @@ export default async function ChangeRequestsPage({
   const { me, accessToken } = session;
   const query = await searchParams;
   const cursor = typeof query.cursor === 'string' ? query.cursor : undefined;
-  const result = typeof query.result === 'string' ? query.result : undefined;
+  const RESULTS = ['approved', 'rejected', 'expired', 'pending', 'applied'];
+  const result =
+    typeof query.result === 'string' && RESULTS.includes(query.result) ? query.result : undefined;
   const error = typeof query.error === 'string' ? query.error : undefined;
 
   const api = createApiClient({

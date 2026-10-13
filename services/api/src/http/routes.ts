@@ -225,9 +225,6 @@ export function registerRoutes(
           return await reply.code(result.status).send(result.body);
         } catch (error) {
           if (error instanceof ApiError) return sendError(reply, request, error);
-          process.stderr.write(
-            `DBGERR ${String((error as { message?: string }).message)} ${String((error as { code?: string }).code)}\n`,
-          );
           const mapped = mapDatabaseError(error);
           if (mapped) return sendError(reply, request, mapped);
           throw error; // the global handler logs it and returns a generic 500

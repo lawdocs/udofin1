@@ -34,7 +34,7 @@ Two staff portals (operations and partner-lender) sign people in with Supabase A
 
 ## Verification
 
-`packages/auth-client/test` (51 tests), `packages/portal-kit/test` (10), `tests/e2e` (10 real-browser tests: cookie flags, no token in storage or source, refresh, revoked refresh, sign-out, wrong portal, CSRF).
+`packages/auth-client/test` (59 tests), `packages/portal-kit/test` (10), `tests/e2e` (10 real-browser tests: cookie flags, no token in storage or source, refresh, revoked refresh, sign-out, wrong portal, CSRF).
 
 ## Revisit triggers
 

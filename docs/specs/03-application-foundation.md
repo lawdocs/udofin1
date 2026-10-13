@@ -50,8 +50,8 @@ No lending feature, KYC, credit decision or repayment screen is built.
 | 4   | Domain change and outbox row commit or roll back together                                                                      | integration "a decision that rolls back leaves no outbox event"; pgTAP 007                                                     |
 | 5   | Worker: retries, dead-letter, duplicate delivery, concurrent workers, abandoned-lease recovery, invalid payloads, safe logging | integration › worker reliability (3 tests) and two-person flow (4 tests); `test/outbox-worker.test.ts` (7)                     |
 | 6   | Cross-tenant and role restrictions through the API                                                                             | integration › authentication and authorisation (7 tests); pgTAP 002/005/006                                                    |
-| 7   | Staff MFA enforced; no account enumeration; rate limits; CSRF; cookie flags; token not in page source                          | `packages/auth-client/test/*` (51), `tests/e2e` (10)                                                                           |
-| 8   | Mobile: keystore storage, session refresh, config refuses privileged keys, OTP guard rails                                     | `apps/mobile/test/*` (15), `expo export --platform android` bundle builds                                                      |
+| 7   | Staff MFA enforced; no account enumeration; rate limits; CSRF; cookie flags; token not in page source                          | `packages/auth-client/test/*` (59), `tests/e2e` (10)                                                                           |
+| 8   | Mobile: keystore storage, session refresh, config refuses privileged keys, OTP guard rails                                     | `apps/mobile/test/*` (16), `expo export --platform android` bundle builds                                                      |
 | 9   | Mocked vs production clearly distinguished                                                                                     | section 7 below                                                                                                                |
 
 ## 5. Failure and security considerations
@@ -75,8 +75,11 @@ No lending feature, KYC, credit decision or repayment screen is built.
 3. Idempotency responses are stored verbatim: only non-personal bodies may be stored (rule recorded in `docs/api/idempotency-and-outbox.md`).
 4. Real SMS delivery, DLT registration and production Supabase projects do not exist yet.
 5. The merged-AndroidManifest release check, IaC, deployment workflows and observability are not built.
-6. Browser tests use fakes for Supabase Auth and the API: they prove the portals, not Supabase's behaviour. A staging project with synthetic data is needed for a true end-to-end run.
-7. The mobile UI has been type-checked, linted and bundled, and its logic unit-tested; it has **not** been run on a device or emulator in this environment.
+6. **Phone-OTP abuse controls are not in place.** The 30-second resend guard and wrong-code limit live in the app; anyone can call the auth server's OTP endpoint directly with the publishable key (SMS pumping, exhausting the project's SMS limit). Before Phase 05 turns SMS on: enable Supabase captcha/attestation and per-IP limits, and set a spending cap with the SMS provider.
+7. A signed-out or copied **access token** stays valid until it expires (15 minutes); only refresh tokens are revoked at sign-out.
+8. iOS keeps its app-switcher snapshot of the code screen (Android hides it); an inactive-state cover is not built.
+9. Browser tests use fakes for Supabase Auth and the API: they prove the portals, not Supabase's behaviour. A staging project with synthetic data is needed for a true end-to-end run.
+10. The mobile UI has been type-checked, linted and bundled, and its logic unit-tested; it has **not** been run on a device or emulator in this environment.
 
 ## 7. Mocked, sandboxed and production
 

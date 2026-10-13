@@ -45,18 +45,25 @@ describe('OtpFlow', () => {
     const requested = await flow.requestCode('98765 43210');
     expect(requested).toEqual({ ok: true, phone: '+919876543210' });
     expect(sent).toEqual(['+919876543210']);
-    expect(await flow.verifyCode('+919876543210', '123 456')).toEqual({ ok: true });
+    expect(await flow.verifyCode('123 456')).toEqual({ ok: true });
     expect(manager.getState().status).toBe('signed_in');
   });
 
   it('rejects invalid numbers and malformed codes before calling the server', async () => {
     const { flow, sent } = setup();
     expect(await flow.requestCode('12345')).toEqual({ ok: false, error: 'invalid_phone' });
-    expect(await flow.verifyCode('+919876543210', '12')).toEqual({
-      ok: false,
-      error: 'invalid_code',
-    });
-    expect(sent).toEqual([]);
+    await flow.requestCode('9876543210');
+    expect(await flow.verifyCode('12')).toEqual({ ok: false, error: 'invalid_code' });
+    expect(sent).toEqual(['+919876543210']); // only the valid number was ever sent
+  });
+
+  it('cannot verify a code before one was requested, and forgets the number afterwards', async () => {
+    const { flow } = setup();
+    expect(await flow.verifyCode('123456')).toEqual({ ok: false, error: 'invalid_phone' });
+    await flow.requestCode('9876543210');
+    expect(flow.pendingPhone()).toBe('+919876543210');
+    await flow.verifyCode('123456');
+    expect(flow.pendingPhone()).toBeNull();
   });
 
   it('makes the user wait between resend requests', async () => {
@@ -76,13 +83,13 @@ describe('OtpFlow', () => {
     });
     await flow.requestCode('9876543210');
     const results = [];
-    for (let i = 0; i < 6; i += 1) results.push(await flow.verifyCode('+919876543210', '000000'));
+    for (let i = 0; i < 6; i += 1) results.push(await flow.verifyCode('000000'));
     expect(results.slice(0, 4).every((r) => !r.ok && r.error === 'invalid_code')).toBe(true);
     expect(results[4]).toEqual({ ok: false, error: 'too_many_attempts' });
     expect(results[5]).toEqual({ ok: false, error: 'too_many_attempts' });
     advance(31_000);
     await flow.requestCode('9876543210');
-    expect(await flow.verifyCode('+919876543210', '000000')).toMatchObject({
+    expect(await flow.verifyCode('000000')).toMatchObject({
       error: 'invalid_code',
     });
   });

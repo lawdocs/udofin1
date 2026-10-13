@@ -1,10 +1,12 @@
 import { useRouter } from 'expo-router';
+import { usePreventScreenCapture } from 'expo-screen-capture';
 import { useState } from 'react';
 import { useAuth } from '../../src/auth/AuthProvider';
 import { OTP_MESSAGES } from '../../src/auth/otp-flow';
 import { Banner, Body, Button, Field, Heading, Screen } from '../../src/ui/kit';
 
 export default function SignInScreen() {
+  usePreventScreenCapture();
   const router = useRouter();
   const { state, otp, config } = useAuth();
   const [phone, setPhone] = useState('');
