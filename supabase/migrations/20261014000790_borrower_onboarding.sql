@@ -915,10 +915,10 @@ begin
   end if;
   if old.status <> 'draft' then
     if (new.purpose, new.version, new.language, new.lender_org_id, new.title, new.body_markdown,
-        new.data_categories, new.retention_summary, new.published_at, new.approved_by, new.review_status)
+        new.data_categories, new.retention_summary, new.published_at, new.approved_by, new.drafted_by, new.review_status)
        is distinct from
        (old.purpose, old.version, old.language, old.lender_org_id, old.title, old.body_markdown,
-        old.data_categories, old.retention_summary, old.published_at, old.approved_by, old.review_status) then
+        old.data_categories, old.retention_summary, old.published_at, old.approved_by, old.drafted_by, old.review_status) then
       raise exception 'published consent notices are immutable; create a new version' using errcode = 'P0001';
     end if;
     if not (old.status = 'published' and new.status in ('published', 'retired'))
