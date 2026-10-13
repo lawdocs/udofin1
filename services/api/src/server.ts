@@ -1,3 +1,4 @@
+import { createLocalDocumentStore } from '@udofin/adapters';
 import pg from 'pg';
 import { buildApp, type ReadinessCheck } from './app.js';
 import { createTokenVerifier, supabaseKeys } from './auth/token-verifier.js';
@@ -50,9 +51,17 @@ if (pool && config.SUPABASE_URL) {
   };
 }
 
+// Evidence documents need a private, encrypted store. Only the development-only local store is wired
+// today; the AWS S3/KMS adapter exists but is connected with the AWS deployment, so staging and
+// production answer 503 on document routes until then.
+const documents = config.LOCAL_DOCUMENT_DIR
+  ? createLocalDocumentStore(config.LOCAL_DOCUMENT_DIR, config.APP_ENV)
+  : undefined;
+
 const app = await buildApp(config, {
   readinessChecks,
   ...(auth ? { auth } : {}),
+  ...(documents ? { documents } : {}),
 });
 
 let shuttingDown = false;

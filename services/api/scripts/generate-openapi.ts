@@ -7,7 +7,7 @@ import { buildOpenApi } from '../src/http/openapi.js';
 import { healthRoutes } from '../src/modules/health/routes.js';
 
 /** Writes docs/api/openapi.json. Run `pnpm --filter @udofin/api openapi` after changing a route. */
-const routes = [...healthRoutes([], () => undefined), ...authenticatedRoutes];
+const routes = [...healthRoutes([], () => undefined), ...authenticatedRoutes()];
 const target = join(
   dirname(fileURLToPath(import.meta.url)),
   '..',

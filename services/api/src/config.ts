@@ -32,9 +32,18 @@ const ConfigSchema = z
     /** Number of trusted reverse-proxy hops in front of the API (client IP resolution). 0 trusts none. */
     TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
     RATE_LIMIT_MAX_PER_MINUTE: z.coerce.number().int().min(1).default(120),
+    /** Directory for the development-only document store (unencrypted files). Refused when deployed. */
+    LOCAL_DOCUMENT_DIR: z.string().min(1).optional(),
   })
   .superRefine((config, ctx) => {
     const deployed = config.APP_ENV === 'staging' || config.APP_ENV === 'production';
+    if (deployed && config.LOCAL_DOCUMENT_DIR) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['LOCAL_DOCUMENT_DIR'],
+        message: 'the local document store is for development only',
+      });
+    }
     if (deployed && !config.DATABASE_URL) {
       ctx.addIssue({ code: 'custom', path: ['DATABASE_URL'], message: 'required when deployed' });
     }

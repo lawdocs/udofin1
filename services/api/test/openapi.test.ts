@@ -8,7 +8,7 @@ import { loadConfig } from '../src/config.js';
 import { healthRoutes } from '../src/modules/health/routes.js';
 import { TokenError } from '../src/auth/token-verifier.js';
 
-const routes = [...healthRoutes([], () => undefined), ...authenticatedRoutes];
+const routes = [...healthRoutes([], () => undefined), ...authenticatedRoutes()];
 const doc = buildOpenApi(routes, API_VERSION) as {
   openapi: string;
   paths: Record<

@@ -40,6 +40,8 @@ interface CommonSpec<P extends ZodType, Q extends ZodType, B extends ZodType> {
   /** Problem statuses this route can return, beyond the ones every route can. */
   errors?: number[];
   rateLimit?: { max: number; timeWindow: string } | false;
+  /** Overrides the global request body limit (bytes) for routes that carry documents. */
+  bodyLimit?: number;
 }
 
 export interface PublicRouteSpec<
@@ -158,6 +160,7 @@ export function registerRoutes(
       method: route.method.toUpperCase(),
       url: route.path,
       config: config as never,
+      ...(route.bodyLimit ? { bodyLimit: route.bodyLimit } : {}),
       handler: async (request, reply) => {
         try {
           const params = parseInput(route.params, request.params, 'path');

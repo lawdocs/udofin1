@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
+import { type DocumentStore } from '@udofin/adapters';
 import { PROBLEM_CONTENT_TYPE, type ProblemDetails } from '@udofin/contracts';
 import { z } from 'zod';
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply } from 'fastify';
@@ -23,9 +24,11 @@ export interface AppDependencies {
   readinessChecks?: readonly ReadinessCheck[];
   /** Token verification and the per-request database context. Routes under /v1 exist only when set. */
   auth?: AuthDeps;
+  /** Private store for lender evidence documents. Document routes answer 503 when it is absent. */
+  documents?: DocumentStore;
 }
 
-export const API_VERSION = '0.3.0';
+export const API_VERSION = '0.4.0';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -143,7 +146,7 @@ export async function buildApp(
     ...healthRoutes(deps.readinessChecks ?? [], (name, error) => {
       app.log.warn({ dependency: name, err: error }, 'readiness check failed');
     }),
-    ...authenticatedRoutes,
+    ...authenticatedRoutes(deps.documents ? { documents: deps.documents } : {}),
   ];
   if (config.APP_ENV !== 'production') {
     routes.push(
