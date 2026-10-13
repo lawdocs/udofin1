@@ -49,6 +49,8 @@ insert into auth.users (id, phone, raw_app_meta_data) values
   ('0f0f0f0f-0000-4000-8000-000000000001', null, '{"actor_type":"staff"}');
 
 select pg_temp.as_system();
+-- Fixture rows are created directly; production code may only do this through change requests.
+select set_config('udofin.change_apply', 'on', true);
 
 insert into tenancy.organizations (id, kind, legal_name, display_name, regulator_registration_no, status) values
   ('a0000000-0000-4000-8000-000000000000', 'platform', 'Udofin Platform (test)', 'Udofin', null, 'active'),
@@ -145,6 +147,7 @@ insert into audit.events (actor_type, tenant_org_id, action, entity_type, entity
   ('system', 'b1000000-0000-4000-8000-000000000000', 'application.routed', 'application', 'b2000000-0000-4000-8000-000000000001');
 
 select pg_temp.as_owner();
+select set_config('udofin.change_apply', 'off', true);
 -- ------------------------------- end of shared fixture ---------------------------------------
 
 -- ============================== TRUNCATE =====================================================
@@ -180,6 +183,8 @@ select pg_temp.as_system();
 select is(private.current_actor(), 'system', 'only a trusted backend role is the system');
 
 -- ============================== Separate logins ==============================================
+-- (These exercise the separation triggers themselves, so the change-control guard is lifted.)
+select set_config('udofin.change_apply', 'on', true);
 select throws_ok(
   $$insert into tenancy.memberships (org_id, user_id, status)
     values ('a1000000-0000-4000-8000-000000000000', '11111111-1111-4111-8111-111111111111', 'active')$$,
@@ -191,6 +196,7 @@ select throws_ok(
   $$insert into tenancy.memberships (org_id, user_id, status)
     values ('a1000000-0000-4000-8000-000000000000', '0e0e0e0e-0000-4000-8000-000000000001', 'active')$$,
   '23514', null, 'segregation of duties: platform staff cannot also be lender staff');
+select set_config('udofin.change_apply', 'off', true);
 
 -- ============================== Consent ======================================================
 insert into consent.notices (id, purpose, version, language, lender_org_id, title, body_markdown, status, published_at, drafted_by, approved_by)
