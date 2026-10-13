@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { MeResponse } from '@udofin/contracts';
 import { userRoute, type RouteDefinition } from '../../http/routes.js';
 
 interface MembershipRow {
@@ -8,20 +8,6 @@ interface MembershipRow {
   org_name: string;
   permission_key: string | null;
 }
-
-export const MeResponse = z.object({
-  userId: z.uuid(),
-  actor: z.enum(['borrower', 'lender', 'platform']),
-  memberships: z.array(
-    z.object({
-      membershipId: z.uuid(),
-      organizationId: z.uuid(),
-      organizationKind: z.string(),
-      organizationName: z.string(),
-      permissions: z.array(z.string()),
-    }),
-  ),
-});
 
 /** GET /v1/me: who the database says the caller is, and what they may do. Never cached. */
 export const meRoutes: RouteDefinition[] = [
@@ -48,7 +34,7 @@ export const meRoutes: RouteDefinition[] = [
             and (m.valid_until is null or m.valid_until > now())
           order by m.id, rp.permission_key`,
       );
-      const byMembership = new Map<string, z.infer<typeof MeResponse>['memberships'][number]>();
+      const byMembership = new Map<string, MeResponse['memberships'][number]>();
       for (const row of rows.rows) {
         let entry = byMembership.get(row.membership_id);
         if (!entry) {

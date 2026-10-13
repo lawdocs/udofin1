@@ -1,0 +1,35 @@
+{
+  "name": "@udofin/auth-client",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Supabase Auth (GoTrue) client, session handling, web BFF handlers and typed API client shared by the portals and the mobile app. No privileged keys are ever handled here.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./web": {
+      "types": "./dist/web/index.d.ts",
+      "default": "./dist/web/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@udofin/contracts": "workspace:*",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "~6.0.3",
+    "vitest": "^5.0.3"
+  }
+}

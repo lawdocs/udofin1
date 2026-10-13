@@ -1,50 +1,34 @@
 import { createHash } from 'node:crypto';
+import {
+  CHANGE_REQUEST_STATUSES,
+  CHANGE_REQUEST_TYPES,
+  ChangeRequest,
+  ChangeRequestDecision,
+  ChangeRequestPage,
+} from '@udofin/contracts';
 import { z } from 'zod';
 import { ApiError } from '../../http/api-error.js';
 import { decodeCursor, encodeCursor, PageQuerySchema } from '../../http/pagination.js';
 import { userRoute, type RouteDefinition } from '../../http/routes.js';
 
-const CHANGE_TYPES = [
-  'organization.create',
-  'organization.activate',
-  'membership.invite',
-  'membership.suspend',
-  'role.grant',
-  'role.revoke',
-  'consent_notice.publish',
-] as const;
-const STATUSES = ['pending', 'approved', 'rejected', 'applied', 'expired'] as const;
-
 const CreateBody = z.strictObject({
-  type: z.enum(CHANGE_TYPES),
+  type: z.enum(CHANGE_REQUEST_TYPES),
   targetOrganizationId: z.uuid().nullable().default(null),
   payload: z.record(z.string(), z.unknown()).default({}),
 });
 const DecisionBody = z.strictObject({ note: z.string().max(1000).optional() });
 const IdParams = z.strictObject({ id: z.uuid() });
 
-const ChangeRequestDto = z.object({
-  id: z.uuid(),
-  type: z.enum(CHANGE_TYPES),
-  targetOrganizationId: z.uuid().nullable(),
-  status: z.enum(STATUSES),
-  requestedBy: z.uuid(),
-  decidedBy: z.uuid().nullable(),
-  createdAt: z.string(),
-  expiresAt: z.string(),
-});
+const ChangeRequestDto = ChangeRequest;
+const DecisionResponse = ChangeRequestDecision;
+const ListResponse = ChangeRequestPage;
 const CreatedResponse = z.object({ id: z.uuid() });
-const DecisionResponse = z.object({ id: z.uuid(), status: z.enum(STATUSES) });
-const ListResponse = z.object({
-  items: z.array(ChangeRequestDto),
-  nextCursor: z.string().nullable(),
-});
 
 interface RequestRow {
   id: string;
-  request_type: (typeof CHANGE_TYPES)[number];
+  request_type: (typeof CHANGE_REQUEST_TYPES)[number];
   target_org_id: string | null;
-  status: (typeof STATUSES)[number];
+  status: (typeof CHANGE_REQUEST_STATUSES)[number];
   requested_by: string;
   decided_by: string | null;
   created_at: string;
@@ -184,7 +168,7 @@ export const adminRoutes: RouteDefinition[] = [
       handler: async ({ tx, params, body }) => {
         const { id } = params;
         const { note } = body;
-        const row = await tx.query<{ status: (typeof STATUSES)[number] }>(
+        const row = await tx.query<{ status: (typeof CHANGE_REQUEST_STATUSES)[number] }>(
           'select private.decide_change_request($1::uuid, $2::boolean, $3)::text as status',
           [id, verb === 'approve', note ?? null],
         );
