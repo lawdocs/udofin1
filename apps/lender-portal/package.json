@@ -11,10 +11,14 @@
     "lint": "eslint ."
   },
   "dependencies": {
+    "@udofin/auth-client": "workspace:*",
+    "@udofin/contracts": "workspace:*",
     "@udofin/design-tokens": "workspace:*",
+    "@udofin/portal-kit": "workspace:*",
     "next": "16.4.0",
     "react": "19.2.3",
-    "react-dom": "19.2.3"
+    "react-dom": "19.2.3",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",
