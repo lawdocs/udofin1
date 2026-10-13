@@ -172,6 +172,8 @@ select is(private.current_actor(), 'none', 'an end-user role with no claims is n
 select pg_temp.as_owner();
 create role udofin_test_login_role nologin inherit;
 grant authenticated to udofin_test_login_role;
+-- On Supabase the test user is not a superuser: it must be allowed to SET ROLE to a role it created.
+grant udofin_test_login_role to current_user with set true;
 set local role udofin_test_login_role;
 select is(private.current_actor(), 'none', 'an application role that forgot SET ROLE is not the system (fail closed)');
 select pg_temp.as_system();
