@@ -202,7 +202,7 @@ select pg_temp.as_user('aaaaaaaa-0000-4000-8000-000000000004');  -- A viewer
 select is((select count(*) from lending.panel_views), 1::bigint, 'a colleague sees the shared view');
 select is(pg_temp.err($$update lending.panel_views set name = 'Hijacked'$$), 'ok', 'an update by a non-owner is accepted by SQL but changes no row');
 select is((select name from lending.panel_views), 'Overdue payments', 'the shared view was not changed by the colleague');
-select is(pg_temp.err($$delete from lending.panel_views$$), '42501|', 'saved views cannot be deleted (archive instead)');
+select is(pg_temp.err($$delete from lending.panel_views$$) like '42501|%', true, 'saved views cannot be deleted (archive instead)');
 select pg_temp.as_user('bbbbbbbb-0000-4000-8000-000000000003');
 select is((select count(*) from lending.panel_views), 0::bigint, 'lender B cannot see lender A''s views');
 
