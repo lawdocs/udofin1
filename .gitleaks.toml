@@ -8,5 +8,10 @@ title = "Udofin gitleaks configuration"
 useDefault = true
 
 [allowlist]
-description = "Synthetic Supabase key placeholders used in tests"
-regexes = ['''sb_(publishable|secret)_0123456789abcdef''']
+description = "Synthetic placeholders used in tests"
+regexes = [
+  '''sb_(publishable|secret)_0123456789abcdef''',
+  # Fake values in onboarding tests: a secret-looking string the free-text guard must refuse, and a fixed form idempotency key.
+  '''sk_live_abcdef123456''',
+  '''ui-0f1e2d3c-4b5a-4c6d-8e7f-0a1b2c3d4e5f''',
+]
