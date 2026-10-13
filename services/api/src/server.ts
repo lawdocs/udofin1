@@ -11,8 +11,19 @@ const pool = config.DATABASE_URL
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 5_000,
       application_name: 'udofin-api',
+      // Server-side limits so a stuck query or abandoned transaction cannot hold a connection forever.
+      statement_timeout: 30_000,
+      idle_in_transaction_session_timeout: 30_000,
     })
   : undefined;
+
+// An idle connection can fail (database restart, network drop). Without a listener Node treats the
+// event as uncaught and kills the process without a graceful shutdown.
+pool?.on('error', (error) => {
+  process.stderr.write(
+    `${JSON.stringify({ level: 'error', msg: 'idle database client error', type: error.name })}\n`,
+  );
+});
 
 const readinessChecks: ReadinessCheck[] = [];
 if (pool) {

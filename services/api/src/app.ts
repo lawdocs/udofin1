@@ -3,7 +3,7 @@ import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import { PROBLEM_CONTENT_TYPE, type ProblemDetails } from '@udofin/contracts';
-import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply } from 'fastify';
 import { type AppConfig } from './config.js';
 import { loggerOptions } from './logger.js';
 
@@ -39,6 +39,18 @@ export async function buildApp(
     // Trust only the configured number of proxy hops when resolving the client IP.
     trustProxy: (_address: string, hop: number) => hop < config.TRUST_PROXY_HOPS,
     bodyLimit: 1_048_576,
+    // Bound how long a client can hold a connection or trickle a body (slow-request attacks).
+    requestTimeout: 30_000,
+    connectionTimeout: 30_000,
+    keepAliveTimeout: 10_000,
+    // Malformed URLs and other framework-level errors get the same safe problem response,
+    // never an echo of the raw (possibly sensitive) URL.
+    frameworkErrors: (_error, request, reply) => {
+      void (reply as unknown as FastifyReply)
+        .code(400)
+        .type(PROBLEM_CONTENT_TYPE)
+        .send(problem(400, 'Bad Request', 'bad_request', request.id));
+    },
     // Do not let Fastify trust the raw header: genReqId validates it first (prevents log injection).
     requestIdHeader: false,
     // Accept a caller-supplied request id only if it is well-formed; otherwise mint one.
@@ -108,36 +120,41 @@ export async function buildApp(
   app.get('/health/live', { config: { rateLimit: false } }, () => ({ status: 'ok' }));
 
   /** Readiness: every dependency answers within the timeout. Reports names only, never errors. */
-  app.get('/health/ready', { config: { rateLimit: false } }, async (_request, reply) => {
-    const checks = deps.readinessChecks ?? [];
-    const results = await Promise.all(
-      checks.map(async (dependency) => {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), READINESS_TIMEOUT_MS);
-        try {
-          await Promise.race([
-            dependency.check(controller.signal),
-            new Promise<never>((_, reject) => {
-              controller.signal.addEventListener('abort', () => reject(new Error('timeout')));
-            }),
-          ]);
-          return { name: dependency.name, ok: true };
-        } catch (error) {
-          app.log.warn({ dependency: dependency.name, err: error }, 'readiness check failed');
-          return { name: dependency.name, ok: false };
-        } finally {
-          clearTimeout(timer);
-        }
-      }),
-    );
-    const ready = results.every((result) => result.ok);
-    return reply.code(ready ? 200 : 503).send({
-      status: ready ? 'ready' : 'not_ready',
-      checks: Object.fromEntries(
-        results.map((result) => [result.name, result.ok ? 'ok' : 'failing']),
-      ),
-    });
-  });
+  // Rate-limited (it touches dependencies); orchestrators poll far below this rate.
+  app.get(
+    '/health/ready',
+    { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
+    async (_request, reply) => {
+      const checks = deps.readinessChecks ?? [];
+      const results = await Promise.all(
+        checks.map(async (dependency) => {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), READINESS_TIMEOUT_MS);
+          try {
+            await Promise.race([
+              dependency.check(controller.signal),
+              new Promise<never>((_, reject) => {
+                controller.signal.addEventListener('abort', () => reject(new Error('timeout')));
+              }),
+            ]);
+            return { name: dependency.name, ok: true };
+          } catch (error) {
+            app.log.warn({ dependency: dependency.name, err: error }, 'readiness check failed');
+            return { name: dependency.name, ok: false };
+          } finally {
+            clearTimeout(timer);
+          }
+        }),
+      );
+      const ready = results.every((result) => result.ok);
+      return reply.code(ready ? 200 : 503).send({
+        status: ready ? 'ready' : 'not_ready',
+        checks: Object.fromEntries(
+          results.map((result) => [result.name, result.ok ? 'ok' : 'failing']),
+        ),
+      });
+    },
+  );
 
   return app;
 }

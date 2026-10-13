@@ -108,4 +108,21 @@ describe('HTTP hygiene', () => {
     expect(res.json()).toMatchObject({ status: 500, code: 'internal_error' });
     expect(res.body).not.toContain('secret_table');
   });
+
+  it('answers a malformed URL with a generic problem and never echoes it', async () => {
+    const res = await (await start()).inject({ method: 'GET', url: '/%E0%A4%A?token=supersecret' });
+    expect(res.statusCode).toBe(400);
+    expect(res.headers['content-type']).toContain('application/problem+json');
+    expect(res.body).not.toContain('supersecret');
+    expect(res.json()).toMatchObject({ status: 400, code: 'bad_request' });
+  });
+
+  it('rate-limits the readiness probe too', async () => {
+    const a = await start();
+    let last = 0;
+    for (let i = 0; i < 40; i += 1) {
+      last = (await a.inject({ method: 'GET', url: '/health/ready' })).statusCode;
+    }
+    expect(last).toBe(429);
+  });
 });

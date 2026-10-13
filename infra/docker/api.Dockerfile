@@ -28,7 +28,8 @@ RUN pnpm --filter "@udofin/api..." build \
 FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
-COPY --from=build --chown=node:node /out ./
+# Owned by root and not writable by the runtime user: a compromised process cannot alter its own code.
+COPY --from=build /out ./
 USER node
 EXPOSE 8080
 CMD ["node", "dist/server.js"]

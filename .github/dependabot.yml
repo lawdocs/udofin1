@@ -25,3 +25,9 @@ updates:
       interval: weekly
       day: monday
       timezone: Asia/Kolkata
+  - package-ecosystem: docker
+    directory: /infra/docker
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: Asia/Kolkata

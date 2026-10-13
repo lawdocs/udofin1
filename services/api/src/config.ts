@@ -27,8 +27,8 @@ const ConfigSchema = z
     SUPABASE_URL: z.url().optional(),
     /** Browser origins allowed to call the API (the two portals). Mobile apps do not use CORS. */
     CORS_ALLOWED_ORIGINS: csv,
-    /** Number of trusted reverse-proxy hops in front of the API (for client IP resolution). */
-    TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(1),
+    /** Number of trusted reverse-proxy hops in front of the API (client IP resolution). 0 trusts none. */
+    TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
     RATE_LIMIT_MAX_PER_MINUTE: z.coerce.number().int().min(1).default(120),
   })
   .superRefine((config, ctx) => {
@@ -44,6 +44,31 @@ const ConfigSchema = z
         code: 'custom',
         path: ['LOG_LEVEL'],
         message: 'trace is not allowed in production',
+      });
+    }
+    if (deployed && config.DATABASE_URL && !/^postgres(ql)?:\/\//.test(config.DATABASE_URL)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['DATABASE_URL'],
+        message: 'must be a postgres:// URL',
+      });
+    }
+    if (
+      deployed &&
+      config.DATABASE_URL &&
+      !/[?&]sslmode=(require|verify-ca|verify-full)(&|$)/.test(config.DATABASE_URL)
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['DATABASE_URL'],
+        message: 'must enforce TLS (sslmode=require, verify-ca or verify-full) when deployed',
+      });
+    }
+    if (deployed && config.SUPABASE_URL && !config.SUPABASE_URL.startsWith('https://')) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['SUPABASE_URL'],
+        message: 'must be https when deployed',
       });
     }
     for (const origin of config.CORS_ALLOWED_ORIGINS) {
@@ -65,6 +90,11 @@ export class ConfigError extends Error {
 
 /** Validates the environment. Error messages name the variables but never echo their values. */
 export function loadConfig(env: Record<string, string | undefined> = process.env): AppConfig {
+  // Fail closed: a production-built process (NODE_ENV=production) must say which environment it is,
+  // otherwise every deployed-only guard below would silently be skipped by the 'local' default.
+  if (env.NODE_ENV === 'production' && !env.APP_ENV) {
+    throw new ConfigError('Invalid configuration:\n  - APP_ENV: required when NODE_ENV=production');
+  }
   const result = ConfigSchema.safeParse(env);
   if (!result.success) {
     const problems = result.error.issues.map(
