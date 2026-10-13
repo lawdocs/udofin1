@@ -235,3 +235,7 @@ A new permission, usage string or permission-adding library needs, in one pull r
 | Is the 36% APR filter applied on iOS only or app-wide?                                                                                                                                  | Owner decision D-19        | app-store research, open question 3 |
 | What exactly does Play Console accept from an LSP (non-licensee) in the Personal Loan App Declaration?                                                                                  | Product owner              | app-store research, open question 1 |
 | Does `expo-secure-store` with `requireAuthentication` add any Android permission in SDK 57? Not checked in the research; verify on the first build that uses it.                        | Mobile lead                | unverified                          |
+
+## Addendum (13 October 2026, Phase 03)
+
+`expo-screen-capture` (used only to **block** screenshots on the one-time-code screen via `usePreventScreenCapture`) declares `android.permission.DETECT_SCREEN_CAPTURE` in its library manifest. We never detect screenshots, so the permission is added to `blockedPermissions` in `apps/mobile/app.config.ts` and stripped from the merged manifest. The Gradle-merged manifest of a release build has not been inspected in CI yet (needs the Android toolchain); `config:check` covers the declared configuration only.

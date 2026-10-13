@@ -63,6 +63,8 @@ or touch production data without explicit authorisation. Never claim a test pass
 | `packages/domain`                       | Pure business rules (money, lifecycles) — no I/O allowed               |
 | `packages/contracts`                    | Wire contracts: event envelope, problem details, primitives            |
 | `packages/adapters`                     | Provider ports, mocks and environment guard                            |
+| `packages/auth-client`, `portal-kit`    | Auth client, session handling, web sign-in handlers; shared portal UI  |
+| `tests/e2e`                             | Browser tests for the portals (fake Supabase Auth and API)             |
 | `packages/design-tokens`                | Themes and tenant-branding rules                                       |
 | `supabase/migrations`, `supabase/tests` | SQL-first schema (source of truth) and pgTAP tests                     |
 | `docs/`                                 | Architecture, ADRs, regulatory, security, testing, operations, product |
@@ -75,6 +77,8 @@ pnpm build                   # build packages and apps (Turborepo)
 pnpm lint && pnpm typecheck && pnpm test
 pnpm format                  # Prettier
 PGHOST=/tmp PGPORT=5432 PGUSER=postgres bash scripts/db-test-local.sh   # migrations + pgTAP locally
+pnpm --filter @udofin/api worker     # outbox worker; `... openapi` regenerates docs/api/openapi.json
+# API integration + browser tests need extra setup: docs/operations/local-development.md
 supabase db start && supabase test db                                    # same, on the Supabase stack (CI)
 ```
 

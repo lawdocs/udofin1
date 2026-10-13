@@ -1,6 +1,6 @@
 # ADR-0011: Background jobs — transactional outbox and pg-boss
 
-- **Status:** Proposed — not yet implemented
+- **Status:** Accepted with amendment (13 Oct 2026): the outbox is implemented as Postgres tables and functions with our own worker; pg-boss is not used (see Amendment)
 - **Date:** 2026-10-10
 - **Related:** ADR-0003, ADR-0004, ADR-0010, ADR-0012
 
@@ -77,3 +77,14 @@ Planned tests when implemented:
 - Queue volume degrades database performance.
 - pg-boss maintenance stalls.
 - The database moves off Supabase (ADR-0004).
+
+## Amendment (13 October 2026, Phase 03)
+
+**Implemented differently from the decision above, and why.** The plan named pg-boss for execution. The research that supported it could not be repeated for Phase 03 (the research agents were stopped), and a financial platform should not adopt a queue library whose behaviour behind Supabase's transaction pooler is unverified. The needed behaviour is small and well understood, so Phase 03 builds it directly:
+
+- `ops.outbox_events` is written **by database functions inside the business transaction** (`ops.enqueue_event`, called from `private.decide_change_request`), so the event exists if and only if the change committed. Enqueue is deduplicated by `dedupe_key`.
+- A worker claims events with `FOR UPDATE SKIP LOCKED` and a **lease**; a crashed worker's events become claimable again; completion requires still holding the lease; failures back off exponentially with jitter and end in the `dead` state after `max_attempts`; payloads are size-capped and screened for personal-data keys; only error codes are stored.
+- Delivery is at least once; handlers are idempotent. External calls happen outside database transactions.
+- The worker uses the `udofin_system` login and polls (no LISTEN/NOTIFY), so it works through any Postgres connection.
+
+pg-boss (or Graphile Worker) remains a valid later replacement behind the `OutboxStore` interface (`services/api/src/workers/outbox-worker.ts`) if scheduling, fan-out or throughput needs outgrow this. Details: [`../api/idempotency-and-outbox.md`](../api/idempotency-and-outbox.md).

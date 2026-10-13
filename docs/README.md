@@ -27,3 +27,10 @@
 |              | [`product/competitive-analysis.md`](product/competitive-analysis.md) | Competitor and UX research summary                               |
 | Specs        | [`specs/`](specs/README.md)                                          | Approved module specifications (one per module, added per phase) |
 | Research     | [`research/2026-10-10/`](research/2026-10-10/README.md)              | Source research notes behind the decisions                       |
+
+## Added in Phase 03
+
+- [`auth/README.md`](auth/README.md): authentication and session architecture (portals, mobile, database context).
+- [`api/idempotency-and-outbox.md`](api/idempotency-and-outbox.md) and [`api/openapi.json`](api/openapi.json): idempotency, outbox and the generated API description.
+- [`operations/local-development.md`](operations/local-development.md): commands to run and test everything locally.
+- [`specs/03-application-foundation.md`](specs/03-application-foundation.md): what was built, limits and the verification list.

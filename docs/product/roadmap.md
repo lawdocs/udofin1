@@ -226,6 +226,8 @@ every new migration; no personal data added to the schema without an entry in
 
 ### Phase 03 — Application foundation
 
+> **Status 13 Oct 2026:** application-level scope implemented on the feature branch (sign-in for portals and app, OpenAPI, idempotency, outbox and worker, shells) and documented in [`../specs/03-application-foundation.md`](../specs/03-application-foundation.md). **Not done and still open:** infrastructure as code, deployment workflows, environments and observability (need the hosting decision and cost approval), the merged-AndroidManifest release check, and verification against a live staging Supabase project.
+
 **Objective.** Build the plumbing every feature needs: secure login for all three front ends, a
 documented API, reliable background jobs, automated build and deployment, separate environments,
 and monitoring that keeps data in India.
