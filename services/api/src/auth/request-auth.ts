@@ -1,7 +1,8 @@
-import { PROBLEM_CONTENT_TYPE, type ProblemDetails } from '@udofin/contracts';
-import type { FastifyReply, FastifyRequest } from 'fastify';
-import { TokenError, type TokenVerifier, type VerifiedClaims } from './token-verifier.js';
+import { type FastifyRequest } from 'fastify';
+import { ApiError } from '../http/api-error.js';
 import { type UserContext, type UserTx } from '../db/user-context.js';
+import { type AuthDeps } from './deps.js';
+import { TokenError, type VerifiedClaims } from './token-verifier.js';
 
 export type ActorKind = 'borrower' | 'lender' | 'platform' | 'none' | 'system';
 
@@ -10,74 +11,39 @@ export interface Authenticated {
   actor: ActorKind;
 }
 
-export function sendProblem(
-  reply: FastifyReply,
-  request: FastifyRequest,
-  status: number,
-  title: string,
-  code: string,
-  detail?: string,
-): FastifyReply {
-  const body: ProblemDetails = {
-    type: 'about:blank',
-    title,
-    status,
-    code,
-    instance: request.id,
-    ...(detail ? { detail } : {}),
-  };
-  return reply.code(status).type(PROBLEM_CONTENT_TYPE).send(body);
-}
-
-export interface AuthOptions {
-  /** `staff` routes require a lender or platform user who completed the second factor (aal2). */
-  require: 'any_user' | 'staff';
-}
+export type AuthRequirement = 'user' | 'staff';
 
 /**
- * Verifies the bearer token, asks the DATABASE who the caller is (never the token), enforces MFA
- * for staff, and runs `handler` inside a user-context transaction. Sends the problem response and
- * returns undefined when the caller is not allowed.
+ * Verifies the bearer token, asks the DATABASE who the caller is (never the token), and enforces
+ * the second factor for staff and the route's audience. Throws ApiError; never sends a response.
  */
-export async function withAuthenticatedUser<T>(
-  deps: { verifier: TokenVerifier; context: UserContext },
-  request: FastifyRequest,
-  reply: FastifyReply,
-  options: AuthOptions,
-  handler: (tx: UserTx, auth: Authenticated) => Promise<T>,
-): Promise<T | undefined> {
-  let claims: VerifiedClaims;
+async function authenticate(deps: AuthDeps, request: FastifyRequest): Promise<VerifiedClaims> {
   try {
-    claims = await deps.verifier.verify(request.headers.authorization);
+    return await deps.verifier.verify(request.headers.authorization);
   } catch (error) {
     const reason = error instanceof TokenError ? error.reason : 'invalid';
-    reply.header('www-authenticate', 'Bearer');
-    sendProblem(reply, request, 401, 'Unauthorized', `token_${reason}`);
-    return undefined;
+    throw new ApiError(401, `token_${reason}`, 'Unauthorized', undefined, {
+      'www-authenticate': 'Bearer',
+    });
   }
+}
 
-  let denied: { status: number; title: string; code: string } | undefined;
-  const result = await deps.context.withUserContext(claims, async (tx) => {
+export async function runAsUser<T>(
+  deps: { verifier: AuthDeps['verifier']; context: UserContext },
+  request: FastifyRequest,
+  requirement: AuthRequirement,
+  handler: (tx: UserTx, auth: Authenticated) => Promise<T>,
+): Promise<T> {
+  const claims = await authenticate(deps, request);
+  return deps.context.withUserContext(claims, async (tx) => {
     const row = await tx.query<{ actor: ActorKind }>('select private.current_actor() as actor');
     const actor = row.rows[0]?.actor ?? 'none';
     if (actor === 'none' || actor === 'system') {
-      denied = { status: 403, title: 'Forbidden', code: 'no_active_access' };
-      return undefined;
+      throw new ApiError(403, 'no_active_access', 'Forbidden');
     }
     const staff = actor === 'lender' || actor === 'platform';
-    if (staff && claims.aal !== 'aal2') {
-      denied = { status: 401, title: 'Unauthorized', code: 'mfa_required' };
-      return undefined;
-    }
-    if (options.require === 'staff' && !staff) {
-      denied = { status: 403, title: 'Forbidden', code: 'staff_only' };
-      return undefined;
-    }
+    if (staff && claims.aal !== 'aal2') throw new ApiError(401, 'mfa_required', 'Unauthorized');
+    if (requirement === 'staff' && !staff) throw new ApiError(403, 'staff_only', 'Forbidden');
     return handler(tx, { claims, actor });
   });
-  if (denied) {
-    sendProblem(reply, request, denied.status, denied.title, denied.code);
-    return undefined;
-  }
-  return result;
 }

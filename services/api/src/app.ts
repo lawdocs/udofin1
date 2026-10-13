@@ -3,13 +3,15 @@ import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import { PROBLEM_CONTENT_TYPE, type ProblemDetails } from '@udofin/contracts';
+import { z } from 'zod';
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply } from 'fastify';
 import { type AuthDeps } from './auth/deps.js';
 import { type AppConfig } from './config.js';
 import { loggerOptions } from './logger.js';
-import { registerAdminRoutes } from './modules/admin/routes.js';
-import { registerMeRoutes } from './modules/me/routes.js';
-import { type ChangeRequestApplier } from './system/change-requests.js';
+import { authenticatedRoutes } from './http/api-routes.js';
+import { buildOpenApi } from './http/openapi.js';
+import { publicRoute, registerRoutes } from './http/routes.js';
+import { healthRoutes } from './modules/health/routes.js';
 
 /** A dependency the API needs before it can serve traffic (database, queue, ...). */
 export interface ReadinessCheck {
@@ -21,11 +23,17 @@ export interface AppDependencies {
   readinessChecks?: readonly ReadinessCheck[];
   /** Token verification and the per-request database context. Routes under /v1 exist only when set. */
   auth?: AuthDeps;
-  /** Applies approved change requests (system role). Admin routes exist only when set. */
-  changeRequestApplier?: ChangeRequestApplier;
 }
 
-const READINESS_TIMEOUT_MS = 2_000;
+export const API_VERSION = '0.3.0';
+
+declare module 'fastify' {
+  interface FastifyInstance {
+    /** Every route Fastify registered (method and url), for the contract test. */
+    registeredRoutes: { method: string; url: string }[];
+  }
+}
+
 const REQUEST_ID = /^[A-Za-z0-9-]{8,64}$/;
 
 function problem(
@@ -66,6 +74,13 @@ export async function buildApp(
       const incoming = req.headers['x-request-id'];
       return typeof incoming === 'string' && REQUEST_ID.test(incoming) ? incoming : randomUUID();
     },
+  });
+
+  const registered: { method: string; url: string }[] = [];
+  app.addHook('onRoute', (route) => {
+    for (const method of Array.isArray(route.method) ? route.method : [route.method]) {
+      if (method !== 'HEAD' && method !== 'OPTIONS') registered.push({ method, url: route.url });
+    }
   });
 
   app.addHook('onSend', async (request, reply) => {
@@ -124,50 +139,35 @@ export async function buildApp(
     void reply.code(status).type(PROBLEM_CONTENT_TYPE).send(body);
   });
 
-  /** Liveness: the process is up. Never touches dependencies, so restarts are not triggered by them. */
-  app.get('/health/live', { config: { rateLimit: false } }, () => ({ status: 'ok' }));
-
-  /** Readiness: every dependency answers within the timeout. Reports names only, never errors. */
-  // Rate-limited (it touches dependencies); orchestrators poll far below this rate.
-  app.get(
-    '/health/ready',
-    { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
-    async (_request, reply) => {
-      const checks = deps.readinessChecks ?? [];
-      const results = await Promise.all(
-        checks.map(async (dependency) => {
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), READINESS_TIMEOUT_MS);
-          try {
-            await Promise.race([
-              dependency.check(controller.signal),
-              new Promise<never>((_, reject) => {
-                controller.signal.addEventListener('abort', () => reject(new Error('timeout')));
-              }),
-            ]);
-            return { name: dependency.name, ok: true };
-          } catch (error) {
-            app.log.warn({ dependency: dependency.name, err: error }, 'readiness check failed');
-            return { name: dependency.name, ok: false };
-          } finally {
-            clearTimeout(timer);
-          }
-        }),
-      );
-      const ready = results.every((result) => result.ok);
-      return reply.code(ready ? 200 : 503).send({
-        status: ready ? 'ready' : 'not_ready',
-        checks: Object.fromEntries(
-          results.map((result) => [result.name, result.ok ? 'ok' : 'failing']),
-        ),
-      });
-    },
-  );
-
-  if (deps.auth) {
-    registerMeRoutes(app, deps.auth);
-    if (deps.changeRequestApplier) registerAdminRoutes(app, deps.auth, deps.changeRequestApplier);
+  const routes = [
+    ...healthRoutes(deps.readinessChecks ?? [], (name, error) => {
+      app.log.warn({ dependency: name, err: error }, 'readiness check failed');
+    }),
+    ...authenticatedRoutes,
+  ];
+  if (config.APP_ENV !== 'production') {
+    routes.push(
+      publicRoute({
+        method: 'get',
+        path: '/v1/openapi.json',
+        operationId: 'getOpenApiDocument',
+        summary: 'OpenAPI 3.1 description of this API (not served in production)',
+        tags: ['Operations'],
+        auth: 'none',
+        responses: { 200: z.record(z.string(), z.unknown()) },
+        handler: () =>
+          Promise.resolve({
+            status: 200,
+            body: buildOpenApi(
+              routes.filter((r) => r.path !== '/v1/openapi.json'),
+              API_VERSION,
+            ),
+          }),
+      }),
+    );
   }
+  registerRoutes(app, routes, deps.auth ? { auth: deps.auth } : {});
+  app.decorate('registeredRoutes', registered);
 
   return app;
 }

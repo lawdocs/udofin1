@@ -22,9 +22,17 @@ describe('system pool import boundary', () => {
     expect(offenders.map((f) => relative(SRC, f))).toEqual([]);
   });
 
-  it('server.ts reaches the system role only through createSystemServices', () => {
+  it('the HTTP server never imports anything from src/system or src/workers', () => {
     const server = readFileSync(join(SRC, 'server.ts'), 'utf8');
-    expect(server).toContain("from './system/index.js'");
-    expect(server).not.toContain('system/pool');
+    expect(server).not.toMatch(/from\s+['"]\.\/(system|workers)\//);
+  });
+
+  it('modules and routes do not import the system folder either', () => {
+    const offenders = files(SRC).filter((file) => {
+      const rel = relative(SRC, file);
+      if (ALLOWED.includes(rel.split(sep)[0] ?? '')) return false;
+      return /from\s+['"][^'"]*\/system\//.test(readFileSync(file, 'utf8'));
+    });
+    expect(offenders.map((f) => relative(SRC, f))).toEqual([]);
   });
 });

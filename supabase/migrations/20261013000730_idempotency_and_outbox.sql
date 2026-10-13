@@ -44,10 +44,12 @@ alter table ops.idempotency_keys force row level security;
 create or replace function ops.require_idempotency_completed()
 returns trigger
 language plpgsql
+security definer
 set search_path = ''
 as $$
 begin
-  if new.response_status is null then
+  -- NEW is the row as inserted; read the current version, which complete() has updated by commit time.
+  if exists (select 1 from ops.idempotency_keys k where k.id = new.id and k.response_status is null) then
     raise exception 'idempotency record committed without a stored response' using errcode = '55000';
   end if;
   return null;

@@ -4,7 +4,6 @@ import { createTokenVerifier, supabaseKeys } from './auth/token-verifier.js';
 import { loadConfig } from './config.js';
 import { assertUserLoginPosture } from './db/login-posture.js';
 import { createUserContext } from './db/user-context.js';
-import { createSystemServices } from './system/index.js';
 
 const config = loadConfig();
 
@@ -32,10 +31,6 @@ pool?.on('error', (error) => {
 // Refuse to start if the user-request login could skip row-level security.
 if (pool) await assertUserLoginPosture(pool);
 
-const system = config.SYSTEM_DATABASE_URL
-  ? createSystemServices(config.SYSTEM_DATABASE_URL)
-  : undefined;
-
 const readinessChecks: ReadinessCheck[] = [];
 if (pool) {
   readinessChecks.push({
@@ -58,7 +53,6 @@ if (pool && config.SUPABASE_URL) {
 const app = await buildApp(config, {
   readinessChecks,
   ...(auth ? { auth } : {}),
-  ...(system ? { changeRequestApplier: system.changeRequestApplier } : {}),
 });
 
 let shuttingDown = false;
@@ -69,7 +63,6 @@ async function shutdown(signal: string): Promise<void> {
   try {
     await app.close();
     await pool?.end();
-    await system?.close();
     process.exit(0);
   } catch (error) {
     app.log.error({ err: error }, 'error during shutdown');

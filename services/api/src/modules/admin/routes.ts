@@ -1,8 +1,8 @@
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { type AuthDeps } from '../../auth/deps.js';
-import { sendProblem, withAuthenticatedUser } from '../../auth/request-auth.js';
-import { type ChangeRequestApplier } from '../../system/change-requests.js';
+import { ApiError } from '../../http/api-error.js';
+import { decodeCursor, encodeCursor, PageQuerySchema } from '../../http/pagination.js';
+import { userRoute, type RouteDefinition } from '../../http/routes.js';
 
 const CHANGE_TYPES = [
   'organization.create',
@@ -13,6 +13,7 @@ const CHANGE_TYPES = [
   'role.revoke',
   'consent_notice.publish',
 ] as const;
+const STATUSES = ['pending', 'approved', 'rejected', 'applied', 'expired'] as const;
 
 const CreateBody = z.strictObject({
   type: z.enum(CHANGE_TYPES),
@@ -21,61 +22,39 @@ const CreateBody = z.strictObject({
 });
 const DecisionBody = z.strictObject({ note: z.string().max(1000).optional() });
 const IdParams = z.strictObject({ id: z.uuid() });
-const IdempotencyKey = z
-  .string()
-  .min(16)
-  .max(128)
-  .regex(/^[A-Za-z0-9._:-]+$/);
 
-interface PgLikeError {
-  code?: string;
-  hint?: string;
-}
-
-function mapDatabaseError(error: unknown): { status: number; code: string } | undefined {
-  const e = error as PgLikeError;
-  if (typeof e?.code !== 'string') return undefined;
-  if (e.code === '42501') {
-    return e.hint === 'mfa_required'
-      ? { status: 401, code: 'mfa_required' }
-      : { status: 403, code: 'forbidden' };
-  }
-  switch (e.code) {
-    case 'P0002':
-      return { status: 404, code: 'not_found' };
-    case '22023':
-      return { status: 422, code: 'invalid_change_request' };
-    case '23505':
-    case '23514':
-    case '55000':
-      return { status: 409, code: 'change_request_conflict' };
-    default:
-      return undefined;
-  }
-}
-
-function fail(
-  reply: FastifyReply,
-  request: FastifyRequest,
-  error: unknown,
-): FastifyReply | undefined {
-  const mapped = mapDatabaseError(error);
-  if (!mapped) return undefined;
-  return sendProblem(reply, request, mapped.status, 'Change request refused', mapped.code);
-}
+const ChangeRequestDto = z.object({
+  id: z.uuid(),
+  type: z.enum(CHANGE_TYPES),
+  targetOrganizationId: z.uuid().nullable(),
+  status: z.enum(STATUSES),
+  requestedBy: z.uuid(),
+  decidedBy: z.uuid().nullable(),
+  createdAt: z.string(),
+  expiresAt: z.string(),
+});
+const CreatedResponse = z.object({ id: z.uuid() });
+const DecisionResponse = z.object({ id: z.uuid(), status: z.enum(STATUSES) });
+const ListResponse = z.object({
+  items: z.array(ChangeRequestDto),
+  nextCursor: z.string().nullable(),
+});
 
 interface RequestRow {
   id: string;
-  request_type: string;
+  request_type: (typeof CHANGE_TYPES)[number];
   target_org_id: string | null;
-  status: string;
+  status: (typeof STATUSES)[number];
   requested_by: string;
   decided_by: string | null;
   created_at: string;
   expires_at: string;
 }
 
-const toDto = (row: RequestRow) => ({
+const COLUMNS = `id, request_type::text as request_type, target_org_id, status::text as status, requested_by,
+                 decided_by, created_at::text as created_at, expires_at::text as expires_at`;
+
+const toDto = (row: RequestRow): z.infer<typeof ChangeRequestDto> => ({
   id: row.id,
   type: row.request_type,
   targetOrganizationId: row.target_org_id,
@@ -86,111 +65,133 @@ const toDto = (row: RequestRow) => ({
   expiresAt: row.expires_at,
 });
 
+const STAFF_WRITE_LIMIT = { max: 30, timeWindow: '1 minute' };
+
 /**
  * Two-person change control. The database enforces who may request and decide; these routes only
- * translate. Approving applies the change immediately through the narrow system module.
+ * translate. Approving enqueues application of the change in the same transaction (outbox); the
+ * worker applies it, so a crash between decision and application cannot lose it.
  */
-export function registerAdminRoutes(
-  app: FastifyInstance,
-  deps: AuthDeps,
-  applier: ChangeRequestApplier,
-): void {
-  app.post('/v1/admin/change-requests', async (request, reply) => {
-    const key = IdempotencyKey.safeParse(request.headers['idempotency-key']);
-    if (!key.success) {
-      return sendProblem(reply, request, 400, 'Bad Request', 'idempotency_key_required');
-    }
-    const body = CreateBody.safeParse(request.body);
-    if (!body.success) return sendProblem(reply, request, 422, 'Unprocessable', 'invalid_body');
-    try {
-      const id = await withAuthenticatedUser(
-        deps,
-        request,
-        reply,
-        { require: 'staff' },
-        async (tx) => {
-          const row = await tx.query<{ id: string }>(
-            'select private.request_change($1::tenancy.change_request_type, $2::uuid, $3::jsonb, $4) as id',
-            [
-              body.data.type,
-              body.data.targetOrganizationId,
-              JSON.stringify(body.data.payload),
-              key.data,
-            ],
-          );
-          return row.rows[0]?.id;
-        },
+export const adminRoutes: RouteDefinition[] = [
+  userRoute({
+    method: 'post',
+    path: '/v1/admin/change-requests',
+    operationId: 'createChangeRequest',
+    summary: 'File a change request',
+    description:
+      'Requires an Idempotency-Key. A repeat with the same key and body returns the original response; the same key with a different body is refused with 422 idempotency_key_reused.',
+    tags: ['Administration'],
+    auth: 'staff',
+    idempotent: true,
+    idempotencyTenant: ({ body }) => body.targetOrganizationId,
+    body: CreateBody,
+    responses: { 201: CreatedResponse },
+    errors: [400, 401, 403, 409, 422],
+    rateLimit: STAFF_WRITE_LIMIT,
+    handler: async ({ tx, body, idempotencyKey }) => {
+      const input = body;
+      const row = await tx.query<{ id: string }>(
+        'select private.request_change($1::tenancy.change_request_type, $2::uuid, $3::jsonb, $4) as id',
+        [
+          input.type,
+          input.targetOrganizationId,
+          JSON.stringify(input.payload),
+          // The database also de-duplicates on (requester, key): derive its key from the HTTP key
+          // so the two guards agree.
+          createHash('sha256')
+            .update(idempotencyKey ?? '')
+            .digest('hex'),
+        ],
       );
-      if (id) return await reply.code(201).send({ id });
-      return reply;
-    } catch (error) {
-      const handled = fail(reply, request, error);
-      if (handled) return handled;
-      throw error;
-    }
-  });
+      const id = row.rows[0]?.id;
+      if (!id) throw new Error('request_change returned nothing');
+      return { status: 201, body: { id } };
+    },
+  }),
 
-  app.get('/v1/admin/change-requests', async (request, reply) => {
-    const rows = await withAuthenticatedUser(
-      deps,
-      request,
-      reply,
-      { require: 'staff' },
-      async (tx) => {
-        const result = await tx.query<RequestRow>(
-          `select id, request_type::text, target_org_id, status::text, requested_by, decided_by,
-                created_at::text, expires_at::text
-           from tenancy.change_requests order by created_at desc limit 100`,
+  userRoute({
+    method: 'get',
+    path: '/v1/admin/change-requests',
+    operationId: 'listChangeRequests',
+    summary: 'List change requests visible to the caller',
+    description: 'Newest first, cursor pagination. Rows are limited by row-level security.',
+    tags: ['Administration'],
+    auth: 'staff',
+    query: PageQuerySchema,
+    responses: { 200: ListResponse },
+    errors: [400, 401, 403, 422],
+    handler: async ({ tx, query }) => {
+      const page = query;
+      const cursor = decodeCursor(page.cursor);
+      const result = await tx.query<RequestRow>(
+        `select ${COLUMNS} from tenancy.change_requests
+          where ($1::timestamptz is null or (created_at, id) < ($1::timestamptz, $2::uuid))
+          order by created_at desc, id desc limit $3`,
+        [cursor?.t ?? null, cursor?.id ?? null, page.limit + 1],
+      );
+      const rows = result.rows.slice(0, page.limit);
+      const more = result.rows.length > page.limit;
+      const last = rows.at(-1);
+      return {
+        status: 200,
+        body: {
+          items: rows.map(toDto),
+          nextCursor: more && last ? encodeCursor({ t: last.created_at, id: last.id }) : null,
+        },
+      };
+    },
+  }),
+
+  userRoute({
+    method: 'get',
+    path: '/v1/admin/change-requests/:id',
+    operationId: 'getChangeRequest',
+    summary: 'Read one change request (use to follow an approval to "applied")',
+    tags: ['Administration'],
+    auth: 'staff',
+    params: IdParams,
+    responses: { 200: ChangeRequestDto },
+    errors: [401, 403, 404, 422],
+    handler: async ({ tx, params }) => {
+      const result = await tx.query<RequestRow>(
+        `select ${COLUMNS} from tenancy.change_requests where id = $1::uuid`,
+        [params.id],
+      );
+      const row = result.rows[0];
+      if (!row) throw new ApiError(404, 'not_found', 'Not Found');
+      return { status: 200, body: toDto(row) };
+    },
+  }),
+
+  ...(['approve', 'reject'] as const).map((verb) =>
+    userRoute({
+      method: 'post',
+      path: `/v1/admin/change-requests/:id/${verb}`,
+      operationId: `${verb}ChangeRequest`,
+      summary: `${verb === 'approve' ? 'Approve' : 'Reject'} a change request`,
+      description:
+        verb === 'approve'
+          ? 'Must be a different person from the requester. Approval returns status "approved"; the change is applied asynchronously by the worker (poll the request until "applied").'
+          : 'Must be a different person from the requester.',
+      tags: ['Administration'],
+      auth: 'staff',
+      idempotent: true,
+      params: IdParams,
+      body: DecisionBody,
+      responses: { 200: DecisionResponse },
+      errors: [400, 401, 403, 404, 409, 422],
+      rateLimit: STAFF_WRITE_LIMIT,
+      handler: async ({ tx, params, body }) => {
+        const { id } = params;
+        const { note } = body;
+        const row = await tx.query<{ status: (typeof STATUSES)[number] }>(
+          'select private.decide_change_request($1::uuid, $2::boolean, $3)::text as status',
+          [id, verb === 'approve', note ?? null],
         );
-        return result.rows.map(toDto);
+        const status = row.rows[0]?.status;
+        if (!status) throw new Error('decide_change_request returned nothing');
+        return { status: 200, body: { id, status } };
       },
-    );
-    if (rows) return reply.send({ items: rows });
-    return reply;
-  });
-
-  const decide = (approve: boolean) => async (request: FastifyRequest, reply: FastifyReply) => {
-    const params = IdParams.safeParse(request.params);
-    const body = DecisionBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success) {
-      return sendProblem(reply, request, 422, 'Unprocessable', 'invalid_request');
-    }
-    try {
-      const status = await withAuthenticatedUser(
-        deps,
-        request,
-        reply,
-        { require: 'staff' },
-        async (tx) => {
-          const row = await tx.query<{ status: string }>(
-            'select private.decide_change_request($1::uuid, $2::boolean, $3)::text as status',
-            [params.data.id, approve, body.data.note ?? null],
-          );
-          return row.rows[0]?.status;
-        },
-      );
-      if (!status) return reply;
-      if (status !== 'approved') return await reply.send({ id: params.data.id, status });
-      try {
-        const result = await applier.apply(params.data.id);
-        return await reply.send({ id: params.data.id, status: 'applied', result });
-      } catch (error) {
-        // The approval stands; applying failed (for example a segregation rule). Report, do not hide.
-        request.log.warn(
-          { code: (error as PgLikeError).code },
-          'approved change request not applied',
-        );
-        return (
-          fail(reply, request, error) ??
-          sendProblem(reply, request, 502, 'Change not applied', 'apply_failed')
-        );
-      }
-    } catch (error) {
-      const handled = fail(reply, request, error);
-      if (handled) return handled;
-      throw error;
-    }
-  };
-  app.post('/v1/admin/change-requests/:id/approve', decide(true));
-  app.post('/v1/admin/change-requests/:id/reject', decide(false));
-}
+    }),
+  ),
+];

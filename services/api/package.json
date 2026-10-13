@@ -14,7 +14,10 @@
     "dev": "tsx watch src/server.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "worker": "tsx src/workers/main.ts",
+    "worker:start": "node dist/workers/main.js",
+    "openapi": "tsx scripts/generate-openapi.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.1",

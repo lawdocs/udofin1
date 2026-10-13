@@ -8,3 +8,4 @@ pnpm-lock.yaml
 supabase/.temp
 apps/mobile/android
 apps/mobile/ios
+docs/api/openapi.json
