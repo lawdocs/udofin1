@@ -45,6 +45,8 @@ const BLOCKED_ANDROID_PERMISSIONS = [
   'android.permission.WRITE_CALENDAR',
   'android.permission.BODY_SENSORS',
   'android.permission.ACTIVITY_RECOGNITION',
+  // Added by expo-screen-capture's manifest; we use screenshot BLOCKING only, never detection.
+  'android.permission.DETECT_SCREEN_CAPTURE',
 ];
 
 export default ({ config }: ConfigContext): ExpoConfig => ({

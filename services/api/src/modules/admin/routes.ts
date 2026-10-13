@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
-  CHANGE_REQUEST_STATUSES,
+  type CHANGE_REQUEST_STATUSES,
   CHANGE_REQUEST_TYPES,
   ChangeRequest,
   ChangeRequestDecision,

@@ -168,7 +168,11 @@ export function createAuthHandlers(options: BffOptions) {
       const account = sha(input.email.toLowerCase());
       if (
         !options.rateLimiter.hit(`signin:ip:${ip(request)}`, 20, 900) ||
-        !options.rateLimiter.hit(`signin:acct:${account}`, 8, 900)
+        // Per address AND account: one attacker cannot lock a real user out of their own sign-in
+        // from elsewhere. A looser account-wide ceiling backstops distributed guessing; Supabase's own
+        // limits and the second factor are the authoritative protection.
+        !options.rateLimiter.hit(`signin:acct-ip:${ip(request)}:${account}`, 8, 900) ||
+        !options.rateLimiter.hit(`signin:acct:${account}`, 60, 900)
       ) {
         return json(429, { error: 'rate_limited' }, [], { 'retry-after': '900' });
       }
@@ -195,7 +199,7 @@ export function createAuthHandlers(options: BffOptions) {
       const { access } = readTokens(request);
       if (!access) return json(401, { error: 'invalid_session' });
       const userId = readTokenClaims(access)?.sub ?? 'unknown';
-      if (!options.rateLimiter.hit(`mfa-enrol:${userId}`, 5, 900))
+      if (!options.rateLimiter.hit(`mfa-enrol:${ip(request)}:${userId}`, 5, 900))
         return json(429, { error: 'rate_limited' });
       try {
         const factors = await options.gotrue.listFactors(access);
@@ -225,7 +229,7 @@ export function createAuthHandlers(options: BffOptions) {
       const { access } = readTokens(request);
       if (!access) return json(401, { error: 'invalid_session' });
       const userId = readTokenClaims(access)?.sub ?? 'unknown';
-      if (!options.rateLimiter.hit(`mfa-verify:${userId}`, 6, 300)) {
+      if (!options.rateLimiter.hit(`mfa-verify:${ip(request)}:${userId}`, 6, 300)) {
         return json(429, { error: 'rate_limited' }, [], { 'retry-after': '300' });
       }
       try {

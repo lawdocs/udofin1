@@ -189,53 +189,33 @@ describe('sign-in', () => {
     }
   });
 
-  it('rate-limits repeated attempts per account and per address, existing account or not', async () => {
+  it('rate-limits repeated attempts per address and account, existing account or not, without letting a stranger lock the real user out', async () => {
     const { h } = handlers({
       gotrue: gotrueFake({
         signInWithPassword: () => Promise.reject(new AuthFailure('invalid_credentials')),
       }),
     });
+    const attempt = (email: string, ip: string, password = 'x') =>
+      h.signIn(post('/auth/sign-in', { email, password }, { 'x-test-ip': ip }));
     const statuses: number[] = [];
     for (let i = 0; i < 10; i += 1)
-      statuses.push(
-        (
-          await h.signIn(
-            post(
-              '/auth/sign-in',
-              { email: 'victim@udofin.example', password: `try${i}` },
-              { 'x-test-ip': `198.51.100.${i}` },
-            ),
-          )
-        ).status,
-      );
+      statuses.push((await attempt('victim@udofin.example', '198.51.100.1', `try${i}`)).status);
     expect(statuses.slice(0, 8)).toEqual(Array(8).fill(401));
     expect(statuses.slice(8)).toEqual([429, 429]);
+    // The real user, from their own address, is not locked out by that attacker.
+    expect((await attempt('victim@udofin.example', '192.0.2.50')).status).toBe(401);
     // A different account from a fresh address is unaffected.
-    expect(
-      (
-        await h.signIn(
-          post(
-            '/auth/sign-in',
-            { email: 'other@udofin.example', password: 'x' },
-            { 'x-test-ip': '192.0.2.1' },
-          ),
-        )
-      ).status,
-    ).toBe(401);
+    expect((await attempt('other@udofin.example', '192.0.2.1')).status).toBe(401);
+    // One address trying many accounts is throttled.
     const noisy: number[] = [];
     for (let i = 0; i < 22; i += 1)
-      noisy.push(
-        (
-          await h.signIn(
-            post(
-              '/auth/sign-in',
-              { email: `u${i}@udofin.example`, password: 'x' },
-              { 'x-test-ip': '192.0.2.77' },
-            ),
-          )
-        ).status,
-      );
+      noisy.push((await attempt(`u${i}@udofin.example`, '192.0.2.77')).status);
     expect(noisy.at(-1)).toBe(429);
+    // Distributed guessing against one account hits the account-wide ceiling.
+    const spread: number[] = [];
+    for (let i = 0; i < 70; i += 1)
+      spread.push((await attempt('target@udofin.example', `203.0.113.${i + 1}`)).status);
+    expect(spread.at(-1)).toBe(429);
   });
 
   it('maps upstream rate limiting and outages without leaking details', async () => {
