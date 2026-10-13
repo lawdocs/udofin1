@@ -13,6 +13,7 @@ import { createBorrowerProcessor } from '../../src/system/borrower.js';
 import { createChangeRequestApplier } from '../../src/system/change-requests.js';
 import { createSystemPool, type SystemPool } from '../../src/system/pool.js';
 import { createHandlers } from '../../src/workers/handlers.js';
+import { type OutboxEvent } from '../../src/workers/outbox-worker.js';
 
 const ADMIN = process.env.INTEGRATION_ADMIN_URL;
 const API = process.env.INTEGRATION_API_URL;
@@ -27,11 +28,6 @@ const fakeVerifier: TokenVerifier = {
   },
 };
 const token = (user: string) => ({ authorization: `Bearer test.${user}.aal1` });
-const silent: WorkerLogger = {
-  info: () => undefined,
-  warn: () => undefined,
-  error: () => undefined,
-};
 let nextAddress = 1;
 const freshAddress = () => `10.7.${(nextAddress >> 8) & 255}.${nextAddress++ & 255}`;
 const letters = (n: number) =>
@@ -130,14 +126,13 @@ describe.skipIf(!enabled)('borrower API against a real database', () => {
       [purposeA, purposeB],
     );
     // Fixture notices at a version above any seeded one so they are the current wording.
-    const version = 900 + Math.floor(Math.random() * 90_000);
     for (const purpose of ['terms_of_use', 'privacy_notice', 'share_with_lenders']) {
       const id = randomUUID();
       notice[purpose] = id;
       await admin.query(
         `insert into consent.notices (id, purpose, version, language, title, body_markdown, status, published_at, drafted_by, approved_by, review_status)
-         values ($1, $2, $3, 'en', $2, $4, 'published', now(), $5, $6, 'approved')`,
-        [id, purpose, version, `fixture text for ${purpose}`, ids.drafter, ids.approver],
+         values ($1, $2, (select coalesce(max(version), 0) + 1 from consent.notices where purpose = $2 and language = 'en'), 'en', $2, $3, 'published', now(), $4, $5, 'approved')`,
+        [id, purpose, `fixture text for ${purpose}`, ids.drafter, ids.approver],
       );
     }
 
@@ -247,8 +242,8 @@ describe.skipIf(!enabled)('borrower API against a real database', () => {
 
       const marketing = await admin.query<{ id: string }>(
         `insert into consent.notices (id, purpose, version, language, title, body_markdown, status, published_at, drafted_by, approved_by, review_status)
-         values (gen_random_uuid(), 'marketing', $1, 'en', 'm', 'm', 'published', now(), $2, $3, 'approved') returning id`,
-        [900 + Math.floor(Math.random() * 90_000), ids.drafter, ids.approver],
+         values (gen_random_uuid(), 'marketing', (select coalesce(max(version), 0) + 1 from consent.notices where purpose = 'marketing' and language = 'en'), 'en', 'm', 'm', 'published', now(), $1, $2, 'approved') returning id`,
+        [ids.drafter, ids.approver],
       );
       const refused = await post('/v1/consent/decisions', ids.b1, {
         noticeId: marketing.rows[0]?.id,
@@ -560,8 +555,14 @@ describe.skipIf(!enabled)('borrower API against a real database', () => {
       );
       expect(Number(queued.rows[0]?.n)).toBe(1);
       // Run the handler directly: the shared outbox queue is also used by other test files running in parallel.
-      await handlers['borrower.deletion_requested']?.run({ deletion_request_id: deletionId });
-      await handlers['borrower.deletion_requested']?.run({ deletion_request_id: deletionId });
+      await handlers['borrower.deletion_requested']?.run(
+        { deletion_request_id: deletionId },
+        {} as OutboxEvent,
+      );
+      await handlers['borrower.deletion_requested']?.run(
+        { deletion_request_id: deletionId },
+        {} as OutboxEvent,
+      );
       const request = await admin.query<{ status: string; removed: boolean }>(
         `select d.status::text, (d.auth_identity_removed_at is not null) removed
            from identity.deletion_requests d join identity.borrowers b on b.id = d.borrower_id where b.user_id = $1`,
