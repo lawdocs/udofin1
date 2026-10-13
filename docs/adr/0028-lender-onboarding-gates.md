@@ -24,4 +24,4 @@ Positive: one code path for all lender types; no auto-approval path exists; hist
 
 ## Verification
 
-`supabase/tests/008_onboarding.test.sql` (132 assertions), `services/api/test/integration/onboarding.integration.test.ts`, `packages/portal-kit/test/onboarding.test.tsx`, updated authorisation matrix (`006`).
+`supabase/tests/008_onboarding.test.sql` (137 assertions), `services/api/test/integration/onboarding.integration.test.ts`, `packages/portal-kit/test/onboarding.test.tsx`, updated authorisation matrix (`006`).

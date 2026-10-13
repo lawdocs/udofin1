@@ -2,7 +2,7 @@
 -- requirements register and activation gates. Synthetic data only.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(132);
+select plan(137);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -443,6 +443,36 @@ select is(pg_temp.err($$delete from onboarding.gate_requests$$), 'P0001|Record a
 select is(pg_temp.err($$update onboarding.documents set label = 'renamed'$$), 'P0001|Record a compensating entry instead.', 'document records cannot be altered');
 select is(pg_temp.err($$delete from audit.events$$), 'P0001|Record a compensating entry instead.', 'audit records cannot be deleted');
 select is(pg_temp.err($$truncate onboarding.lender_gates$$), 'P0001|', 'truncate is blocked');
+
+-- 14. Review-hardening rules ---------------------------------------------------------------------
+-- A contributor cannot waive a requirement they created (manager+approver user 3).
+select pg_temp.as_user('d1000000-0000-4000-8000-000000000003');
+select pg_temp.keep('req_x', onboarding.requirement_create('d3000000-0000-4000-8000-000000000000', '{"title": "Contributor waiver test", "mandatory": true}'));
+select is(pg_temp.err(format($$select onboarding.requirement_set_status(%L, 'waived', 'Trying to waive my own item')$$, pg_temp.got('req_x'))), '42501|self_approval',
+  'the person who created a requirement cannot waive it');
+select pg_temp.as_user('d1000000-0000-4000-8000-000000000002');
+select is(pg_temp.err(format($$select onboarding.requirement_set_status(%L, 'waived', 'Independent approver waives with a reason')$$, pg_temp.got('req_x'))), 'ok',
+  'an independent approver can waive with a reason');
+-- The uploader of evidence cannot verify it (user 3 uploads, the lender submits, user 3 tries to verify).
+select pg_temp.as_user('d1000000-0000-4000-8000-000000000003');
+select pg_temp.keep('doc_b1', onboarding.register_document('d3000000-0000-4000-8000-000000000000', 'licence', 'Beta licence (synthetic)', 'dev/d3/lic-0001', repeat('7', 64), 800, 'application/pdf'));
+select pg_temp.as_user('d1000000-0000-4000-8000-000000000006');
+select onboarding.verification_submit('d3000000-0000-4000-8000-000000000000', pg_temp.got('doc_b1'));
+select pg_temp.as_user('d1000000-0000-4000-8000-000000000003');
+select is(pg_temp.err($$select onboarding.verification_decide('d3000000-0000-4000-8000-000000000000', true, 'Checked evidence I uploaded myself')$$), '42501|self_approval',
+  'the uploader of the evidence cannot verify it');
+-- Revoking the category sign-off takes a live lender out of borrower view without another request.
+select pg_temp.as_owner();
+update onboarding.institution_categories set activation_allowed = false where key = 'nbfc_icc';
+select is(private.lender_is_live('d2000000-0000-4000-8000-000000000000'), false, 'revoking the category sign-off ends borrower visibility');
+update onboarding.institution_categories set activation_allowed = true where key = 'nbfc_icc';
+-- A stale pending request is cancelled by the decider and does not wedge the lender.
+select pg_temp.as_owner();
+insert into onboarding.gate_requests (id, lender_org_id, from_stage, target_stage, requested_by)
+values ('d5000000-0000-4000-8000-000000000001', 'd2000000-0000-4000-8000-000000000000', 'profile_created', 'institution_verified', 'd1000000-0000-4000-8000-000000000001');
+select pg_temp.as_user('d1000000-0000-4000-8000-000000000002');
+select onboarding.gate_decide('d5000000-0000-4000-8000-000000000001', true);
+select is((select status from onboarding.gate_requests where id = 'd5000000-0000-4000-8000-000000000001'), 'cancelled', 'a stale gate request is cancelled and the cancellation is kept');
 
 select * from finish();
 rollback;

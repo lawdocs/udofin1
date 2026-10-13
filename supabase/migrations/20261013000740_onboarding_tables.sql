@@ -578,7 +578,7 @@ create table onboarding.lender_requirements (
     status not in ('accepted', 'rejected', 'waived', 'not_applicable') or (reviewed_by is not null and reviewed_at is not null)
   ),
   constraint accepted_has_evidence check (status <> 'accepted' or not evidence_required or evidence_document_id is not null),
-  constraint review_independent check (reviewed_by is null or status in ('waived', 'not_applicable') or not (reviewed_by = any (contributors)))
+  constraint review_independent check (reviewed_by is null or not (reviewed_by = any (contributors)))
 );
 create unique index requirements_template_scope on onboarding.lender_requirements
   (lender_org_id, template_key, coalesce(service_id, '00000000-0000-0000-0000-000000000000'::uuid))

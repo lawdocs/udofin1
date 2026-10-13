@@ -113,6 +113,23 @@ begin
 end
 $$;
 
+
+-- The person who uploaded a piece of evidence cannot be the one who accepts it.
+create or replace function private.ob_assert_not_uploader(p_document uuid)
+returns void
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if p_document is not null and exists (
+    select 1 from onboarding.documents d where d.id = p_document and d.uploaded_by = (select auth.uid())) then
+    raise exception 'you uploaded this evidence and cannot also accept it' using errcode = '42501', hint = 'self_approval';
+  end if;
+end
+$$;
+
 create or replace function onboarding.stage_order(p_stage text)
 returns integer
 language sql
@@ -292,6 +309,7 @@ begin
     raise exception 'profile is %, not submitted for verification', v_p.verification_status using errcode = '55000';
   end if;
   perform private.ob_assert_independent(v_p.contributors, 'verify it');
+  perform private.ob_assert_not_uploader(v_p.verification_evidence_id);
   if p_approve then
     if v_p.registration_no is null or v_p.licence_status <> 'active' then
       raise exception 'a profile without a registration number and an active licence status cannot be verified' using errcode = '55000';
@@ -467,6 +485,7 @@ begin
     raise exception 'profile is %, not submitted', v_row.status using errcode = '55000';
   end if;
   perform private.ob_assert_independent(v_row.contributors, 'review it');
+  perform private.ob_assert_not_uploader(v_row.evidence_document_id);
   if p_approve then
     if v_row.evidence_document_id is null then
       raise exception 'evidence is required to verify an accounting profile' using errcode = '55000', hint = 'evidence_required';
@@ -797,8 +816,8 @@ begin
   for v_t in select * from onboarding.requirement_templates t where t.active
              and (t.applies_to_category_keys is null or v_cat = any (t.applies_to_category_keys)) loop
     if v_t.applies_to_service_category is null then
-      insert into onboarding.lender_requirements (lender_org_id, template_key, title, description, mandatory, evidence_required, created_by)
-      values (p_lender, v_t.key, v_t.title, v_t.description, v_t.mandatory, v_t.evidence_required, (select auth.uid()))
+      insert into onboarding.lender_requirements (lender_org_id, template_key, title, description, mandatory, evidence_required, created_by, contributors)
+      values (p_lender, v_t.key, v_t.title, v_t.description, v_t.mandatory, v_t.evidence_required, (select auth.uid()), array[(select auth.uid())])
       on conflict do nothing;
       get diagnostics v_rows = row_count;
       v_n := v_n + v_rows;
@@ -832,9 +851,9 @@ begin
   perform private.ob_check_keys(p_data, array['title', 'description', 'service_id', 'product_id', 'integration_id', 'mandatory',
     'evidence_required', 'due_on']);
   insert into onboarding.lender_requirements (lender_org_id, title, description, service_id, product_id, integration_id, mandatory,
-    evidence_required, due_on, created_by)
+    evidence_required, due_on, created_by, contributors)
   select p_lender, r.title, r.description, r.service_id, r.product_id, r.integration_id, coalesce(r.mandatory, true),
-         coalesce(r.evidence_required, false), r.due_on, (select auth.uid())
+         coalesce(r.evidence_required, false), r.due_on, (select auth.uid()), array[(select auth.uid())]
   from jsonb_populate_record(null::onboarding.lender_requirements, p_data) r
   returning id into v_id;
   return v_id;
@@ -915,8 +934,9 @@ begin
       if p_to in ('rejected', 'waived', 'not_applicable') and (p_note is null or length(trim(p_note)) < 10) then
         raise exception 'a reason is required' using errcode = '22023';
       end if;
-      if p_to in ('accepted', 'rejected') then
-        perform private.ob_assert_independent(v_row.contributors, 'review it');
+      perform private.ob_assert_independent(v_row.contributors, 'review it');
+      if p_to = 'accepted' then
+        perform private.ob_assert_not_uploader(coalesce(p_evidence, v_row.evidence_document_id));
       end if;
       if p_to = 'accepted' then
         select count(*) into v_open_deps from onboarding.requirement_dependencies d
@@ -1184,8 +1204,9 @@ begin
   end if;
   select * into v_gate from onboarding.lender_gates where lender_org_id = v_req.lender_org_id for update;
   if v_gate.stage <> v_req.from_stage then
+    -- Cancel without raising so the cancellation is kept and the lender is not wedged by a stale request.
     update onboarding.gate_requests set status = 'cancelled', decision_note = 'the lender moved on before this was decided' where id = p_request;
-    raise exception 'the lender is no longer at stage %', v_req.from_stage using errcode = '55000', hint = 'gate_stale';
+    return v_gate.stage;
   end if;
 
   select coalesce(jsonb_object_agg(c.key, c.satisfied), '{}'::jsonb), string_agg(c.key, ', ' order by c.key) filter (where not c.satisfied)
@@ -1243,7 +1264,17 @@ as $$
     select 1
     from onboarding.lender_gates g
     join tenancy.organizations o on o.id = g.lender_org_id
+    join onboarding.lender_profiles p on p.lender_org_id = g.lender_org_id
+    join onboarding.institution_categories c on c.key = p.category_key
     where g.lender_org_id = p_lender and g.stage = 'activated' and o.status in ('onboarding', 'active')
+      -- Facts that must stay true after activation: revoking a sign-off, ending the contract or a
+      -- lapsed verification or licence takes the lender out of borrower view without another request.
+      and c.activation_allowed
+      and p.verification_status = 'verified'
+      and (p.licence_valid_until is null or p.licence_valid_until >= current_date)
+      and exists (select 1 from onboarding.lender_contracts k where k.lender_org_id = g.lender_org_id
+        and k.contract_type in ('master_services_agreement', 'lsp_agreement') and k.status = 'executed'
+        and k.verified_by is not null and (k.effective_until is null or k.effective_until >= current_date))
   )
 $$;
 grant execute on function private.lender_is_live(uuid) to authenticated, service_role;
