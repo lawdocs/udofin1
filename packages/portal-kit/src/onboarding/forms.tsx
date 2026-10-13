@@ -55,7 +55,7 @@ export function TextField({
   name: string;
   label: string;
   defaultValue?: string | null;
-  type?: 'text' | 'date' | 'number';
+  type?: 'text' | 'date' | 'number' | 'datetime-local';
   required?: boolean;
   hint?: string;
 }) {

@@ -8,3 +8,5 @@ export * from './products/views.js';
 export * from './panel/data.js';
 export * from './panel/views.js';
 export { buildVersionBody } from './products/operations.js';
+export * from './applications/data.js';
+export * from './applications/views.js';

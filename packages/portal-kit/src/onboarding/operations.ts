@@ -1,4 +1,5 @@
 import { z, type ZodType } from 'zod';
+import { APPLICATION_OPERATIONS } from '../applications/operations.js';
 import { PRODUCT_OPERATIONS } from '../products/operations.js';
 import { type OnboardingApi, type OnboardingResult, type PortalKind } from './api.js';
 
@@ -395,6 +396,7 @@ const BASE_OPERATIONS: Readonly<Record<string, Operation>> = {
 export const OPERATIONS: Readonly<Record<string, Operation>> = {
   ...BASE_OPERATIONS,
   ...PRODUCT_OPERATIONS,
+  ...APPLICATION_OPERATIONS,
 };
 
 export type OperationOutcome = { ok: true } | { ok: false; code: string };
@@ -423,6 +425,7 @@ export function safeReturnPath(value: unknown): string {
   return typeof value === 'string' &&
     (/^\/onboarding(\/categories|\/[0-9a-f-]{36}(\?tab=[a-z]{3,20})?)?$/.test(value) ||
       /^\/products$/.test(value) ||
+      /^\/applications(\/[0-9a-f-]{36})?$/.test(value) ||
       /^\/transactions(\?[A-Za-z0-9=&,_.%:-]{0,600})?$/.test(value))
     ? value
     : '/onboarding';

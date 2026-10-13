@@ -16,6 +16,8 @@ function navFor(me: MeResponse, current: string): NavItem[] {
   ) {
     items.push({ href: '/transactions', label: 'Transactions' });
   }
+  if (permissions.has('application.read'))
+    items.push({ href: '/applications', label: 'Applications' });
   if (permissions.has('product.read')) items.push({ href: '/products', label: 'Products' });
   return items.map((item) => ({ ...item, current: item.href === current }));
 }

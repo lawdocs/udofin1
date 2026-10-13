@@ -181,6 +181,8 @@ export interface Capabilities {
   productConfigure?: boolean;
   productApprove?: boolean;
   panel?: boolean;
+  applicationRead?: boolean;
+  applicationDecide?: boolean;
 }
 
 export function capabilitiesFrom(permissions: readonly string[]): Capabilities {
@@ -194,6 +196,8 @@ export function capabilitiesFrom(permissions: readonly string[]): Capabilities {
     productConfigure: has('product.configure'),
     productApprove: has('product.approve'),
     panel: has('application.read') || has('loan.read') || has('payment.read'),
+    applicationRead: has('application.read'),
+    applicationDecide: has('application.decide'),
   };
 }
 
