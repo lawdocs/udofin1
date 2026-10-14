@@ -25,9 +25,17 @@
 
 ## Implementation state
 
-- Done: six migrations and four pgTAP files (145 assertions) passing locally on PostgreSQL 16 via `scripts/db-test-local.sh` and the local-only auth shim `scripts/db/local-supabase-shim.sql`.
-- CI: the `database` job in `.github/workflows/ci.yml` runs `supabase db start` and `supabase test db` on the Supabase CLI stack (Postgres 17). `supabase/config.toml` exposes only `public` and `graphql_public` through the API.
-- Not yet built: the per-request transaction wrapper, JWKS verification (`jose` is a dependency but unused), Kysely.
+Refreshed on 14 October 2026 against the code. Decision 7 (Kysely) is **withdrawn**; see the amendment at the end.
+
+- Done: forward-only SQL migrations in `supabase/migrations/` (the directory is the count) and pgTAP files in `supabase/tests/`, passing locally on PostgreSQL 16 through `scripts/db-test-local.sh` and the local-only shim `scripts/db/local-supabase-shim.sql`.
+  Assertion and test counts are in `docs/testing/strategy.md`.
+- Done: the per-request transaction (`withUserContext`: `SET LOCAL ROLE authenticated` and transaction-local claims), asymmetric JWT verification against the JWKS with `jose`, and the two application logins `udofin_api` and `udofin_system`
+  (`services/api/src/db/user-context.ts`, `services/api/src/auth/token-verifier.ts`, `supabase/migrations/20261013000720_api_login_roles.sql`). The earlier "planned" API integration test of the request context exists
+  (`services/api/test/integration/*`).
+- CI: the `database` job in `.github/workflows/ci.yml` runs `supabase db start`, `supabase test db` (Postgres 17) and the API integration tests against the migrated database. `supabase/config.toml` exposes only `public` and `graphql_public` through the data API; the domain schemas and
+  functions are reachable only through the API. A static test of `supabase/config.toml` guards that list (`services/api/test/config-exposure.test.ts`); a live request against a hosted project's REST endpoint is still open (audit R-04).
+- **Not adopted:** Kysely and generated types. Data access is raw SQL through `pg`, almost always a call to a Postgres function with bound parameters (ADR-0033).
+- Not verified: a hosted Supabase project, migration application order on a managed instance with existing data, and the backup region (ADR-0010).
 
 ## Alternatives considered
 
@@ -80,3 +88,14 @@
 - **Kysely is deferred.** Phase 02 has only a few fixed, parameterised queries, written as plain SQL through a thin typed handle (`UserTx`). Kysely and generated types arrive with the first module that has many queries (Phase 04); until then every query uses bound parameters and no request data is concatenated into SQL.
 - **No custom access-token hook.** Claims in the token would stay valid after a membership is suspended; permissions are read from the database on each request instead.
 - Migration logins and application logins are separate (`udofin_api`, `udofin_system`; see ADR-0005 and `docs/operations/supabase-setup.md`). Passwords are never in migrations.
+
+## Amendment (14 October 2026, architecture verification)
+
+- **Kysely was planned and not adopted.** The amendment of 13 October deferred it "to the first module that has many queries (Phase 04)". Phases 04 to 07 were built without it. There is no `kysely` dependency in any package and no generated types.
+  Decision 7 above is withdrawn. The original text is kept for the record.
+- **What is used instead:** raw SQL through `pg`, in practice almost always a call to a Postgres function (`select schema.function($1, $2)`) with bound parameters, through the thin typed handle `UserTx` inside `withUserContext`. The shape of what comes back is checked at the edge: the route registry validates every response against its declared zod schema.
+  The rule that business logic lives in SQL functions, and what that means for routes and tests, is ADR-0033 part A.
+- **Why this is acceptable:** with the rules in functions the API has few ad hoc queries, so a query builder would add a dependency and a layer for little benefit; the real-database integration tests catch a wrongly named column or function.
+- **Cost:** no compile-time check of column names or result types in SQL strings; a mistake shows in an integration test or in review, not in the compiler. Keep SQL strings short and inside the thin handle, and keep the integration suite.
+- **Revisit** if the number of ad hoc queries grows enough that a builder or generated types would remove real defects. That needs its own ADR; do not add Kysely only because this ADR once named it.
+- The three further rules of the 13 October amendment stand: no custom access-token hook, separate migration and application logins, and no passwords in migrations.

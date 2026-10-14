@@ -19,7 +19,7 @@ APP_ENV=production pnpm --filter @udofin/mobile config:check       # mobile perm
 ## Database tests (migrations + pgTAP)
 
 ```bash
-PGHOST=/tmp PGPORT=5432 PGUSER=postgres bash scripts/db-test-local.sh   # throwaway database; 239 assertions
+PGHOST=/tmp PGPORT=5432 PGUSER=postgres bash scripts/db-test-local.sh   # throwaway database; current counts: docs/testing/strategy.md
 # or, on the Supabase stack (CI does this):  supabase db start && supabase test db
 ```
 
@@ -31,8 +31,10 @@ Needs a migrated, **disposable** database and the two application logins (they h
 export INTEGRATION_ADMIN_URL=postgresql://postgres@localhost:5432/udofin_test
 export INTEGRATION_API_URL=postgresql://udofin_api@localhost:5432/udofin_test
 export INTEGRATION_SYSTEM_URL=postgresql://udofin_system@localhost:5432/udofin_test
-pnpm --filter @udofin/api test          # without these variables the 27 integration tests are skipped
+pnpm --filter @udofin/api test          # without these variables the integration tests are skipped
 ```
+
+Integration tests run through Turborepo are skipped unless the variables reach the task. Turborepo's strict environment mode passes only the variables listed in `turbo.json`; unless `turbo.json` lists the `INTEGRATION_*` variables, `pnpm test` at the repository root reports the integration tests as skipped (audit finding F-10). Run `pnpm --filter @udofin/api test` with the variables set, on a freshly migrated database (the tests are not repeatable on a reused one).
 
 ## Browser tests (portals, fake Supabase Auth and API)
 
@@ -79,4 +81,16 @@ Forward-only files in `supabase/migrations/`. Add a migration, add pgTAP tests, 
 
 - `SIGNING_PROVIDER=none` (default) or `mock`. `mock` is refused when the API is deployed (staging or production) and the database refuses a mock signing request unless the session sets `udofin.allow_mock_signing=on` (integration tests do this). It produces no signature and no legal effect.
 - Sample (fixture) templates need `udofin.allow_sample_documents=on` in the database session; without it document preparation reports `sample_blocked`.
-- PDF text tests call `pdftotext` (poppler-utils); install it locally (`apt install poppler-utils`) or those assertions are skipped.
+- PDF text tests call `pdftotext` (poppler-utils). Install it locally (`apt install poppler-utils`). Without it those assertions are skipped on your machine, but they **fail** whenever the environment variable `CI` is set (CI installs poppler-utils), so a missing tool can no longer make them pass silently.
+
+## Other checks CI runs that you can run locally
+
+```bash
+node scripts/check-audit-ignores.mjs         # the two accepted audit advisories (RA-001, RA-002) must stay out of server-side code; needs `pnpm install`
+UDOFIN_TEST_DB=udofin_drill bash scripts/restore-drill.sh --self-test   # dump, restore and compare; see docs/operations/restore-drill.md (local server only)
+docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.30.1 git --redact --verbose /repo   # secret scan, as CI does
+```
+
+`.gitleaks.toml` allows a few synthetic placeholder keys that tests feed to "refuse a secret-shaped value" checks. Each allowance is limited to the exact test files that need it; a new test file that uses one of those values must be added to its list, and any other file containing the value fails the scan.
+
+Operations documents that describe things which are **not built**: [`runbook-outbox.md`](runbook-outbox.md), [`observability-spec.md`](observability-spec.md), [`document-store-production-spec.md`](document-store-production-spec.md).

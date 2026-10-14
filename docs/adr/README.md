@@ -90,7 +90,7 @@ Events that should cause this decision to be reopened.
 | [0001](0001-record-architecture-decisions.md)                        | Record architecture decisions                                                    | Accepted (baseline, pending owner approval)        | Process           |
 | [0002](0002-monorepo-pnpm-turborepo-typescript-6.md)                 | Monorepo with pnpm, Turborepo and TypeScript 6                                   | Accepted (baseline, pending owner approval)        | Tooling           |
 | [0003](0003-modular-monolith-fastify.md)                             | Modular monolith on Fastify                                                      | Accepted (baseline, pending owner approval)        | Backend           |
-| [0004](0004-postgres-supabase-sql-first-migrations-kysely.md)        | Postgres on Supabase, SQL-first migrations, Kysely                               | Accepted (baseline, pending owner approval)        | Data              |
+| [0004](0004-postgres-supabase-sql-first-migrations-kysely.md)        | Postgres on Supabase, SQL-first migrations, Kysely (not adopted)                 | Accepted (baseline, pending owner approval)        | Data              |
 | [0005](0005-tenancy-shared-schema-rls-defense-in-depth.md)           | Tenancy: shared schema with RLS as defence in depth                              | Accepted (baseline, pending owner approval)        | Security / data   |
 | [0006](0006-authorization-roles-permissions-maker-checker.md)        | Authorisation: roles, permissions and maker-checker                              | Accepted (baseline, pending owner approval)        | Security          |
 | [0007](0007-lender-lms-is-system-of-record.md)                       | The lender's LMS is the loan system of record                                    | Accepted (baseline, pending owner approval)        | Domain            |
@@ -117,7 +117,13 @@ Events that should cause this decision to be reopened.
 | [0024](0024-ecosystem-product-boundaries.md)                         | Boundaries between Udofin, Finbyx, LawDocsComply and Equator                     | Proposed                                           | Ecosystem         |
 | [0030](0030-lender-routing-and-offer-comparison.md)                  | Lender routing, consented sharing, lender-reported status, offers and comparison | Proposed                                           | Phase 06          |
 | [0031](0031-kfs-documents-and-offer-acceptance.md)                   | KFS, documents, acknowledgement, acceptance and signing boundary                 | Proposed                                           | Phase 07          |
+| [0028](0028-lender-onboarding-gates.md)                              | Lender onboarding: separate gates, versioned records, function-only writes       | Accepted (pending owner review of the Phase 04 PR) | Phase 04          |
+| [0032](0032-tenant-ownership-and-authorization-rule.md)              | Tenant ownership and the authorization rule                                      | Proposed                                           | Security / data   |
+| [0033](0033-sql-domain-layer-and-lender-envelope.md)                 | SQL functions are the domain layer; a lender-neutral integration envelope        | Proposed (part B is an unimplemented contract)     | Integration       |
 
 ## Owner actions
 
 All baseline ADRs await the product owner's approval. The owner should read each one, then either approve it (status becomes **Accepted**) or ask for a change (a new ADR supersedes it). The open owner decisions that block Proposed ADRs are listed in each ADR's Context or Revisit triggers.
+
+Added on 14 October 2026 (architecture verification, `docs/architecture/phase-02-architecture-verification.md` section 12): ADR 0032 (the tenant and authorisation rule) and ADR 0033 (SQL functions as the domain layer, and the proposed lender-neutral integration envelope) are **Proposed** and need the owner's decision, as does the amendment to ADR 0004 (Kysely not adopted).
+The "Implementation state" sections of ADR 0003, 0004, 0017 and 0022 were refreshed to match the code on that date; their decisions were not changed.

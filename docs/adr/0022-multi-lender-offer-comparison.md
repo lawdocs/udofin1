@@ -1,6 +1,6 @@
 # ADR-0022: Multi-lender offer comparison
 
-- **Status:** Proposed — the offer data model exists; the comparison service, matching rules and display log are not built
+- **Status:** Proposed — the offer model, the comparison with its display log and the versioned ordering rule are implemented under ADR-0030; the ordering rule itself is not yet approved (D-16), so nothing is ordered for borrowers. This ADR remains the statement of the display rules
 - **Date:** 2026-10-10
 - **Related:** ADR-0014, ADR-0015, ADR-0020, ADR-0021
 
@@ -24,6 +24,18 @@ Research findings (`docs/research/2026-10-10/rbi-digital-lending.md` §3.4–3.6
 6. **Display log:** every rendering of the comparison is recorded — request, rules version, offers shown with their order, unmatched lenders named, channel and app version — so any screen can be reproduced for a lender, auditor or complaint.
 7. **Channel rules apply** (ADR-0020): offers violating store rules for a channel (for example above 36% APR on iOS, pending verification) are suppressed there, and the suppression is logged.
 8. **Udofin never charges the borrower.** LSP fees appear only in B2B invoices to lenders.
+
+## Implementation state
+
+Refreshed on 14 October 2026 against the code. The decisions above are unchanged; ADR-0030 (decision 8) records how the comparison was built.
+
+- **Built (database and API; the screens are described in the Phase 06 and 07 specifications):** offers stored exactly as supplied by the lender (`lending.offers`, `lending.offer_intake`); the comparison function `lending.compare_offers`, which records each run (`lending.comparison_runs`),
+  every offer shown with its rank and the rule version (`lending.offer_displays`) and every named lender that did not offer, with a reason class (`lending.comparison_nonoffers`); versioned ordering rules that need a proposal and a decision by two people
+  (`lending.matching_rule_proposals`, `lending.matching_rule_versions`, `lending.propose_matching_rule`, `lending.decide_matching_rule`).
+- **Neutral by construction:** the comparison refuses to order anything until a platform ordering rule is approved (`ranking_rule_not_approved`). No rule is seeded. The default order is the open decision D-16 (the recommendation there is lowest lender-supplied APR, then lowest monthly repayment, disclosed and re-sortable).
+- **Channel rules:** a platform setting `ios_apr_filter_enabled` exists and defaults to off, and each comparison run records the platform, whether the iOS filter was applied and how many offers it removed (`platform`, `ios_filter_applied`, `filtered_count` on `lending.comparison_runs`), which is the logging decision 7 asks for. The Apple APR-cap reading is itself unresolved (ADR-0020).
+- **Not built or not verified:** user testing of the screen before 1 January 2027 (decision, consequences), an end-to-end check with three real lenders, and primary-text verification of the display requirements. The tests named under Verification as "planned" have equivalents in
+  `supabase/tests/011_lender_routing_offers.test.sql` and `services/api/test/integration/routing.integration.test.ts`; map them before relying on that statement.
 
 ## Alternatives considered
 

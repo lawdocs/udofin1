@@ -230,6 +230,12 @@ constraint names, provider responses, or any submitted value.
 
 New codes may be added in a minor change; clients must handle an unknown code by its HTTP status.
 
+Implemented authentication codes (all `401`, problem+json): `token_missing`, `token_invalid` (malformed token, a
+`session_id` that is not a UUID, or, when deployed, no `session_id` at all) and `token_expired`; `mfa_required`
+(staff without the second factor); and `session_revoked` (14 October 2026, audit F-01): the token was valid but
+its session has ended through sign-out, revocation or the session time-box, so the client must sign in again. The mobile app
+reacts to any `401` by refreshing once and then signing out; the portals treat a `401` from `/v1/me` as signed out.
+
 ### 6.2 Mapping database errors
 
 The database is the last line of defence. The API checks preconditions first (using the state machines in
@@ -289,12 +295,26 @@ must answer `409 idempotency_key_reused` without revealing the other intent. Con
 
 ## 9. Rate limits
 
-- **Today:** one global limit per client IP address, `RATE_LIMIT_MAX_PER_MINUTE` (default 120 per minute),
-  with the client IP resolved through `TRUST_PROXY_HOPS` trusted proxies. Health endpoints are exempt.
-  Exceeding it returns `429 rate_limited`. The limiter keeps its counters inside each API process, so with
-  several instances the effective limit multiplies; a shared store is needed before scaling out.
+- **Today (updated 14 October 2026, audit R-02):**
+  - **Per client address, before authentication:** `RATE_LIMIT_MAX_PER_MINUTE` (default 120 per minute) for
+    every route, with a tighter limit on some routes (for example 60 per minute on borrower writes, 8 per
+    10 minutes on step-up). Health endpoints are exempt.
+  - **Per verified principal, after authentication:** `RATE_LIMIT_PRINCIPAL_MAX_PER_MINUTE` (default 600
+    per minute) across all authenticated routes, and every route that declares its own limit is also
+    limited per principal with the same numbers. The key is the token's verified user id (after signature,
+    expiry and session checks), falling back to the address when no principal was recorded. A requester who
+    rotates addresses, or many borrowers behind one carrier address, are therefore treated separately.
+    Requests that fail authentication are not counted against any principal.
+  - **Client address resolution:** `TRUST_PROXY_HOPS` is the number of trusted reverse-proxy hops in front
+    of the API. It is **required** when `APP_ENV` is `staging` or `production` (the API refuses to start
+    without it; `0` is accepted only as a deliberate statement that the API is directly exposed). It defaults
+    to `0` in `local` and `test`. A wrong value makes every client share one bucket (too low) or lets a
+    client choose its own address (too high): set it to the number of proxies you operate and check it with
+    a request through the real load balancer.
+  - Exceeding a limit returns `429 rate_limited` with `Retry-After`. All counters are kept inside each API
+    process (the plugin's in-memory store), so with several instances the effective limits multiply; a
+    shared store is needed before relying on them as a hard control when scaling out.
 - **Planned:**
-  - limits per principal (borrower, staff user, partner client) in addition to per IP;
   - tighter limits on sensitive routes: offer acceptance, payment intent creation, consent capture, ops
     borrower search, partner bulk reads;
   - per-lender limits on partner routes so one lender cannot starve another;
@@ -340,6 +360,22 @@ must answer `409 idempotency_key_reused` without revealing the other intent. Con
   because they can contain personal data.
 - The handler stores and acknowledges quickly; processing happens in the worker.
 - Unsigned callbacks are hints only and must be confirmed by a status poll.
+- **Signature before anything else (implemented 14 October 2026).** The Supabase Send-SMS hook verifies the
+  Standard Webhooks signature over the raw bytes **before** the body schema is applied and before any
+  database work, so an unsigned caller always gets `401` and learns nothing about the body rules.
+- **Replay protection across instances (audit F-06).** After a valid signature and a valid body, the message
+  id is recorded in `ops.seen_webhooks` through `private.mark_webhook_seen(source, id)`; a second delivery
+  of the same id on any API instance gets `401 replayed`. The call runs on the API's normal login as role
+  `authenticated` **without end-user claims** (the public API process never holds the system login), and
+  the function refuses any call that carries a user identity. If the database cannot be reached the hook
+  answers `503 dedup_unavailable` and sends nothing (fail closed; Supabase retries). Rows hold the id only,
+  and the worker deletes rows older than one day. Without a database (a single local process) the old
+  per-process cache is the fallback.
+- **Lender callback receiver (audit F-03).** Every outcome before the signature is verified, whether the
+  lender id is unknown, inactive, manual or `api` kind, the id or the headers are malformed, or our own
+  configuration is incomplete, is the same `401 invalid_signature` problem response, so lender ids cannot
+  be enumerated. The real reason is written to the server log only (a validated lender id and a reason
+  code, never headers, bodies or secrets). After a valid signature, a body that fails validation is `422`.
 
 ---
 
@@ -395,10 +431,11 @@ must answer `409 idempotency_key_reused` without revealing the other intent. Con
 
 ## 15. Gaps in the current code found while writing this
 
-1. The error handler passes Fastify's own error codes through in lower case and uses `error.name` as the
-   title, so codes such as Fastify's validation or media-type codes would reach clients. Map them to §6.1.
+1. The error handler passes Fastify's own error codes through in lower case, so codes such as Fastify's
+   media-type code still reach clients; map them to §6.1. Since 14 October 2026 the title and detail of 4xx
+   answers are fixed text per status (never the framework's message, which can echo request fragments).
 2. JWT verification, route permissions and the per-request database transaction are not implemented yet.
-3. Rate-limit counters are per process (§9).
+3. Rate-limit counters are per process (§9). Per-principal limits exist since 14 October 2026.
 4. `private.record_audit_event` requires an authenticated user and labels every non-borrower as `staff`;
    `audit.actor_type` has a `partner` value that nothing sets yet. Partner and system audit paths need
    a migration (§3.3, §4.2).

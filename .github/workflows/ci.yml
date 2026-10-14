@@ -27,6 +27,11 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Install poppler-utils (the PDF tests read the rendered text with pdftotext; they fail in CI without it)
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends poppler-utils
+          pdftotext -v
       - run: pnpm format:check
       - run: pnpm build
       - run: pnpm lint
@@ -36,6 +41,8 @@ jobs:
         run: pnpm --filter @udofin/mobile config:check
         env:
           APP_ENV: production
+      - name: Audit-ignore scope (the accepted advisories must stay out of server-side code, RA-001 and RA-002)
+        run: node scripts/check-audit-ignores.mjs
       - name: Dependency audit (production dependencies, high and critical)
         run: pnpm audit --prod --audit-level high
 

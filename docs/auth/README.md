@@ -15,11 +15,21 @@ Status: implemented in Phase 03 (13 Oct 2026), not deployed. Decisions: [ADR 002
 The access token proves **identity and assurance level only** (`sub`, `aal`). It carries no roles, no tenant, no permissions. On every request the API:
 
 1. verifies the token (`jose`, asymmetric keys from the project's JWKS, issuer, audience, expiry, algorithm allow-list; `alg:none` and shared-secret tokens are refused);
-2. opens a transaction as the database role `authenticated` with those claims (`withUserContext`), so row-level security applies to the API too;
-3. asks the database `private.current_actor()` (borrower / lender / platform / none) and, for staff, requires `aal2` (second factor done);
-4. runs the handler. Memberships, roles and permissions are read inside that transaction.
+2. applies the per-principal rate limit to the verified user id (`docs/api/README.md` section 9);
+3. opens a transaction as the database role `authenticated` with those claims (`withUserContext`), so row-level security applies to the API too;
+4. asks the database, in **one query**, `private.session_is_active(session_id)` (does the session behind this token still exist and is it inside its time-box?) and `private.current_actor()` (borrower / lender / platform / none); a dead session is refused with `401 session_revoked`; for staff it also requires `aal2` (second factor done);
+5. runs the handler. Memberships, roles and permissions are read inside that transaction.
 
-A suspended or revoked member therefore loses access on the **next request**. Note the limit: the API verifies the token's signature and expiry but does not look the session up, so a token that was signed out or copied stays valid until it expires (15 minutes). Refresh tokens are revoked at sign-out. A tenant id or role sent by a client is never trusted.
+A suspended or revoked member therefore loses access on the **next request**, and so does a signed-out or revoked session.
+
+### 2.1 Session revocation (audit F-01, implemented 14 October 2026)
+
+- **What is checked.** Every authenticated route (staff, borrower and step-up routes alike; the check lives in `runAsUser`) looks the token's `session_id` up in Supabase Auth's own `auth.sessions` table through a `SECURITY DEFINER` function (`private.session_is_active`, empty `search_path`, executable by `authenticated` only). It asks only about the caller's own session (`auth.uid()`), so it cannot be used to probe someone else's. It is one primary-key lookup, inside the transaction the request already opens, and nothing is cached: a session that ends is refused on the very next request.
+- **Residual window.** Only a request that is **already in flight** when the session ends can still complete, because its check happened before the sign-out committed. There is no remaining "valid until the token expires" window. Access tokens still expire on their own (Supabase `jwt_expiry`; the hosted value is unverified), which no longer matters for revocation.
+- **Tokens without a `session_id`.** Supabase Auth always issues the claim. When `APP_ENV` is `staging` or `production` a token without it is refused with `401 token_invalid` (it could not be checked). In `local` and `test` it is accepted so the fake verifiers used by tests keep working. This is a deliberate, tested rule (`sessionIdRequired` in `services/api/src/config.ts`, wired in `server.ts`). A `session_id` that is not a UUID is an invalid token in every environment.
+- **Failure mode.** If the database is unavailable the request fails (it cannot be authenticated anyway). There is no fail-open path.
+- **Not verified here.** The session table's shape and the privileges of the migration role on the hosted Supabase project (`auth.sessions.not_after` and read access for the function owner); the local shim `scripts/db/local-supabase-shim.sql` emulates them. Check once on the hosted project before staging: sign a test user in, call the API, sign out, call again and expect `401 session_revoked`.
+- **Clients.** A `401` makes the mobile app try one forced refresh; the refresh token of a revoked session is rejected, so the user is signed out with the normal explanation. The portals' backend-for-frontend treats any `401` from `/v1/me` as signed out.
 
 ## 3. Staff portals (ops and lender)
 
@@ -39,6 +49,10 @@ Cookie properties: `HttpOnly`, `SameSite=Strict`, `Secure` and `__Host-` prefixe
 
 Abuse controls: same-origin and JSON-only checks on every POST; limits per address, per address and account, and a loose account-wide ceiling. The client address is read from `X-Forwarded-For` counting from the **right** by `TRUSTED_PROXY_HOPS` (forged left-hand entries are ignored; production requires at least one trusted proxy, otherwise all visitors would share one bucket); the in-memory limiter is size-bounded; one generic "email or password is not correct" for unknown users and wrong passwords; no raw upstream errors; Supabase's own rate limits behind all of it.
 
+**When the client address cannot be determined** (no trusted proxy configured, or the forwarded header is missing or malformed behind one; audit F-05, changed 14 October 2026): requests no longer share an `unknown` address bucket, which would let one attacker lock every staff member out of sign-in for 15 minutes. Instead there is **no per-address bucket** for such requests; the per-account ceiling (60 per 15 minutes) still applies, plus a short global ceiling for unaddressed sign-ins (120 per minute, recovering within one minute) and, for second-factor attempts, a limit per exact token (the user id in the cookie is not trusted for this, otherwise a forged cookie could lock a real user out) plus a short global ceiling. Trade-off: with no address, guessing against one account is bounded by the account ceiling and Supabase's own limits, not by a tighter per-address-and-account bucket. The portal logs a start-up warning when `TRUSTED_PROXY_HOPS=0` and a one-time warning if a request has no usable address behind a configured proxy, which means the proxy chain is not what the setting says.
+
+**The portal limiter is per process and needs a single instance.** Its counters are in memory, so each portal instance counts alone: with N instances every limit is effectively N times larger, and a client can be retried against another instance. Run exactly one instance of each portal until a shared store is approved (a decision for the owner; Supabase Auth's limits remain the authoritative control). The portal logs this at start-up.
+
 ## 4. Mobile app
 
 - Session in the platform keystore through `expo-secure-store` (Android Keystore / iOS Keychain), accessible only while the device is unlocked and never migrated to another device; stored in chunks to stay under the per-value size limit.
@@ -53,4 +67,4 @@ See `apps/ops-portal/.env.example`, `apps/lender-portal/.env.example`, `apps/mob
 
 ## 6. Limitations
 
-See section 6 of the Phase 03 specification. Notably: in-memory portal rate limiters are per process; real SMS needs Phase 05; the GoTrue endpoint details are unverified against a live project; the mobile screens have not been run on a device here.
+See section 6 of the Phase 03 specification. Notably: in-memory portal rate limiters are per process (single portal instance only, section 3); real SMS needs Phase 05; the GoTrue endpoint details are unverified against a live project; the mobile screens have not been run on a device here.

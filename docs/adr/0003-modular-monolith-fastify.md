@@ -29,9 +29,17 @@
 
 ## Implementation state
 
-- Done: the skeleton and hardening above, with 22 tests.
-- Module layout and rules (public `index.ts` per module, one transaction per command, `service_role` only in worker paths) are documented in `services/api/src/modules/README.md`; no module code exists yet.
-- Not yet built: any business module or route, authentication (JWT verification), the per-request database transaction (ADR-0004), module-boundary lint rules beyond `packages/domain`, the worker entrypoint.
+Refreshed on 14 October 2026 (architecture verification, `docs/architecture/phase-02-architecture-verification.md`) against the code. The baseline text above is unchanged; this section says what exists now.
+
+- **Built:** the skeleton and hardening listed in decision 6; JWT verification with `jose` against the project's JWKS (`services/api/src/auth/token-verifier.ts`); the per-request transaction that runs as `authenticated` with the caller's claims (`services/api/src/db/user-context.ts`, ADR-0004, ADR-0032);
+  a route registry that validates input and responses with zod, applies authentication, rate limits and idempotency uniformly and generates `docs/api/openapi.json` (`services/api/src/http/routes.ts`); idempotency and the outbox in Postgres (ADR-0027, ADR-0011 as amended).
+- **Modules:** nine folders under `services/api/src/modules` (`admin`, `borrower`, `documents`, `health`, `me`, `onboarding`, `panel`, `products`, `routing`). Each is a route file (a few have a small helper) that calls Postgres functions; the business rules live in SQL (ADR-0033). The `service.ts` / `repository.ts` / `index.ts` layout and Kysely
+  described in `services/api/src/modules/README.md` were **not** followed and that file is out of date.
+- **Entry points from the one codebase:** the HTTP API, the outbox worker (`services/api/src/workers/main.ts`, `pnpm --filter @udofin/api worker`) and a separate lender callback receiver (`services/api/src/workers/callbacks-main.ts`). The receiver is a separate process so that the public API never holds the system database login (ADR-0030, ADR-0032).
+- **Schemas** beyond those named in decision 3: `onboarding`, `documents`, `ops` and the `private` helper schema.
+- **Module boundaries:** the system database pool may be imported only from `src/system` and `src/workers` (root `eslint.config.mjs`, `services/api/test/boundary.test.ts`), and a lint rule forbids one module importing another. Only the first of the two was in place at the time of the baseline.
+- **Still true from the baseline:** rate limiting uses in-process stores, so limits apply per instance (audit F-05; a shared store is needed before more than one instance runs). The unit and integration test counts are in `docs/testing/strategy.md`, not here.
+- **Not built:** any deployment (nothing is deployed; `docs/operations/deployment.md`), a production document store, real provider adapters, tracing and metrics ([`observability-spec.md`](../operations/observability-spec.md) is a specification only).
 
 ## Alternatives considered
 

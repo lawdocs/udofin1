@@ -1,6 +1,6 @@
 # ADR-0017: Web portals — two Next.js apps with a strict, nonce-based CSP
 
-- **Status:** Accepted (baseline, pending owner approval) — foundation pages only; authentication is planned
+- **Status:** Accepted (baseline, pending owner approval) — the CSP, headers and two-app split are built and in use; sign-in is implemented through cookie sessions (ADR-0026), see Implementation state
 - **Date:** 2026-10-10
 - **Related:** ADR-0004, ADR-0006, ADR-0010, ADR-0021
 
@@ -23,6 +23,19 @@
 7. **Data access only through the Udofin API** (ADR-0004). Portals never query domain tables.
 8. **Authentication and authorisation** will start in `proxy.ts` (Phase 3), backed by the API: staff email with MFA, later SAML SSO (per-lender identity providers for the lender portal is a research suggestion). Every page and action is checked server-side against permissions (ADR-0006).
 9. A borrower web experience (servicing and disclosures) is a later, separate app. It counts as a DLA that lenders must report (research: confirmed (secondary)).
+
+## Implementation state
+
+Refreshed on 14 October 2026 against the code. The baseline text and the risk list below are kept as written; this section says what has changed since.
+
+- **Built as decided:** two Next.js apps (`apps/ops-portal`, `apps/lender-portal`), the per-request nonce CSP and security headers (`proxy.ts`, `next.config.ts` in each; the two `proxy.ts` files are still copies), no third-party scripts or analytics.
+- **Authentication and screens now exist.** Staff sign in with password and TOTP through a backend-for-frontend with HttpOnly `__Host-` session cookies (ADR-0026, `packages/auth-client`, `packages/portal-kit`). Page access is decided by the API (`GET /v1/me`); the portals hold no privileged key.
+  Decision 8 ("authentication will start in `proxy.ts`") is realised differently: `proxy.ts` refreshes the session and renders nothing on its own authority.
+- **The `connect-src 'self'` conflict is resolved by option (a):** all browser calls go to same-origin route handlers that call the API and Supabase Auth server-side (ADR-0026 decision 1), so tokens stay out of browser JavaScript and `connect-src` stays `'self'`.
+  The portals' `.env.example` files now list server-only settings (no `NEXT_PUBLIC_` variables), unlike the baseline example.
+- **Header checks:** the browser tests assert a nonce-based `script-src` and `frame-ancestors 'none'` on a redirected request (`tests/e2e/test/portals.e2e.test.ts`). The full header set, `noindex` and the absence of `unsafe-eval` in production are not asserted by any test.
+- **Screens:** the ops portal has onboarding, products and administration screens; the lender portal has onboarding, products, panel, applications and KFS documents. The operations portal has no screens for document rules, templates or calendars (API only). The newest lender screens have no browser test (audit, section 2).
+- **Still open from the risk list:** `/theme.css` caching once lender branding is served from it; a header test for both portals; a mechanism that keeps the two `proxy.ts` files identical.
 
 ## Alternatives considered
 
