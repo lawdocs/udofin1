@@ -128,3 +128,17 @@ The planned module layout is in `services/api/src/modules/README.md`; no module 
 | delivery                    | SMS notice via mock/none; email not configured | Content-free notice, attempts recorded, provider acceptance ≠ delivery                                   | DLT template/header, email provider, lender letterhead                                                     |
 | lender portal               | Built, unit-tested                             | KFS data, prepare, approve exact hash, issue, withdraw, file view                                        | Browser tests of these screens not written; no ops-portal screens for rules/templates/calendars (API only) |
 | mobile                      | Built, unit-tested; not run on a device        | KFS review, acknowledgement, acceptance, agreement, signing status, delivery request (English and Hindi) | Device run; merged Android manifest not inspected                                                          |
+
+## Phase 01/02 remediation status (14 October 2026)
+
+| Item                                         | State                           | Notes                                                                                         |
+| -------------------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------- |
+| Payment success guard (R-01)                 | Merged, tested (CI green)       | Verified event, same intent/lender/provider, status allow-list, equal amount                  |
+| Loan-account history (R-05)                  | Merged, tested                  | `servicing.loan_account_events`                                                               |
+| Session revocation (F-01)                    | Merged, tested                  | One indexed lookup per request; tokens without `session_id` refused when deployed             |
+| Webhook replay store (F-06)                  | Merged, tested                  | `ops.seen_webhooks`; hook signature checked first                                             |
+| Outbox replay and health                     | Merged, tested; runbook written | Alerts specified, not implemented                                                             |
+| Proxy hops required, per-principal limits    | Merged, tested                  | Portal sign-in limiter is per process (single instance only) until a shared store is approved |
+| Upload safety, callback uniformity, 4xx text | Merged, tested                  | Upload filter is coarse (object-stream names are not detected)                                |
+| Test-suite gaps (F-07 to F-09)               | Merged                          | Every new schema must be added to the snapshots (Phase 08a does so)                           |
+| Production document store, retention (D-25)  | Not built / open                | Specification only                                                                            |
