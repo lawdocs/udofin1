@@ -544,7 +544,8 @@ begin
     'offer', jsonb_build_object('issuedAt', o.issued_at, 'validUntil', o.valid_until, 'revision', o.revision),
     'validity', case when j.document_type = 'kfs' then jsonb_build_object('from', v_check -> 'validFrom', 'until', v_check -> 'validUntil',
                                                                          'minWorkingDays', v_check -> 'minDays', 'issueDeadline', v_check -> 'issueDeadline') end,
-    'kfsDocument', case when v_kfs.id is not null then jsonb_build_object('id', v_kfs.id, 'sha256', v_kfs.sha256, 'contentDigest', v_kfs.content_digest) end);
+    'kfsDocument', case when v_kfs.id is not null then jsonb_build_object('id', v_kfs.id, 'sha256', v_kfs.sha256, 'contentDigest', v_kfs.content_digest, 'proposalNo', v_kfs.proposal_no) end,
+    'kfsTemplate', case when v_kfs.id is not null then (select t.body from documents.templates t where t.id = v_kfs.template_id) end);
 end
 $$;
 

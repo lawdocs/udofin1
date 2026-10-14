@@ -85,6 +85,10 @@ const app = await buildApp(config, {
   readinessChecks,
   ...(auth ? { auth } : {}),
   ...(documents ? { documents } : {}),
+  // No signing provider is approved (D-13, D-58). Only the labelled mock exists, and the database refuses it unless it allows mock signing.
+  ...(config.SIGNING_PROVIDER === 'mock'
+    ? { signing: { providerKey: 'mock_esign', mode: 'mock' as const } }
+    : {}),
 });
 
 let shuttingDown = false;

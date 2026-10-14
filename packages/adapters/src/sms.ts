@@ -7,13 +7,15 @@ import { assertProviderAllowed, type AppEnvironment, type ProviderDescriptor } f
  * Results are deliberately NOT "sent" or "delivered": `accepted` means the provider took the
  * message. Delivery is a separate fact that only a provider callback can establish.
  */
-export type SmsTemplateKey = 'login_otp' | 'stepup_otp' | 'request_submitted';
+export type SmsTemplateKey = 'login_otp' | 'stepup_otp' | 'request_submitted' | 'documents_ready';
 
 /** Every template is a service or security message. There is no marketing template. */
 export const SMS_TEMPLATE_PURPOSE: Readonly<Record<SmsTemplateKey, 'security' | 'service'>> = {
   login_otp: 'security',
   stepup_otp: 'security',
   request_submitted: 'service',
+  // Content-free: says that documents are ready in the app; never an amount, a link with a credential or the document.
+  documents_ready: 'service',
 };
 
 export interface SmsSendRequest {

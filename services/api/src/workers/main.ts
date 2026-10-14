@@ -2,7 +2,15 @@ import { loadConfig } from '../config.js';
 import { createBorrowerProcessor } from '../system/borrower.js';
 import { createChangeRequestApplier } from '../system/change-requests.js';
 import { createSystemPool } from '../system/pool.js';
-import { createMockLenderConnector } from '@udofin/adapters';
+import {
+  createLocalDocumentStore,
+  createMockLenderConnector,
+  createMockSmsSender,
+  createMockSigningProvider,
+  createUnconfiguredSigningProvider,
+  createUnconfiguredSmsSender,
+} from '@udofin/adapters';
+import { createDocumentProcessor } from '../system/documents.js';
 import { createRoutingProcessor } from '../system/routing.js';
 import { createHandlers } from './handlers.js';
 import { createConnectorResolver } from './routing-handlers.js';
@@ -27,10 +35,28 @@ const pool = createSystemPool(config.SYSTEM_DATABASE_URL);
 const applier = createChangeRequestApplier(pool);
 const borrower = createBorrowerProcessor(pool);
 const routing = createRoutingProcessor(pool);
+const documentProcessor = createDocumentProcessor(pool);
+// Same private store as the API (development-only local files until the AWS store exists). Without one, generation is recorded as failed.
+const documentStore = config.LOCAL_DOCUMENT_DIR
+  ? createLocalDocumentStore(config.LOCAL_DOCUMENT_DIR, config.APP_ENV)
+  : undefined;
 const handlers = createHandlers({
   applier,
   borrower,
   routing,
+  documents: {
+    processor: documentProcessor,
+    store: documentStore,
+    // No signing provider or SMS provider is approved; only labelled mocks exist, refused outside local and test.
+    signing:
+      config.SIGNING_PROVIDER === 'mock'
+        ? createMockSigningProvider(config.APP_ENV)
+        : createUnconfiguredSigningProvider(),
+    sms:
+      config.SMS_PROVIDER === 'mock'
+        ? createMockSmsSender(config.APP_ENV)
+        : createUnconfiguredSmsSender(),
+  },
   // No real lender connector exists yet. `mock` rows are refused outside local and test (see createConnectorResolver).
   connectors: createConnectorResolver({
     environment: config.APP_ENV,
@@ -77,6 +103,11 @@ const housekeeping = setInterval(
       .then((r) => {
         if (r.noResponse > 0 || r.offersExpired > 0)
           log.info({ ...r }, 'lender deadlines processed');
+        return documentProcessor.processExpiry();
+      })
+      .then((r) => {
+        if (r.expired > 0 || r.withdrawn > 0 || r.jobsInterrupted > 0)
+          log.info({ ...r }, 'document deadlines processed');
       })
       .catch((error: unknown) => {
         log.warn({ type: (error as Error).name }, 'draft expiry housekeeping failed');

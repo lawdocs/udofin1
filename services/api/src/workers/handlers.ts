@@ -4,6 +4,9 @@ import { type ChangeRequestApplier } from '../system/change-requests.js';
 import { PermanentError, type HandlerDefinition } from './outbox-worker.js';
 import { createRoutingHandlers, type ConnectorResolver } from './routing-handlers.js';
 import { type RoutingProcessor } from '../system/routing.js';
+import { type DocumentProcessor } from '../system/documents.js';
+import { createDocumentHandlers } from './documents-handlers.js';
+import { type DocumentStore, type SigningProvider, type SmsSender } from '@udofin/adapters';
 
 const ChangeRequestApproved = z.strictObject({ change_request_id: z.uuid() });
 const DeletionRequested = z.strictObject({ deletion_request_id: z.uuid() });
@@ -23,9 +26,24 @@ export function createHandlers(deps: {
   borrower: BorrowerProcessor;
   routing: RoutingProcessor;
   connectors: ConnectorResolver;
+  /** Document generation, signing and delivery jobs. Absent in tests of other modules. */
+  documents?: {
+    processor: DocumentProcessor;
+    store: DocumentStore | undefined;
+    signing: SigningProvider;
+    sms: SmsSender;
+  };
 }): Record<string, HandlerDefinition> {
   return {
     ...createRoutingHandlers({ routing: deps.routing, connectors: deps.connectors }),
+    ...(deps.documents
+      ? createDocumentHandlers({
+          documents: deps.documents.processor,
+          store: deps.documents.store,
+          signing: deps.documents.signing,
+          sms: deps.documents.sms,
+        })
+      : {}),
     'borrower.deletion_requested': {
       schema: DeletionRequested,
       run: async (payload) => {

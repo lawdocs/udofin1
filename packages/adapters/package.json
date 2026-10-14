@@ -21,7 +21,8 @@
   "dependencies": {
     "@fontsource/noto-sans": "^5.3.0",
     "@fontsource/noto-sans-devanagari": "^5.3.0",
-    "pdfkit": "0.17.2"
+    "pdfkit": "0.17.2",
+    "@udofin/contracts": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",

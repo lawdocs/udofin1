@@ -204,6 +204,9 @@ importers:
       '@fontsource/noto-sans-devanagari':
         specifier: ^5.3.0
         version: 5.3.0
+      '@udofin/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       pdfkit:
         specifier: 0.17.2
         version: 0.17.2

@@ -36,6 +36,8 @@ const ConfigSchema = z
     LOCAL_DOCUMENT_DIR: z.string().min(1).optional(),
     /** SMS provider adapter. `none` refuses to send; `mock` records messages in memory (local and tests only). */
     SMS_PROVIDER: z.enum(['none', 'mock']).default('none'),
+    /** Electronic-signing provider. `none`: signing is unavailable (no provider is approved, D-13/D-58). `mock`: local and tests only. */
+    SIGNING_PROVIDER: z.enum(['none', 'mock']).default('none'),
     /** Device-integrity verifier. `none` reports "unavailable"; `mock` is local and tests only. */
     INTEGRITY_PROVIDER: z.enum(['none', 'mock']).default('none'),
     /** Server secret that keys the hash of step-up codes. Required to start a step-up challenge. */
@@ -45,7 +47,12 @@ const ConfigSchema = z
   })
   .superRefine((config, ctx) => {
     const deployed = config.APP_ENV === 'staging' || config.APP_ENV === 'production';
-    if (deployed && (config.SMS_PROVIDER === 'mock' || config.INTEGRITY_PROVIDER === 'mock')) {
+    if (
+      deployed &&
+      (config.SMS_PROVIDER === 'mock' ||
+        config.INTEGRITY_PROVIDER === 'mock' ||
+        config.SIGNING_PROVIDER === 'mock')
+    ) {
       ctx.addIssue({
         code: 'custom',
         path: ['SMS_PROVIDER'],

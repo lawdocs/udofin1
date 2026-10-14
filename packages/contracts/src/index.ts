@@ -8,3 +8,4 @@ export * from './http/products.js';
 export * from './http/panel.js';
 export * from './http/borrower.js';
 export * from './http/routing.js';
+export * from './http/documents.js';

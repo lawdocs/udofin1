@@ -29,6 +29,8 @@ export interface AppDependencies {
   documents?: DocumentStore;
   /** SMS and device-integrity adapters, and the secrets that guard them. */
   borrower?: BorrowerDeps;
+  /** Which signing provider mode the API asks the database to start. Absent: signing is unavailable. */
+  signing?: { providerKey: string; mode: 'mock' | 'sandbox' | 'live' };
 }
 
 export const API_VERSION = '0.5.0';
@@ -164,6 +166,7 @@ export async function buildApp(
     ...authenticatedRoutes({
       ...(deps.documents ? { documents: deps.documents } : {}),
       ...(deps.borrower ? { borrower: deps.borrower } : {}),
+      ...(deps.signing ? { signing: deps.signing } : {}),
     }),
   ];
   if (config.APP_ENV !== 'production') {
