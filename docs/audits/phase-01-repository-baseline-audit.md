@@ -2,6 +2,8 @@
 
 Date: 14 October 2026. Mode: verification of the existing repository (no remediation). Head audited: `e1324a1` on branch `claude/peaceful-babbage-14p1ci` (draft PR 1). Author: the engineering agent, with two independent read-only reviewers (one on database/tenancy/authentication, one on API/workflow/configuration) whose findings I re-checked against the code where I could. The same agent wrote most of the code under review, so this is not an independent third-party audit.
 
+The architecture decisions that follow from this audit are in `docs/architecture/phase-02-architecture-verification.md`.
+
 Nothing in this report claims production readiness or regulatory compliance. Nothing has been deployed.
 
 ## 1. Executive summary
