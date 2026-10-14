@@ -116,6 +116,7 @@ Events that should cause this decision to be reopened.
 | [0025](0025-two-person-change-control.md)                            | Two-person change control for administrative changes                             | Accepted                                           | Tenancy, audit    |
 | [0024](0024-ecosystem-product-boundaries.md)                         | Boundaries between Udofin, Finbyx, LawDocsComply and Equator                     | Proposed                                           | Ecosystem         |
 | [0030](0030-lender-routing-and-offer-comparison.md)                  | Lender routing, consented sharing, lender-reported status, offers and comparison | Proposed                                           | Phase 06          |
+| [0031](0031-kfs-documents-and-offer-acceptance.md)                   | KFS, documents, acknowledgement, acceptance and signing boundary                 | Proposed                                           | Phase 07          |
 
 ## Owner actions
 

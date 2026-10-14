@@ -74,3 +74,9 @@ A test fails if the committed file is out of date. `GET /v1/openapi.json` serves
 ## Migrations
 
 Forward-only files in `supabase/migrations/`. Add a migration, add pgTAP tests, update the authorisation matrix test (`006`) if a table, role or permission changes, run the database tests, then the API integration tests.
+
+## Documents and signing (Phase 07)
+
+- `SIGNING_PROVIDER=none` (default) or `mock`. `mock` is refused when the API is deployed (staging or production) and the database refuses a mock signing request unless the session sets `udofin.allow_mock_signing=on` (integration tests do this). It produces no signature and no legal effect.
+- Sample (fixture) templates need `udofin.allow_sample_documents=on` in the database session; without it document preparation reports `sample_blocked`.
+- PDF text tests call `pdftotext` (poppler-utils); install it locally (`apt install poppler-utils`) or those assertions are skipped.
