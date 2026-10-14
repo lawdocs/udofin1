@@ -28,6 +28,7 @@ export type ProviderCapability =
   | 'sms'
   | 'email'
   | 'push'
+  | 'notification'
   | 'object_storage'
   | 'dispute_resolution'
   | 'compliance_feed'
@@ -75,4 +76,29 @@ export function assertProviderAllowed(
       `${provider.capability} provider "${provider.key}" in ${provider.mode} mode is not allowed in ${environment}`,
     );
   }
+}
+
+/**
+ * For mocks that must exist only on a developer machine or in automated tests. The generic guard allows mocks in
+ * staging; a mock payment provider, mandate provider, LMS or notifier must not exist anywhere deployed, so this
+ * adds the explicit staging refusal (same behaviour as createMockSigningProvider). Messages never contain input data.
+ */
+export function assertLocalOrTestOnly(
+  provider: ProviderDescriptor,
+  environment: AppEnvironment,
+  what: string,
+): void {
+  assertProviderAllowed(provider, environment);
+  if (provider.mode === 'mock' && environment === 'staging') {
+    throw new Error(`the ${what} is for local development and tests only`);
+  }
+}
+
+/**
+ * True only for a live provider that is really configured. A mock or sandbox record (or the `*_not_configured`
+ * placeholder adapters, which keep mode `production` so they can sit in the production wiring) can never satisfy a
+ * production activation gate (spec 08 section 20).
+ */
+export function satisfiesProductionGate(provider: ProviderDescriptor): boolean {
+  return provider.mode === 'production' && !provider.key.endsWith('_not_configured');
 }
