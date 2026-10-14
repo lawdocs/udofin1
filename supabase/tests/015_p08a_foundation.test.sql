@@ -39,6 +39,8 @@ begin
   return 'ok';
 exception when others then
   get stacked diagnostics v_state = returned_sqlstate, v_hint = pg_exception_hint;
+  -- The Supabase image adds 'Grant the required privileges ...' to privilege errors; our own hints are kept.
+  if v_hint like 'Grant the required privileges%' then v_hint := null; end if;
   return v_state || '|' || coalesce(v_hint, '');
 end
 $fn$;
