@@ -29,9 +29,19 @@ const ConfigSchema = z
     SUPABASE_URL: z.url().optional(),
     /** Browser origins allowed to call the API (the two portals). Mobile apps do not use CORS. */
     CORS_ALLOWED_ORIGINS: csv,
-    /** Number of trusted reverse-proxy hops in front of the API (client IP resolution). 0 trusts none. */
-    TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
+    /**
+     * Number of trusted reverse-proxy hops in front of the API (client IP resolution). 0 trusts none.
+     * REQUIRED when deployed (no silent default): behind a load balancer a wrong value makes every client
+     * share one rate-limit bucket, or lets a client choose its own address. Defaults to 0 in local and test.
+     */
+    TRUST_PROXY_HOPS: z.preprocess(
+      (value) => (value === '' ? undefined : value),
+      z.coerce.number().int().min(0).max(5).optional(),
+    ),
+    /** Requests per minute per client address, applied to every route before authentication. */
     RATE_LIMIT_MAX_PER_MINUTE: z.coerce.number().int().min(1).default(120),
+    /** Requests per minute per VERIFIED principal (user id) across all authenticated routes. */
+    RATE_LIMIT_PRINCIPAL_MAX_PER_MINUTE: z.coerce.number().int().min(1).default(600),
     /** Directory for the development-only document store (unencrypted files). Refused when deployed. */
     LOCAL_DOCUMENT_DIR: z.string().min(1).optional(),
     /** SMS provider adapter. `none` refuses to send; `mock` records messages in memory (local and tests only). */
@@ -64,6 +74,14 @@ const ConfigSchema = z
         code: 'custom',
         path: ['LOCAL_DOCUMENT_DIR'],
         message: 'the local document store is for development only',
+      });
+    }
+    if (deployed && config.TRUST_PROXY_HOPS === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['TRUST_PROXY_HOPS'],
+        message:
+          'required when deployed (set the number of trusted proxy hops in front of the API; 0 only if it is directly exposed)',
       });
     }
     if (deployed && !config.DATABASE_URL) {
@@ -121,7 +139,17 @@ const ConfigSchema = z
     }
   });
 
-export type AppConfig = z.infer<typeof ConfigSchema>;
+export type AppConfig = z.infer<typeof ConfigSchema> & { TRUST_PROXY_HOPS: number };
+
+/**
+ * Whether an access token WITHOUT a `session_id` claim is refused. Supabase Auth always issues the claim,
+ * so a deployed API treats its absence as an invalid token (it could not be checked for sign-out or
+ * revocation). Local and test environments accept it so fake verifiers in tests keep working. This is
+ * an explicit, tested decision, not an accident of the default: see `docs/auth/README.md`.
+ */
+export function sessionIdRequired(config: Pick<AppConfig, 'APP_ENV'>): boolean {
+  return config.APP_ENV === 'staging' || config.APP_ENV === 'production';
+}
 
 export class ConfigError extends Error {
   override readonly name = 'ConfigError';
@@ -141,5 +169,5 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     );
     throw new ConfigError(`Invalid configuration:\n  - ${problems.join('\n  - ')}`);
   }
-  return result.data;
+  return { ...result.data, TRUST_PROXY_HOPS: result.data.TRUST_PROXY_HOPS ?? 0 };
 }

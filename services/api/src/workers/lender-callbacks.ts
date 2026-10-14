@@ -24,6 +24,8 @@ export interface CallbackDeps {
 }
 
 const MESSAGE_ID = /^[A-Za-z0-9._:-]{8,100}$/;
+/** Never a real secret: used only to spend the same effort on lenders that do not exist as on ones that do. */
+const DECOY_SECRET = 'v1,whsec_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
 
 function problem(
   reply: FastifyReply,
@@ -36,7 +38,7 @@ function problem(
     .type(PROBLEM_CONTENT_TYPE)
     .send({
       type: 'about:blank',
-      title: status >= 500 ? 'Service Unavailable' : 'Error',
+      title: status === 401 ? 'Unauthorized' : status >= 500 ? 'Service Unavailable' : 'Error',
       status,
       code,
       instance: requestId,
@@ -80,34 +82,52 @@ export async function buildCallbackApp(
   app.get('/health/live', () => ({ status: 'ok' }));
 
   app.post('/v1/hooks/lenders/:lenderId', async (request, reply) => {
+    // EVERY outcome before the signature is verified looks the same from outside: 401 `invalid_signature`.
+    // Unknown, inactive, manual and api-kind lenders, malformed ids, missing headers and our own
+    // configuration gaps are indistinguishable, so lender ids cannot be enumerated (audit F-03). The real
+    // reason goes to the server log only (ids are validated uuids; never headers, bodies or secrets).
+    const refuse = (reason: string, level: 'info' | 'warn' = 'info', lender?: string) => {
+      request.log[level](
+        { reason, ...(lender ? { lenderId: lender } : {}) },
+        'lender callback refused',
+      );
+      return problem(reply, 401, 'invalid_signature', request.id);
+    };
     const lenderId = (request.params as { lenderId?: string }).lenderId ?? '';
-    if (!/^[0-9a-f-]{36}$/i.test(lenderId)) return problem(reply, 404, 'not_found', request.id);
+    if (!/^[0-9a-f-]{36}$/i.test(lenderId)) return refuse('malformed_lender_id');
     const h = request.headers;
     const messageId = typeof h['webhook-id'] === 'string' ? h['webhook-id'] : '';
-    if (!MESSAGE_ID.test(messageId)) return problem(reply, 400, 'bad_request', request.id);
+    if (!MESSAGE_ID.test(messageId)) return refuse('missing_or_malformed_message_id');
+    const headerOf = (name: string): string | undefined =>
+      typeof h[name] === 'string' ? h[name] : undefined;
 
     const context = await deps.routing.hookContext(lenderId);
-    // Unknown, inactive and manual lenders look the same from outside.
-    if (!context || context.status !== 'active' || context.kind === 'manual')
-      return problem(reply, 404, 'not_found', request.id);
-
-    if (context.kind === 'api')
-      return problem(reply, 503, 'callback_scheme_not_configured', request.id);
+    if (!context || context.status !== 'active' || context.kind === 'manual') {
+      // Do the same signature work a real lender would cost, so response time does not reveal the difference.
+      verifyMockCallback({
+        secret: DECOY_SECRET,
+        id: messageId,
+        timestamp: headerOf('webhook-timestamp'),
+        signatureHeader: headerOf('webhook-signature'),
+        body: (request as { rawBody?: string }).rawBody ?? '',
+      });
+      return refuse('lender_unknown_inactive_or_manual');
+    }
+    if (context.kind === 'api') return refuse('callback_scheme_not_configured', 'warn', lenderId);
     if (deps.environment === 'staging' || deps.environment === 'production')
-      return problem(reply, 503, 'mock_connector_blocked', request.id);
+      return refuse('mock_connector_blocked', 'warn', lenderId);
     const secret = context.signingSecretRef ? deps.secret(context.signingSecretRef) : undefined;
-    if (!secret) return problem(reply, 503, 'callback_secret_not_configured', request.id);
+    if (!secret) return refuse('callback_secret_not_configured', 'warn', lenderId);
 
     const raw = (request as { rawBody?: string }).rawBody ?? '';
     const ok = verifyMockCallback({
       secret,
       id: messageId,
-      timestamp: typeof h['webhook-timestamp'] === 'string' ? h['webhook-timestamp'] : undefined,
-      signatureHeader:
-        typeof h['webhook-signature'] === 'string' ? h['webhook-signature'] : undefined,
+      timestamp: headerOf('webhook-timestamp'),
+      signatureHeader: headerOf('webhook-signature'),
       body: raw,
     });
-    if (!ok) return problem(reply, 401, 'invalid_signature', request.id);
+    if (!ok) return refuse('signature_invalid');
 
     const parsed = LenderEventInput.safeParse(request.body);
     if (!parsed.success) return problem(reply, 422, 'validation_failed', request.id);

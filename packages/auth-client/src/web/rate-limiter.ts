@@ -1,12 +1,25 @@
 /**
  * Fixed-window counter. IN-MEMORY and per process: it slows guessing against one instance but is NOT
- * a shared control. Supabase Auth's own rate limits are the authoritative protection; with more than
- * one portal instance, replace this with a shared store (documented limitation, docs/auth/README.md).
+ * a shared control. Each portal instance counts on its own, so the limits below are only meaningful
+ * with a SINGLE instance of the portal; running more than one multiplies every limit by the number of
+ * instances and a request can be retried against another instance. A shared store needs an approved
+ * decision (docs/auth/README.md). Supabase Auth's own rate limits are the authoritative protection.
  */
 export interface RateLimiter {
   /** Records an attempt; returns false when the key is over its limit. */
   hit(key: string, limit: number, windowSeconds: number): boolean;
 }
+
+/**
+ * Placeholders `clientAddress` returns when no usable client address exists: `direct` (no trusted proxy is
+ * configured, so the portal cannot see who connected) and `unknown` (behind a configured proxy, but the
+ * forwarded header is missing or malformed). Several visitors can share such a placeholder, so it must
+ * NEVER be used as a rate-limit key: one attacker would exhaust the bucket for everybody.
+ */
+export const UNATTRIBUTED_ADDRESSES: readonly string[] = ['direct', 'unknown'];
+
+export const isAttributedAddress = (address: string): boolean =>
+  !UNATTRIBUTED_ADDRESSES.includes(address);
 
 export function createMemoryRateLimiter(now: () => number = () => Date.now()): RateLimiter {
   const windows = new Map<string, { start: number; count: number }>();

@@ -2,6 +2,7 @@ import { PROBLEM_CONTENT_TYPE } from '@udofin/contracts';
 import { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { type z, type ZodType } from 'zod';
 import { type AuthDeps } from '../auth/deps.js';
+import { type PrincipalLimits } from '../auth/principal-limits.js';
 import { runAsUser, type Authenticated, type AuthRequirement } from '../auth/request-auth.js';
 import { type UserTx } from '../db/user-context.js';
 import {
@@ -50,6 +51,12 @@ export interface PublicRouteSpec<
   B extends ZodType,
 > extends CommonSpec<P, Q, B> {
   auth: 'none';
+  /**
+   * Runs BEFORE any request schema is applied. A signed webhook verifies its signature over the raw
+   * bytes here, so an unsigned caller learns nothing from validation messages and triggers no database
+   * work. Throw an ApiError to refuse.
+   */
+  verifyRequest?(request: FastifyRequest): void | Promise<void>;
   handler(ctx: {
     request: FastifyRequest;
     params: z.output<P>;
@@ -151,7 +158,7 @@ function checkResponse(spec: RouteDefinition, result: HandlerResult): void {
 export function registerRoutes(
   app: FastifyInstance,
   routes: readonly RouteDefinition[],
-  deps: { auth?: AuthDeps },
+  deps: { auth?: AuthDeps; principalLimits?: PrincipalLimits },
 ): void {
   for (const route of routes) {
     if (route.auth !== 'none' && !deps.auth) continue; // authenticated routes exist only when auth is configured
@@ -163,6 +170,7 @@ export function registerRoutes(
       ...(route.bodyLimit ? { bodyLimit: route.bodyLimit } : {}),
       handler: async (request, reply) => {
         try {
+          if (route.auth === 'none') await route.verifyRequest?.(request);
           const params = parseInput(route.params, request.params, 'path');
           const query = parseInput(route.query, request.query, 'query');
           const body = parseInput(route.body, request.body, 'body');
@@ -219,6 +227,12 @@ export function registerRoutes(
                 }
                 return handled;
               },
+              deps.principalLimits
+                ? {
+                    limits: deps.principalLimits,
+                    route: { id: routeId, limit: route.rateLimit },
+                  }
+                : undefined,
             );
           }
 

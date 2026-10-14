@@ -87,3 +87,47 @@ export function createUserContext(pool: Pick<pg.Pool, 'connect'>): UserContext {
     },
   };
 }
+
+/**
+ * Durable "first delivery only" guard for signed webhooks, shared by every API instance (audit F-06).
+ *
+ * The public API process must not hold the system login, and a hook has no end user. So this runs one
+ * call as role `authenticated` WITHOUT user claims, against `private.mark_webhook_seen`, a narrowly granted
+ * definer function that refuses any call carrying a user identity. Callers must verify the signature
+ * BEFORE calling this: only authenticated message ids may be recorded.
+ */
+export interface WebhookDedup {
+  /** True the first time (source, id) is seen anywhere; false for a repeat. Rejects when the database is unavailable (fail closed). */
+  claim(source: string, id: string): Promise<boolean>;
+}
+
+export function createWebhookDedup(pool: Pick<pg.Pool, 'connect'>): WebhookDedup {
+  return {
+    async claim(source, id) {
+      const client = await pool.connect();
+      let failed = false;
+      try {
+        await client.query('begin');
+        await client.query('set local role authenticated');
+        // No identity: clear any claims so the function's "no user" rule is what it checks.
+        await client.query("select set_config('request.jwt.claims', '', true)");
+        const result = await client.query<{ first: boolean }>(
+          'select private.mark_webhook_seen($1, $2) as first',
+          [source, id],
+        );
+        await client.query('commit');
+        return result.rows[0]?.first === true;
+      } catch (error) {
+        failed = true;
+        try {
+          await client.query('rollback');
+        } catch {
+          // The connection is unusable; it is destroyed below.
+        }
+        throw error;
+      } finally {
+        client.release(failed ? true : undefined);
+      }
+    },
+  };
+}

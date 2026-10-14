@@ -8,6 +8,7 @@ import { PROBLEM_CONTENT_TYPE, type ProblemDetails } from '@udofin/contracts';
 import { z } from 'zod';
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply } from 'fastify';
 import { type AuthDeps } from './auth/deps.js';
+import { createPrincipalLimits } from './auth/principal-limits.js';
 import { type AppConfig } from './config.js';
 import { loggerOptions } from './logger.js';
 import { authenticatedRoutes } from './http/api-routes.js';
@@ -43,6 +44,40 @@ declare module 'fastify' {
 }
 
 const REQUEST_ID = /^[A-Za-z0-9-]{8,64}$/;
+
+/**
+ * Fixed wording for client errors. The framework's own message can echo parts of the request (a media
+ * type, a JSON fragment, a header), so it is never sent; only the status picks the text. The `code` stays
+ * the framework's stable identifier (a constant such as `fst_err_ctp_body_too_large`), never request data.
+ */
+const CLIENT_ERROR_TEXT: Readonly<Record<number, { title: string; detail: string }>> = {
+  400: { title: 'Bad Request', detail: 'The request could not be understood.' },
+  401: { title: 'Unauthorized', detail: 'Authentication is required.' },
+  403: { title: 'Forbidden', detail: 'This action is not allowed.' },
+  404: { title: 'Not Found', detail: 'The resource was not found.' },
+  405: { title: 'Method Not Allowed', detail: 'This method is not supported here.' },
+  406: { title: 'Not Acceptable', detail: 'The requested format is not available.' },
+  408: { title: 'Request Timeout', detail: 'The request took too long to arrive.' },
+  409: { title: 'Conflict', detail: 'The request conflicts with the current state.' },
+  413: { title: 'Content Too Large', detail: 'The request body is too large.' },
+  414: { title: 'URI Too Long', detail: 'The request address is too long.' },
+  415: { title: 'Unsupported Media Type', detail: 'The content type is not supported.' },
+  422: { title: 'Unprocessable Content', detail: 'The request could not be processed.' },
+  429: { title: 'Too Many Requests', detail: 'Too many requests. Try again later.' },
+};
+const SAFE_CODE = /^[a-z][a-z0-9_]{1,63}$/;
+
+function clientProblem(status: number, error: FastifyError, instance: string): ProblemDetails {
+  const text = CLIENT_ERROR_TEXT[status] ?? CLIENT_ERROR_TEXT[400];
+  const code = error.code?.toLowerCase();
+  return problem(
+    status,
+    text?.title ?? 'Bad Request',
+    code && SAFE_CODE.test(code) ? code : 'bad_request',
+    instance,
+    text?.detail,
+  );
+}
 
 function problem(
   status: number,
@@ -122,8 +157,8 @@ export async function buildApp(
     max: config.RATE_LIMIT_MAX_PER_MINUTE,
     timeWindow: '1 minute',
     // The returned error is thrown and rendered by the error handler below.
-    errorResponseBuilder: (_request, context) =>
-      Object.assign(new Error(`Rate limit exceeded, retry after ${context.after}`), {
+    errorResponseBuilder: () =>
+      Object.assign(new Error('rate limited'), {
         statusCode: 429,
         code: 'RATE_LIMITED',
         name: 'Too Many Requests',
@@ -145,17 +180,12 @@ export async function buildApp(
     if (status >= 500) {
       request.log.error({ err: error }, 'unhandled error');
     }
-    // Client errors keep Fastify's safe message; server errors never leak internals.
+    // Client errors use fixed wording per status (never the framework's message, which can echo request
+    // fragments); server errors never leak internals.
     const body =
       status >= 500
         ? problem(status, 'Internal Server Error', 'internal_error', request.id)
-        : problem(
-            status,
-            error.name || 'Bad Request',
-            error.code?.toLowerCase() ?? 'bad_request',
-            request.id,
-            error.message,
-          );
+        : clientProblem(status, error, request.id);
     void reply.code(status).type(PROBLEM_CONTENT_TYPE).send(body);
   });
 
@@ -190,7 +220,17 @@ export async function buildApp(
       }),
     );
   }
-  registerRoutes(app, routes, deps.auth ? { auth: deps.auth } : {});
+  registerRoutes(
+    app,
+    routes,
+    deps.auth
+      ? {
+          auth: deps.auth,
+          // Per verified user, in addition to the per-address limits above (which run before authentication).
+          principalLimits: createPrincipalLimits(app, config.RATE_LIMIT_PRINCIPAL_MAX_PER_MINUTE),
+        }
+      : {},
+  );
   app.decorate('registeredRoutes', registered);
 
   return app;

@@ -6,6 +6,15 @@ import reactHooks from 'eslint-plugin-react-hooks';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
+// ESLint replaces, it does not merge, the options of a rule when a later block sets the same rule for
+// the same file. Blocks below that restrict imports under services/api/src therefore both list this.
+const SYSTEM_POOL_PATTERN = {
+  group: ['**/system/pool.js', '**/system/pool'],
+  message: 'The system (service_role) pool is private to src/system and src/workers.',
+};
+const MODULE_BOUNDARY_MESSAGE =
+  'API modules must not import each other (ADR 0003). Move code two modules need into a shared folder such as src/db, src/http or src/auth; do not reach into a sibling module.';
+
 export default tseslint.config(
   {
     ignores: [
@@ -97,14 +106,25 @@ export default tseslint.config(
     files: ['services/api/src/**/*.ts'],
     ignores: ['services/api/src/system/**', 'services/api/src/workers/**'],
     rules: {
+      'no-restricted-imports': ['error', { patterns: [SYSTEM_POOL_PATTERN] }],
+    },
+  },
+  {
+    // Module boundaries: a module under services/api/src/modules may import itself (./x) and the
+    // shared folders two levels up (../../http, ../../db, ../../auth ...), never a sibling module.
+    // Module files sit directly in their folder, so any import that climbs exactly one level (../x)
+    // lands in a sibling, and any path through `modules/` is another module's code. Limits: this
+    // checks import/export declarations only (not import() or require()), and it assumes module files
+    // stay directly inside their module folder; a nested sub-folder would need its own pattern.
+    files: ['services/api/src/modules/**/*.ts'],
+    rules: {
       'no-restricted-imports': [
         'error',
         {
           patterns: [
-            {
-              group: ['**/system/pool.js', '**/system/pool'],
-              message: 'The system (service_role) pool is private to src/system and src/workers.',
-            },
+            SYSTEM_POOL_PATTERN,
+            { regex: '^\\.\\./(?!\\.\\./)', message: MODULE_BOUNDARY_MESSAGE },
+            { regex: '(^|/)modules/', message: MODULE_BOUNDARY_MESSAGE },
           ],
         },
       ],

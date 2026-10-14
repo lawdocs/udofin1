@@ -105,6 +105,11 @@ export function verifyWebhookSignature(input: {
   });
 }
 
+/** Source name under which the Send-SMS hook's message ids are recorded (ops.seen_webhooks). */
+const HOOK_SOURCE = 'send_sms_hook';
+/** Same shape the database accepts (ops.seen_webhooks check); a signed id outside it is refused, not stored. */
+const HOOK_MESSAGE_ID = /^[A-Za-z0-9._:=+/-]{4,200}$/;
+
 const hashCode = (pepper: string, challengeId: string, code: string): string =>
   createHmac('sha256', pepper).update(`${challengeId}:${code}`).digest('hex');
 const toE164 = (phone: string): string => `+${phone.replace(/\D/g, '')}`;
@@ -782,7 +787,9 @@ export function borrowerRoutes(deps?: BorrowerDeps): RouteDefinition[] {
       },
       errors: [401, 422, 503],
       rateLimit: { max: 600, timeWindow: '1 minute' },
-      handler: async ({ request, body }) => {
+      // First thing, before the body schema is applied and before any database work: the signature over the
+      // exact bytes received. An unsigned caller gets 401 and learns nothing about the body rules.
+      verifyRequest: (request) => {
         if (!deps?.sendSmsHookSecret) throw unavailable('sms_hook');
         const raw = (request as { rawBody?: string }).rawBody ?? '';
         const h = request.headers;
@@ -796,11 +803,28 @@ export function borrowerRoutes(deps?: BorrowerDeps): RouteDefinition[] {
           body: raw,
         });
         if (!ok) throw new ApiError(401, 'invalid_signature', 'Unauthorized');
-        // A signed request can be captured; refuse a second delivery of the same message id inside the window.
-        // (Per process: with several API instances a replay could land on another one; the 300 s window and the
-        // provider-side idempotency key remain the other limits.)
+      },
+      handler: async ({ request, body }) => {
+        const h = request.headers;
+        // A signed request can be captured; refuse a second delivery of the same message id. With a
+        // database-backed guard (always wired when deployed) this holds across every API instance; the
+        // per-process map is only the fallback for a single local process without a database.
         const messageId = typeof h['webhook-id'] === 'string' ? h['webhook-id'] : '';
-        if (!seenHookIds.claim(messageId)) throw new ApiError(401, 'replayed', 'Unauthorized');
+        if (!HOOK_MESSAGE_ID.test(messageId)) {
+          throw new ApiError(401, 'invalid_message_id', 'Unauthorized');
+        }
+        let first: boolean;
+        if (deps?.webhookDedup) {
+          try {
+            first = await deps.webhookDedup.claim(HOOK_SOURCE, messageId);
+          } catch {
+            // Fail closed: without the guard a replay could be accepted. The sender retries.
+            throw new ApiError(503, 'dedup_unavailable', 'Service Unavailable');
+          }
+        } else {
+          first = seenHookIds.claim(messageId);
+        }
+        if (!first) throw new ApiError(401, 'replayed', 'Unauthorized');
         const result = await sms.send({
           template: 'login_otp',
           to: toE164(body.user.phone),

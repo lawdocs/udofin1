@@ -1,4 +1,5 @@
 import { loadConfig } from '../config.js';
+import { assertSystemLoginPosture } from '../db/login-posture.js';
 import { createRoutingProcessor } from '../system/routing.js';
 import { createSystemPool } from '../system/pool.js';
 import { buildCallbackApp } from './lender-callbacks.js';
@@ -11,6 +12,8 @@ import { buildCallbackApp } from './lender-callbacks.js';
     process.exit(1);
   }
   const pool = createSystemPool(config.SYSTEM_DATABASE_URL);
+  // Refuse to start if the system login is over-privileged or cannot assume service_role (audit R-10).
+  await assertSystemLoginPosture(pool);
   const app = await buildCallbackApp(config, {
     routing: createRoutingProcessor(pool),
     // Secret references are names of environment variables set by the deployment; values are never read into config files.

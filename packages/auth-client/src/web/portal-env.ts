@@ -62,7 +62,9 @@ const ADDRESS = /^[0-9a-fA-F:.]{2,45}$/;
 /**
  * The client address as seen by the trusted proxy nearest the portal: the entry `hops` places from the
  * right of X-Forwarded-For (each proxy appends the address it received the request from, so the
- * leftmost entries are whatever the client claimed).
+ * leftmost entries are whatever the client claimed). Returns `direct` (no trusted proxy configured) or
+ * `unknown` (header missing or malformed) when there is no usable address; those placeholders are never
+ * rate-limit keys (see UNATTRIBUTED_ADDRESSES).
  */
 export function clientAddress(forwardedFor: string | null, hops: number): string {
   if (hops < 1) return 'direct';
@@ -87,7 +89,7 @@ export interface PortalAuth {
 export function createPortalAuth(
   env: Record<string, string | undefined>,
   audience: PortalAudience,
-  deps: { fetch?: typeof fetch } = {},
+  deps: { fetch?: typeof fetch; warn?: (message: string) => void } = {},
 ): PortalAuth {
   const parsed = PortalEnvSchema.safeParse(env);
   if (!parsed.success) {
@@ -107,6 +109,23 @@ export function createPortalAuth(
   } catch (error) {
     throw new PortalConfigError(error instanceof Error ? error.message : 'invalid Supabase key');
   }
+  // Start-up warnings (stderr as JSON; silent under test runners unless a sink is injected).
+  const warn =
+    deps.warn ??
+    ((message: string) => {
+      if (env.NODE_ENV !== 'test' && process.env.NODE_ENV !== 'test') {
+        process.stderr.write(`${JSON.stringify({ level: 'warn', msg: message })}\n`);
+      }
+    });
+  warn(
+    'portal sign-in rate limits are in memory and per process: run exactly ONE portal instance until a shared store is approved (docs/auth/README.md)',
+  );
+  if (cfg.TRUSTED_PROXY_HOPS < 1) {
+    warn(
+      'TRUSTED_PROXY_HOPS=0: the client address cannot be determined, so per-address sign-in limits are off; only per-account and global ceilings apply',
+    );
+  }
+  let warnedUnattributed = false;
   const handlers = createAuthHandlers({
     gotrue,
     allowedOrigin: portalOrigin,
@@ -116,6 +135,16 @@ export function createPortalAuth(
     rateLimiter: createMemoryRateLimiter(),
     clientIp: (request) =>
       clientAddress(request.headers.get('x-forwarded-for'), cfg.TRUSTED_PROXY_HOPS),
+    onUnattributedAddress: () => {
+      // Behind a configured proxy a missing or malformed address means the proxy chain is not what
+      // TRUSTED_PROXY_HOPS says. Say so once instead of silently degrading.
+      if (cfg.TRUSTED_PROXY_HOPS >= 1 && !warnedUnattributed) {
+        warnedUnattributed = true;
+        warn(
+          'a request had no usable client address behind the configured proxy; check TRUSTED_PROXY_HOPS and the proxy X-Forwarded-For handling. Per-address limits are skipped for such requests',
+        );
+      }
+    },
     ...(deps.fetch ? { fetch: deps.fetch } : {}),
   });
   return { handlers, apiBaseUrl: cfg.API_BASE_URL.replace(/\/$/, ''), portalOrigin };

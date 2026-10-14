@@ -682,19 +682,28 @@ describe.skipIf(!enabled)('lender routing over HTTP against a real database', ()
         headers: { 'content-type': 'application/json' },
         payload: raw,
       });
-      expect(none.statusCode).toBe(400);
+      // Missing headers are an unauthenticated outcome like any other: one uniform 401 (audit F-03).
+      expect(none.statusCode).toBe(401);
     });
 
     it('treats unknown, manual and api-kind lenders without revealing which, and refuses to guess an unwritten scheme', async () => {
       const raw = body(corrB, 'ack', {});
-      expect((await send(randomUUID(), raw, `msg-${randomUUID()}`)).statusCode).toBe(404);
-      expect((await send(ids.lenderA, raw, `msg-${randomUUID()}`)).statusCode).toBe(404);
+      // Every unauthenticated outcome is the same 401 `invalid_signature`, so lender ids cannot be enumerated (audit F-03).
+      const uniform = async (res: ReturnType<typeof send>) => {
+        const r = await res;
+        expect(r.statusCode, r.body).toBe(401);
+        const { instance: _instance, ...rest } = r.json<Record<string, unknown>>();
+        expect(rest).toMatchObject({ code: 'invalid_signature', status: 401 });
+        return rest;
+      };
+      const unknown = await uniform(send(randomUUID(), raw, `msg-${randomUUID()}`));
+      expect(await uniform(send(ids.lenderA, raw, `msg-${randomUUID()}`))).toEqual(unknown);
       await admin.query(
         `update lending.lender_connectors set kind = 'api' where lender_org_id = $1`,
         [ids.lenderB],
       );
       try {
-        expect((await send(ids.lenderB, raw, `msg-${randomUUID()}`)).statusCode).toBe(503);
+        expect(await uniform(send(ids.lenderB, raw, `msg-${randomUUID()}`))).toEqual(unknown);
       } finally {
         const c = await admin.connect();
         await c.query(`select set_config('udofin.allow_mock_connectors', 'on', false)`);
@@ -727,7 +736,7 @@ describe.skipIf(!enabled)('lender routing over HTTP against a real database', ()
         },
         payload: raw,
       });
-      expect(res.statusCode).toBe(503);
+      expect(res.statusCode).toBe(401); // same answer as an unknown lender; the reason is in the server log only
       await prod.close();
     });
 
@@ -737,7 +746,7 @@ describe.skipIf(!enabled)('lender routing over HTTP against a real database', ()
         body(corrB, 'decision', { decision: 'declined' }),
         `msg-${randomUUID()}`,
       );
-      expect(wrongLender.statusCode).toBe(404); // Alpha is manual: no callbacks at all
+      expect(wrongLender.statusCode).toBe(401); // Alpha is manual: no callbacks at all, and no way to tell
       const unknown = (
         await send(
           ids.lenderB,

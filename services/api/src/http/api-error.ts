@@ -23,6 +23,11 @@ export const ProblemSchema = z.object({
   detail: z.string().optional(),
 });
 
+/** Sent with 401 `session_revoked`: the token was valid but its session has ended (sign-out, revocation, time-box). */
+export const SESSION_ENDED_HEADERS: Readonly<Record<string, string>> = {
+  'www-authenticate': 'Bearer error="invalid_token"',
+};
+
 interface PgLikeError {
   code?: string;
   hint?: string;
@@ -153,6 +158,8 @@ export function mapDatabaseError(error: unknown): ApiError | undefined {
   const rule = e.hint ? RULE_HINTS[e.hint] : undefined;
   if (e.code === '42501') {
     if (e.hint === 'mfa_required') return new ApiError(401, 'mfa_required', 'Unauthorized');
+    if (e.hint === 'session_revoked')
+      return new ApiError(401, 'session_revoked', 'Unauthorized', undefined, SESSION_ENDED_HEADERS);
     return rule && e.hint
       ? new ApiError(403, e.hint, 'Forbidden')
       : new ApiError(403, 'forbidden', 'Forbidden');

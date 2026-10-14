@@ -21,6 +21,23 @@ import {
 
 const NOW = new Date('2026-10-14T05:00:00Z');
 const havePdftotext = spawnSync('pdftotext', ['-v']).error === undefined;
+// The text assertions are the proof that the PDF prints the lender's figures unchanged. On a
+// developer machine without poppler-utils they are skipped for convenience; where CI is set
+// (GitHub Actions sets CI=true) a missing pdftotext must fail the run instead of passing silently.
+const ci = process.env.CI !== undefined && process.env.CI !== '' && process.env.CI !== 'false';
+
+/** True when text can be extracted. Throws in CI when pdftotext is missing, so nothing is skipped silently. */
+function canExtractText(): boolean {
+  if (havePdftotext) return true;
+  if (ci) throw new Error('pdftotext is not installed but CI is set; install poppler-utils');
+  return false;
+}
+
+describe('test environment', () => {
+  it('has pdftotext whenever CI is set, so the text assertions cannot be skipped there', () => {
+    if (ci) expect(havePdftotext).toBe(true);
+  });
+});
 
 function text(bytes: Uint8Array): string {
   const dir = mkdtempSync(join(tmpdir(), 'udofin-pdf-'));
@@ -72,7 +89,7 @@ describe('KFS rendering', () => {
     const bytes = await renderDocument(sampleKfsModel(), { generatedAt: NOW });
     expect(Buffer.from(bytes.slice(0, 5)).toString()).toBe('%PDF-');
     expect(bytes.length).toBeGreaterThan(8_000);
-    if (!havePdftotext) return;
+    if (!canExtractText()) return;
     const t = text(bytes);
     expect(t).toContain('Key Facts Statement');
     expect(t).toContain('UDF-0123456789AB');
@@ -115,7 +132,7 @@ describe('KFS rendering', () => {
       },
     };
     const bytes = await renderDocument(sampleKfsModel({ data }), { generatedAt: NOW });
-    if (!havePdftotext) return;
+    if (!canExtractText()) return;
     const t = text(bytes);
     expect(t).toContain('Sample benchmark');
     expect(t).toContain('Floating');
@@ -168,7 +185,7 @@ describe('Hindi rendering', () => {
     const raw = Buffer.from(bytes).toString('latin1');
     expect(raw).toMatch(/NotoSansDevanagari/);
     expect(raw).toMatch(/NotoSans-/);
-    if (!havePdftotext) return;
+    if (!canExtractText()) return;
     const t = text(bytes);
     expect(t).toContain('नमूना');
     expect(t).toContain('₹ 20,000.00');
@@ -207,7 +224,7 @@ describe('Agreement rendering', () => {
 
   it('prints the KFS as a summary box from the same data', async () => {
     const bytes = await renderDocument(agreement(), { generatedAt: NOW });
-    if (!havePdftotext) return;
+    if (!canExtractText()) return;
     const t = text(bytes);
     expect(t).toContain('Sample clause for Sample Lender Ltd (test)');
     expect(t).toContain('proposal UDF-0123456789AB of ₹ 20,000.00');

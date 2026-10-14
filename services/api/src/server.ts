@@ -8,9 +8,9 @@ import {
 import pg from 'pg';
 import { buildApp, type ReadinessCheck } from './app.js';
 import { createTokenVerifier, supabaseKeys } from './auth/token-verifier.js';
-import { loadConfig } from './config.js';
+import { loadConfig, sessionIdRequired } from './config.js';
 import { assertUserLoginPosture } from './db/login-posture.js';
-import { createUserContext } from './db/user-context.js';
+import { createUserContext, createWebhookDedup } from './db/user-context.js';
 
 const config = loadConfig();
 
@@ -54,12 +54,14 @@ if (pool && config.SUPABASE_URL) {
   auth = {
     verifier: createTokenVerifier({ issuer, audience: 'authenticated', keys }),
     context: createUserContext(pool),
+    // Deployed: a token without a session_id cannot be checked for sign-out, so it is refused (config.ts).
+    requireSessionId: sessionIdRequired(config),
   };
 }
 
 // Evidence documents need a private, encrypted store. Only the development-only local store is wired
-// today; the AWS S3/KMS adapter exists but is connected with the AWS deployment, so staging and
-// production answer 503 on document routes until then.
+// today. The production store (AWS S3 with KMS, ap-south-1) is a PORT with NO implementation yet, so
+// staging and production answer 503 on document routes until that adapter is written and approved.
 const documents = config.LOCAL_DOCUMENT_DIR
   ? createLocalDocumentStore(config.LOCAL_DOCUMENT_DIR, config.APP_ENV)
   : undefined;
@@ -77,6 +79,9 @@ const borrower = {
       : createUnavailableIntegrityVerifier(),
   ...(config.STEPUP_OTP_PEPPER ? { stepUpPepper: config.STEPUP_OTP_PEPPER } : {}),
   ...(config.SEND_SMS_HOOK_SECRET ? { sendSmsHookSecret: config.SEND_SMS_HOOK_SECRET } : {}),
+  // Replay protection for the hook that holds across instances (audit F-06). Uses the user pool without
+  // end-user claims; the public API never holds the system login.
+  ...(pool ? { webhookDedup: createWebhookDedup(pool) } : {}),
   smsTimeoutMs: 4000,
 };
 

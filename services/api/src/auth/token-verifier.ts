@@ -41,7 +41,8 @@ const ClaimsSchema = z.object({
   sub: z.uuid(),
   role: z.literal('authenticated'),
   aal: z.enum(['aal1', 'aal2']).default('aal1'),
-  session_id: z.string().optional(),
+  // Supabase Auth issues a uuid. Anything else is not a session we can look up, so the token is invalid.
+  session_id: z.uuid().optional(),
   exp: z.number(),
 });
 

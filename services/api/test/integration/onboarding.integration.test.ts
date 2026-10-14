@@ -1,7 +1,7 @@
 // Lender onboarding through the real HTTP app against a real migrated Postgres (same gating as
 // api.integration.test.ts). Uses synthetic data and the development-only local document store.
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createLocalDocumentStore } from '@udofin/adapters';
@@ -289,6 +289,49 @@ describe.skipIf(!enabled)('lender onboarding over HTTP', () => {
       [docA],
     );
     expect(audited.rowCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it('refuses an evidence PDF that names active content, and accepts a clean one', async () => {
+    // Same filter as the KFS upload (F-02). Synthetic bytes: only the tokens, nothing that runs.
+    const send = (body: string, label: string) =>
+      post(`/v1/onboarding/lenders/${ids.lenderA}/documents`, ids.aAdmin, {
+        purpose: 'licence',
+        label,
+        mimeType: 'application/pdf',
+        contentBase64: Buffer.from(`%PDF-1.4\n${body}\n`).toString('base64'),
+      });
+    const recorded = async () =>
+      Number(
+        (
+          await admin.query<{ n: string }>(
+            'select count(*) as n from onboarding.documents where lender_org_id = $1',
+            [ids.lenderA],
+          )
+        ).rows[0]?.n,
+      );
+    const stored = async () => (await readdir(dir, { recursive: true })).length;
+    const [recordsBefore, filesBefore] = [await recorded(), await stored()];
+
+    for (const [label, body] of [
+      ['plain', '1 0 obj << /Type /Catalog /OpenAction 2 0 R >> endobj'],
+      ['hex-escaped', '1 0 obj << /Type /Catalog /Open#41ction 2 0 R >> endobj'],
+      ['script', '3 0 obj << /S /JavaScript /JS (synthetic) >> endobj'],
+    ] as const) {
+      const refused = await send(body, `Active content ${label} (synthetic)`);
+      expect(refused.statusCode, label).toBe(422);
+      expect(refused.json<{ code: string }>().code, label).toBe('document_type_mismatch');
+    }
+    // Nothing was recorded and no blob was written for any refused file.
+    expect(await recorded()).toBe(recordsBefore);
+    expect(await stored()).toBe(filesBefore);
+
+    const clean = await send(
+      '1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj',
+      'Clean evidence (synthetic)',
+    );
+    expect(clean.statusCode).toBe(201);
+    expect(await recorded()).toBe(recordsBefore + 1);
+    expect(await stored()).toBeGreaterThan(filesBefore);
   });
 
   it('refuses secret-like text with a stable code', async () => {

@@ -9,7 +9,7 @@ import {
   parseCookieHeader,
   serializeSessionCookie,
 } from './cookies.js';
-import { type RateLimiter } from './rate-limiter.js';
+import { isAttributedAddress, type RateLimiter } from './rate-limiter.js';
 
 export type PortalAudience = 'platform' | 'lender';
 
@@ -22,8 +22,14 @@ export interface BffOptions {
   audience: PortalAudience;
   apiBaseUrl: string;
   rateLimiter: RateLimiter;
-  /** Resolve the client address. Only trust forwarding headers behind a proxy you control. */
+  /**
+   * Resolve the client address. Only trust forwarding headers behind a proxy you control. Return
+   * `direct` or `unknown` (see UNATTRIBUTED_ADDRESSES) when there is no usable address: per-address
+   * limits are then skipped (never shared), and the per-account and global ceilings apply instead.
+   */
   clientIp?: (request: Request) => string;
+  /** Called whenever a request had no usable client address, so the host can warn (once) about its proxy configuration. */
+  onUnattributedAddress?: () => void;
   fetch?: typeof fetch;
   /** Epoch seconds. */
   now?: () => number;
@@ -63,6 +69,15 @@ const json = (
 const sha = (value: string) => createHash('sha256').update(value).digest('hex').slice(0, 32);
 
 /**
+ * Ceilings for requests whose client address cannot be determined. They are shared by every such request,
+ * so they are deliberately short-window and generous for staff-only portals (a handful of people): an
+ * attacker who fills one can block sign-in only while the attack continues (at most one window after it
+ * stops), never for 15 minutes. They bound the damage; Supabase Auth's own limits stay authoritative.
+ */
+const UNATTRIBUTED_SIGNIN = { limit: 120, windowSeconds: 60 };
+const UNATTRIBUTED_MFA = { limit: 60, windowSeconds: 60 };
+
+/**
  * Browser-facing sign-in for the staff portals (backend-for-frontend). Tokens live only in
  * HttpOnly, SameSite=Strict cookies set here; page scripts never see them. The API remains the
  * authority: these handlers decide nothing about permissions.
@@ -72,6 +87,13 @@ export function createAuthHandlers(options: BffOptions) {
   const cookieOpts = { secure: options.secureCookies };
   const now = options.now ?? (() => Math.floor(Date.now() / 1000));
   const ip = options.clientIp ?? (() => 'unknown');
+  /** The usable client address, or undefined when there is none (see BffOptions.clientIp). */
+  const clientAddressOf = (request: Request): string | undefined => {
+    const address = ip(request);
+    if (isAttributedAddress(address)) return address;
+    options.onUnattributedAddress?.();
+    return undefined;
+  };
 
   function sessionCookies(session: Session): string[] {
     return [
@@ -90,6 +112,33 @@ export function createAuthHandlers(options: BffOptions) {
   } {
     const cookies = parseCookieHeader(request.headers.get('cookie'));
     return { access: cookies.get(names.access), refresh: cookies.get(names.refresh) };
+  }
+
+  /**
+   * Second-factor attempt limit. With a usable client address: per address and (unverified) user id in the
+   * token, as before. Without one: the user id in the cookie is attacker-controlled (the token is not
+   * verified here), so it must not name a shared bucket, or a forged cookie could lock a real user's
+   * second factor. The bucket is then the exact token (unguessable) plus a short global ceiling.
+   */
+  function mfaAllowed(
+    request: Request,
+    kind: 'mfa-enrol' | 'mfa-verify',
+    accessToken: string,
+    limit: number,
+    windowSeconds: number,
+  ): boolean {
+    const address = clientAddressOf(request);
+    if (address) {
+      const userId = readTokenClaims(accessToken)?.sub ?? 'unknown';
+      return options.rateLimiter.hit(`${kind}:${address}:${userId}`, limit, windowSeconds);
+    }
+    return (
+      options.rateLimiter.hit(
+        'mfa:unattributed',
+        UNATTRIBUTED_MFA.limit,
+        UNATTRIBUTED_MFA.windowSeconds,
+      ) && options.rateLimiter.hit(`${kind}:token:${sha(accessToken)}`, limit, windowSeconds)
+    );
   }
 
   /** CSRF defence in depth on top of SameSite=Strict: same-origin, JSON only. */
@@ -166,15 +215,35 @@ export function createAuthHandlers(options: BffOptions) {
       if (!input) return json(400, { error: 'invalid_request' });
       // Count attempts per address AND per account (hashed), whether or not the account exists.
       const account = sha(input.email.toLowerCase());
-      if (
-        !options.rateLimiter.hit(`signin:ip:${ip(request)}`, 20, 900) ||
-        // Per address AND account: one attacker cannot lock a real user out of their own sign-in
-        // from elsewhere. A looser account-wide ceiling backstops distributed guessing; Supabase's own
-        // limits and the second factor are the authoritative protection.
-        !options.rateLimiter.hit(`signin:acct-ip:${ip(request)}:${account}`, 8, 900) ||
-        !options.rateLimiter.hit(`signin:acct:${account}`, 60, 900)
-      ) {
-        return json(429, { error: 'rate_limited' }, [], { 'retry-after': '900' });
+      const address = clientAddressOf(request);
+      if (address) {
+        if (
+          !options.rateLimiter.hit(`signin:ip:${address}`, 20, 900) ||
+          // Per address AND account: one attacker cannot lock a real user out of their own sign-in
+          // from elsewhere. A looser account-wide ceiling backstops distributed guessing; Supabase's own
+          // limits and the second factor are the authoritative protection.
+          !options.rateLimiter.hit(`signin:acct-ip:${address}:${account}`, 8, 900) ||
+          !options.rateLimiter.hit(`signin:acct:${account}`, 60, 900)
+        ) {
+          return json(429, { error: 'rate_limited' }, [], { 'retry-after': '900' });
+        }
+      } else {
+        // No usable client address: NO per-address bucket (a shared "unknown" bucket would let one attacker
+        // lock everybody out for 15 minutes). The per-account ceiling still applies, plus a short global one.
+        if (
+          !options.rateLimiter.hit(
+            'signin:unattributed',
+            UNATTRIBUTED_SIGNIN.limit,
+            UNATTRIBUTED_SIGNIN.windowSeconds,
+          )
+        ) {
+          return json(429, { error: 'rate_limited' }, [], {
+            'retry-after': String(UNATTRIBUTED_SIGNIN.windowSeconds),
+          });
+        }
+        if (!options.rateLimiter.hit(`signin:acct:${account}`, 60, 900)) {
+          return json(429, { error: 'rate_limited' }, [], { 'retry-after': '900' });
+        }
       }
       try {
         const session = await options.gotrue.signInWithPassword(input.email, input.password);
@@ -198,8 +267,7 @@ export function createAuthHandlers(options: BffOptions) {
       if (blocked) return blocked;
       const { access } = readTokens(request);
       if (!access) return json(401, { error: 'invalid_session' });
-      const userId = readTokenClaims(access)?.sub ?? 'unknown';
-      if (!options.rateLimiter.hit(`mfa-enrol:${ip(request)}:${userId}`, 5, 900))
+      if (!mfaAllowed(request, 'mfa-enrol', access, 5, 900))
         return json(429, { error: 'rate_limited' });
       try {
         const factors = await options.gotrue.listFactors(access);
@@ -229,8 +297,7 @@ export function createAuthHandlers(options: BffOptions) {
       if (!input) return json(400, { error: 'invalid_request' });
       const { access } = readTokens(request);
       if (!access) return json(401, { error: 'invalid_session' });
-      const userId = readTokenClaims(access)?.sub ?? 'unknown';
-      if (!options.rateLimiter.hit(`mfa-verify:${ip(request)}:${userId}`, 6, 300)) {
+      if (!mfaAllowed(request, 'mfa-verify', access, 6, 300)) {
         return json(429, { error: 'rate_limited' }, [], { 'retry-after': '300' });
       }
       try {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ConfigError, loadConfig } from '../src/config.js';
+import { ConfigError, loadConfig, sessionIdRequired } from '../src/config.js';
 
 describe('loadConfig', () => {
   it('applies safe local defaults', () => {
@@ -23,6 +23,7 @@ describe('loadConfig', () => {
       APP_ENV: 'production',
       DATABASE_URL: 'postgres://api@db.example.internal:5432/udofin?sslmode=require',
       SUPABASE_URL: 'https://example.supabase.co',
+      TRUST_PROXY_HOPS: '1',
     };
     expect(() => loadConfig({ ...base, CORS_ALLOWED_ORIGINS: '*' })).toThrow(ConfigError);
     expect(() => loadConfig({ ...base, CORS_ALLOWED_ORIGINS: 'http://ops.udofin.com' })).toThrow(
@@ -56,6 +57,7 @@ describe('loadConfig', () => {
       APP_ENV: 'production',
       DATABASE_URL: 'postgres://api@db.example.internal:5432/udofin?sslmode=verify-full',
       SUPABASE_URL: 'https://example.supabase.co',
+      TRUST_PROXY_HOPS: '1',
     };
     expect(loadConfig(ok).APP_ENV).toBe('production');
     expect(() =>
@@ -69,7 +71,58 @@ describe('loadConfig', () => {
     );
   });
 
-  it('trusts no proxy hop unless told to', () => {
+  it('trusts no proxy hop unless told to (local and test only)', () => {
     expect(loadConfig({}).TRUST_PROXY_HOPS).toBe(0);
+    expect(loadConfig({ APP_ENV: 'test' }).TRUST_PROXY_HOPS).toBe(0);
+    expect(loadConfig({ TRUST_PROXY_HOPS: '2' }).TRUST_PROXY_HOPS).toBe(2);
+  });
+
+  describe('TRUST_PROXY_HOPS when deployed (audit R-02)', () => {
+    const base = {
+      DATABASE_URL: 'postgres://api@db.example.internal:5432/udofin?sslmode=require',
+      SUPABASE_URL: 'https://example.supabase.co',
+    };
+    it.each(['staging', 'production'])('is required in %s, naming the variable', (APP_ENV) => {
+      expect(() => loadConfig({ ...base, APP_ENV })).toThrow(
+        /TRUST_PROXY_HOPS: required when deployed/,
+      );
+      // An empty value is "not set", never a silent zero.
+      expect(() => loadConfig({ ...base, APP_ENV, TRUST_PROXY_HOPS: '' })).toThrow(
+        /TRUST_PROXY_HOPS: required when deployed/,
+      );
+    });
+    it('accepts an explicit value, including 0 for a directly exposed service', () => {
+      expect(
+        loadConfig({ ...base, APP_ENV: 'production', TRUST_PROXY_HOPS: '1' }).TRUST_PROXY_HOPS,
+      ).toBe(1);
+      expect(
+        loadConfig({ ...base, APP_ENV: 'staging', TRUST_PROXY_HOPS: '0' }).TRUST_PROXY_HOPS,
+      ).toBe(0);
+    });
+    it('rejects values that are not a small whole number', () => {
+      for (const bad of ['-1', '9', 'two', '1.5']) {
+        expect(() => loadConfig({ ...base, APP_ENV: 'production', TRUST_PROXY_HOPS: bad })).toThrow(
+          /TRUST_PROXY_HOPS/,
+        );
+      }
+    });
+  });
+
+  it('sets a per-principal rate limit separate from the per-address one', () => {
+    const config = loadConfig({});
+    expect(config.RATE_LIMIT_PRINCIPAL_MAX_PER_MINUTE).toBe(600);
+    expect(
+      loadConfig({ RATE_LIMIT_PRINCIPAL_MAX_PER_MINUTE: '50' }).RATE_LIMIT_PRINCIPAL_MAX_PER_MINUTE,
+    ).toBe(50);
+    expect(() => loadConfig({ RATE_LIMIT_PRINCIPAL_MAX_PER_MINUTE: '0' })).toThrow(
+      /RATE_LIMIT_PRINCIPAL_MAX_PER_MINUTE/,
+    );
+  });
+
+  it('requires a session id in access tokens when deployed, and tolerates its absence only in local and test (audit F-01)', () => {
+    expect(sessionIdRequired({ APP_ENV: 'production' })).toBe(true);
+    expect(sessionIdRequired({ APP_ENV: 'staging' })).toBe(true);
+    expect(sessionIdRequired({ APP_ENV: 'local' })).toBe(false);
+    expect(sessionIdRequired({ APP_ENV: 'test' })).toBe(false);
   });
 });

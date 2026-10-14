@@ -34,6 +34,7 @@ import { type DocumentStore } from '@udofin/adapters';
 import { z } from 'zod';
 import { ApiError } from '../../http/api-error.js';
 import { userRoute, type RouteDefinition } from '../../http/routes.js';
+import { assertUploadAllowed } from '../../http/upload-safety.js';
 import { columns } from '../../db/columns.js';
 import { assertCan, lenderOf, scalar, toSnake } from './sql.js';
 
@@ -230,15 +231,6 @@ const GATE_REQUEST_COLUMNS = columns({
   decidedAt: 'decided_at::text',
   decisionNote: 'decision_note',
 });
-
-const isPdf = (b: Buffer) => b.subarray(0, 5).toString('latin1') === '%PDF-';
-const isPng = (b: Buffer) => b.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'));
-const isJpeg = (b: Buffer) => b.subarray(0, 3).equals(Buffer.from('ffd8ff', 'hex'));
-const SIGNATURES: Record<string, (b: Buffer) => boolean> = {
-  'application/pdf': isPdf,
-  'image/png': isPng,
-  'image/jpeg': isJpeg,
-};
 
 /**
  * Lender onboarding, accounting framework / Ind AS status, engagement scope, requirements and
@@ -601,9 +593,8 @@ export function onboardingRoutes(documents: DocumentStore | undefined): RouteDef
         if (bytes.length === 0 || bytes.length > MAX_DOCUMENT_BYTES) {
           throw new ApiError(413, 'document_too_large', 'Content Too Large');
         }
-        if (!SIGNATURES[body.mimeType]?.(bytes)) {
-          throw new ApiError(422, 'document_type_mismatch', 'Unprocessable Content');
-        }
+        // Same check as the KFS upload: real type by magic bytes, and no active content in a PDF.
+        assertUploadAllowed(bytes, body.mimeType);
         const sha256 = createHash('sha256').update(bytes).digest('hex');
         const storageKey = `onboarding/${randomUUID()}`;
         await store.put(storageKey, bytes, { mimeType: body.mimeType, sha256 });

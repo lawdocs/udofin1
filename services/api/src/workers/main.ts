@@ -1,4 +1,5 @@
 import { loadConfig } from '../config.js';
+import { assertSystemLoginPosture } from '../db/login-posture.js';
 import { createBorrowerProcessor } from '../system/borrower.js';
 import { createChangeRequestApplier } from '../system/change-requests.js';
 import { createSystemPool } from '../system/pool.js';
@@ -32,6 +33,8 @@ const out = (level: string) => (fields: Record<string, unknown>, message: string
 const log: WorkerLogger = { info: out('info'), warn: out('warn'), error: out('error') };
 
 const pool = createSystemPool(config.SYSTEM_DATABASE_URL);
+// Refuse to start if the system login is over-privileged or cannot assume service_role (audit R-10).
+await assertSystemLoginPosture(pool);
 const applier = createChangeRequestApplier(pool);
 const borrower = createBorrowerProcessor(pool);
 const routing = createRoutingProcessor(pool);
@@ -108,6 +111,16 @@ const housekeeping = setInterval(
       .then((r) => {
         if (r.expired > 0 || r.withdrawn > 0 || r.jobsInterrupted > 0)
           log.info({ ...r }, 'document deadlines processed');
+        // Webhook de-duplication rows only need to outlive the 5-minute signature window; keep a day.
+        return pool.withSystem(async (tx) => {
+          const purged = await tx.query<{ n: number }>(
+            "select ops.purge_seen_webhooks(interval '1 day', 1000) as n",
+          );
+          return purged.rows[0]?.n ?? 0;
+        });
+      })
+      .then((n) => {
+        if (n > 0) log.info({ purged: n }, 'webhook de-duplication rows purged');
       })
       .catch((error: unknown) => {
         log.warn({ type: (error as Error).name }, 'draft expiry housekeeping failed');
