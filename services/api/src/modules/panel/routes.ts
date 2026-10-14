@@ -21,7 +21,7 @@ import { ApiError } from '../../http/api-error.js';
 import { decodeCursor, encodeCursor } from '../../http/pagination.js';
 import { userRoute, type RouteDefinition } from '../../http/routes.js';
 import { type UserTx } from '../../db/user-context.js';
-import { columns } from '../onboarding/sql.js';
+import { columns } from '../../db/columns.js';
 
 const MAX_EXPORT_ROWS = 5000;
 const WRITE_LIMIT = { max: 40, timeWindow: '1 minute' };

@@ -22,7 +22,7 @@ import { z } from 'zod';
 import { ApiError } from '../../http/api-error.js';
 import { userRoute, type RouteDefinition } from '../../http/routes.js';
 import { type UserTx } from '../../db/user-context.js';
-import { columns } from '../onboarding/sql.js';
+import { columns } from '../../db/columns.js';
 
 const WRITE_LIMIT = { max: 40, timeWindow: '1 minute' };
 const Id = z.strictObject({ id: z.uuid() });

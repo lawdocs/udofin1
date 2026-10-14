@@ -41,7 +41,7 @@ import { z } from 'zod';
 import { ApiError } from '../../http/api-error.js';
 import { decodeCursor, encodeCursor, PageQuerySchema } from '../../http/pagination.js';
 import { publicRoute, userRoute, type RouteDefinition } from '../../http/routes.js';
-import { columns } from '../onboarding/sql.js';
+import { columns } from '../../db/columns.js';
 import { type BorrowerDeps } from './deps.js';
 
 const WRITE_LIMIT = { max: 60, timeWindow: '1 minute' };

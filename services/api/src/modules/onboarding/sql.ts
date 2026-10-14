@@ -1,12 +1,6 @@
 import { type UserTx } from '../../db/user-context.js';
 import { ApiError } from '../../http/api-error.js';
 
-/** `select` list that returns camelCase keys, e.g. { lenderOrgId: 'lender_org_id' }. */
-export const columns = (map: Record<string, string>): string =>
-  Object.entries(map)
-    .map(([key, expression]) => `${expression} as "${key}"`)
-    .join(', ');
-
 /** Keys of an input object converted to snake_case for the SQL functions (undefined dropped). */
 export function toSnake(input: Record<string, unknown>): string {
   const out: Record<string, unknown> = {};

@@ -34,7 +34,8 @@ import { type DocumentStore } from '@udofin/adapters';
 import { z } from 'zod';
 import { ApiError } from '../../http/api-error.js';
 import { userRoute, type RouteDefinition } from '../../http/routes.js';
-import { assertCan, columns, lenderOf, scalar, toSnake } from './sql.js';
+import { columns } from '../../db/columns.js';
+import { assertCan, lenderOf, scalar, toSnake } from './sql.js';
 
 const MAX_DOCUMENT_BYTES = 8 * 1024 * 1024;
 const WRITE_LIMIT = { max: 40, timeWindow: '1 minute' };
