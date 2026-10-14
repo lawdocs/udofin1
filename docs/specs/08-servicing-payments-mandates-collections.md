@@ -17,6 +17,10 @@ The owner approved this specification with the following decisions (recorded in 
 6. **Primary documents:** supplied later by the owner; their future arrival is not evidence. Only the ten RBI texts named in section 3.1 are confirmed. A register of missing texts is kept (section 24.2). Nothing that depends on an unresolved legal, regulatory, provider or contractual prerequisite is activated.
 7. **Collections and DLG:** disabled for every lender until gates are evidenced; a DLG arrangement does not make Udofin responsible for collection; contractual responsibilities, operational permissions, approvals and activation status are separate records.
 
+8. **Account-number format (answer of 14 Oct 2026):** 9 to 18 digits is the initial range, configurable by country and account type (data, not code); a rule is `unverified` until its source is supplied; invalid formats are rejected under the applicable rule; unvalidated details are never fingerprinted.
+9. **Unknown provider event kinds (answer of 14 Oct 2026):** an authentic event whose kind (or status) the platform does not support is stored as verified-and-ignored and changes no payment, mandate or settlement state; only failed verification goes to the unverified-receipts store.
+10. **Import files with errors (answer of 14 Oct 2026):** all or nothing in one database transaction; the whole file is validated first; row-level errors are shown and the file can be corrected and resubmitted; a failed attempt leaves an audit record (file hash, counts, row positions and error codes) and no row values.
+
 Approval to implement Phase 08a is not approval to launch real payments: live activation additionally needs verified lender arrangements, settlement configuration, provider documentation and the legal and compliance gates in section 25.
 
 ## 1. Objective in plain English
