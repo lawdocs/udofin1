@@ -29,6 +29,7 @@ export async function GET(
       'content-disposition': `inline; filename="document-${result.data.documentId.slice(0, 8)}-v${String(result.data.version)}.pdf"`,
       'x-content-type-options': 'nosniff',
       'cache-control': 'no-store',
+      'content-security-policy': "sandbox; default-src 'none'",
     },
   });
 }

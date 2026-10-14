@@ -275,3 +275,9 @@ The brief's 20 criteria apply. For this spec, each is "met" only with an execute
 ## 17. Risks
 
 The largest risks are not technical: no lender-approved template or Hindi text exists; "explained" and "working day" are open readings; bank and UCB rules are unread; a click-wrap or OTP could be mistaken for a signature if the UI is careless (it must say otherwise); the local-disk store is not production storage; Hindi PDF shaping must be proven before it is relied on; and a lender that edits numbers after the borrower acknowledged would void the evidence, which is why every change is a new version needing a new acknowledgement.
+
+## 18. Implementation record (14 October 2026)
+
+Built: the foundation in sections 5 to 12, with every item that depends on an undecided matter **blocked, not simulated**: no calendar, approved template, Hindi wording, signing provider, email provider or bank/UCB rule is seeded or assumed. Seeded NBFC rule and Annex I layout are DRAFT fixtures.
+
+Security review (independent read, static): no blocking finding. Fixed in migration `…000904`: the person who typed the KFS figures can no longer approve the document (segregation covers the preparer and the submitter); `prepared_by` is no longer movable; a `sandbox` signing result cannot advance an application; lender uploads are authorised before any byte is stored and PDFs naming active content (JavaScript, OpenAction, Launch, EmbeddedFile) are refused; the lender-portal file route sends `content-security-policy: sandbox`. Not changed, disclosed: `documents.working_day_end` stays callable by signed-in users (it needs an unguessable calendar id and returns only a timestamp; platform staff call it); a lender-supplied proposal number equal to another lender's returns `proposal_no_taken` (global uniqueness; revisit); repeated email-notice requests insert `not_configured` rows (rate-limited); `sections_viewed` is client-reported evidence.

@@ -59,6 +59,9 @@ const ListQuery = z.strictObject({
   limit: z.coerce.number().int().min(1).max(100).default(50),
 });
 
+/** PDF names that run code, launch programs or embed files. Matched on the raw bytes, so object streams can hide them; the lender approver still reads the file. */
+const ACTIVE_PDF_CONTENT = /\/(JavaScript|JS|OpenAction|Launch|EmbeddedFile|AA)\b/;
+
 type Tx = Parameters<Parameters<typeof userRoute>[0]['handler']>[0]['tx'];
 
 /** Row-level security hides other people's rows; these make "not yours" an explicit 404 or 403 rather than an empty list. */
@@ -452,6 +455,11 @@ export function documentRoutes(
           throw new ApiError(413, 'document_too_large', 'Content Too Large');
         if (bytes.subarray(0, 5).toString('latin1') !== '%PDF-')
           throw new ApiError(422, 'document_type_mismatch', 'Unprocessable Content');
+        // A file with active content is never stored: it would be opened by the second approver and the borrower.
+        if (ACTIVE_PDF_CONTENT.test(bytes.toString('latin1')))
+          throw new ApiError(422, 'document_type_mismatch', 'Unprocessable Content');
+        // Authorise (tenant, permission, step-up) before any byte is written to the store.
+        await tx.query('select documents.assert_can_prepare($1::uuid)', [params.id]);
         const sha256 = createHash('sha256').update(bytes).digest('hex');
         const key = `documents/${randomUUID()}`;
         await store.put(key, bytes, { mimeType: 'application/pdf', sha256 });
@@ -462,6 +470,7 @@ export function documentRoutes(
           );
           return { status: 201, body: { id: first(r.rows) } };
         } catch (error) {
+          // An orphan is possible only if this delete also fails; the key is random and unreferenced, never served.
           await store.delete(key).catch(() => undefined);
           throw error;
         }

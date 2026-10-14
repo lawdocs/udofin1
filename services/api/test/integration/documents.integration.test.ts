@@ -962,7 +962,7 @@ describe.skipIf(!enabled)(
         );
         expect(
           (
-            await post(`/v1/lender/documents/${state.docAgr}/approve`, ids.aPrep, {
+            await post(`/v1/lender/documents/${state.docAgr}/approve`, ids.aApprover, {
               sha256: state.shaAgr,
             })
           ).statusCode,

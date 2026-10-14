@@ -3,7 +3,7 @@
 -- Synthetic data only. The KFS example uses the RBI illustration (RBC Directions 2025, para 29(3)) figures in paise.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(177);
+select plan(178);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -320,6 +320,17 @@ select pg_temp.as_user('aaaaaaaa-0000-4000-8000-000000000004');
 select is(pg_temp.err(format($$select documents.approve_document(%L, %L)$$, pg_temp.get('doc1'), repeat('1', 64))), '42501|', 'a viewer cannot approve');
 select pg_temp.as_user('bbbbbbbb-0000-4000-8000-000000000002');
 select is(pg_temp.err(format($$select documents.approve_document(%L, %L)$$, pg_temp.get('doc1'), repeat('1', 64))), 'P0002|', 'another lender cannot approve it');
+select pg_temp.as_owner();
+select pg_temp.keep('orig_submitter', (select ki.submitted_by::text from documents.kfs_inputs ki join documents.items i on i.kfs_input_id = ki.id where i.id = pg_temp.get('doc1')::uuid));
+alter table documents.kfs_inputs disable trigger user;
+update documents.kfs_inputs ki set submitted_by = 'aaaaaaaa-0000-4000-8000-000000000002' from documents.items i where i.kfs_input_id = ki.id and i.id = pg_temp.get('doc1')::uuid;
+alter table documents.kfs_inputs enable trigger user;
+select pg_temp.as_user('aaaaaaaa-0000-4000-8000-000000000002');
+select is(pg_temp.err(format($$select documents.approve_document(%L, %L)$$, pg_temp.get('doc1'), repeat('1', 64))), '42501|segregation_of_duties', 'the person who typed the figures cannot approve the document either, even if someone else pressed generate');
+select pg_temp.as_owner();
+alter table documents.kfs_inputs disable trigger user;
+update documents.kfs_inputs ki set submitted_by = pg_temp.get('orig_submitter')::uuid from documents.items i where i.kfs_input_id = ki.id and i.id = pg_temp.get('doc1')::uuid;
+alter table documents.kfs_inputs enable trigger user;
 select pg_temp.as_user('aaaaaaaa-0000-4000-8000-000000000002');
 select is(pg_temp.err(format($$select documents.issue_document(%L)$$, pg_temp.get('doc1'))), '55000|approval_required', 'nothing is issued before lender approval');
 select is(pg_temp.err(format($$select documents.approve_document(%L, %L)$$, pg_temp.get('doc1'), repeat('0', 64))), '55000|hash_mismatch', 'approval names the exact file reviewed; another hash is refused');
@@ -474,8 +485,8 @@ select pg_temp.keep('doc_agr', documents.complete_generation((select id from doc
 select pg_temp.as_owner();
 select is((select status::text from lending.applications where id = 'a2000000-0000-4000-8000-000000000001'), 'agreement_pending', 'the application moves to agreement pending only now');
 select is((select content_digest from documents.items where id = pg_temp.get('doc_agr')::uuid), (select content_digest from documents.items where id = pg_temp.get('doc1')::uuid), 'the agreement carries the KFS content digest for its summary box');
-select pg_temp.as_user('aaaaaaaa-0000-4000-8000-000000000001');
-select is(pg_temp.err(format($$select documents.approve_document(%L, %L)$$, pg_temp.get('doc_agr'), repeat('6', 64))), 'ok', 'a lender user with approve rights who did not prepare it can approve (the system prepared it)');
+select pg_temp.as_user('aaaaaaaa-0000-4000-8000-000000000002');
+select is(pg_temp.err(format($$select documents.approve_document(%L, %L)$$, pg_temp.get('doc_agr'), repeat('6', 64))), 'ok', 'a lender user with approve rights who neither prepared it nor submitted its figures can approve (the system prepared it)');
 select is(pg_temp.err(format($$select documents.issue_document(%L)$$, pg_temp.get('doc_agr'))), 'ok', 'the agreement is issued after lender approval');
 
 -- L. Signing boundary: no provider, only the labelled mock in tests; an OTP is not a signature ------------------------------------------------------------------
