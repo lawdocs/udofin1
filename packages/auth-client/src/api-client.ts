@@ -120,7 +120,7 @@ export function createApiClient(options: ApiClientOptions) {
 
 // Only portal onboarding/lender paths and the borrower-app paths are reachable through the generic calls.
 const ONBOARDING_PATH =
-  /^\/v1\/(?:(?:onboarding|lender)\/|(?:borrower|consent|loan-requests|stepup|integrity)(?:\/|\?|$)|loan-purposes(?:\?|$))[A-Za-z0-9/_?=&.,%-]*$/;
+  /^\/v1\/(?:(?:onboarding|lender)\/|(?:borrower|consent|loan-requests|selections|applications|documents|offers|agreements|stepup|integrity)(?:\/|\?|$)|loan-purposes(?:\?|$))[A-Za-z0-9/_?=&.,%-]*$/;
 const onboardingPath = (path: string): boolean =>
   ONBOARDING_PATH.test(path) && !path.includes('..') && !/%2e/i.test(path);
 const blocked = (): { ok: false; status: number; code: string } => ({

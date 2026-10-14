@@ -202,7 +202,8 @@ begin
     raise exception 'a newer version of this wording is published' using errcode = '55000', hint = 'wording_superseded';
   end if;
   select * into v_rule from documents.applicability_rules where id = d.rule_id;
-  if v_rule.id is not null and not (v_rule.ack_sections <@ coalesce(p_sections, '{}')) then
+  -- A KFS the lender issued as its own file has no sections the app can show; opening the file is the review.
+  if v_rule.id is not null and d.source_mode = 'generated' and not (v_rule.ack_sections <@ coalesce(p_sections, '{}')) then
     raise exception 'every section must have been shown' using errcode = '55000', hint = 'sections_not_shown';
   end if;
   insert into documents.acknowledgements (borrower_id, lender_org_id, application_id, offer_id, document_id, document_sha256, rule_id, template_id, language,

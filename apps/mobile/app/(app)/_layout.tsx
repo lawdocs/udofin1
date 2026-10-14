@@ -20,6 +20,9 @@ function Menu() {
       <Tabs.Screen name="lenders" options={{ href: null }} />
       <Tabs.Screen name="applications" options={{ href: null }} />
       <Tabs.Screen name="offers" options={{ href: null }} />
+      <Tabs.Screen name="documents" options={{ href: null }} />
+      <Tabs.Screen name="kfs" options={{ href: null }} />
+      <Tabs.Screen name="agreement" options={{ href: null }} />
     </Tabs>
   );
 }

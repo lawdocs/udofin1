@@ -152,6 +152,9 @@ describe('generic call allow-list', () => {
     '/v1/loan-purposes-extra',
     '/v1/consentx',
     '/v2/borrower/me',
+    '/v1/documentsx/1',
+    '/v1/platform/document-rules',
+    '/v1/applications/../admin/x',
   ])('refuses %s', async (path) => {
     expect(await api.get(path, any)).toEqual({ ok: false, status: 0, code: 'path_not_allowed' });
   });
@@ -161,6 +164,11 @@ describe('generic call allow-list', () => {
     '/v1/loan-requests?limit=20',
     '/v1/consent/notices?language=en',
     '/v1/stepup/challenges',
+    '/v1/selections/0f1e2d3c-4b5a-4c6d-8e7f-0a1b2c3d4e5f/route',
+    '/v1/applications/0f1e2d3c-4b5a-4c6d-8e7f-0a1b2c3d4e5f/documents',
+    '/v1/documents/0f1e2d3c-4b5a-4c6d-8e7f-0a1b2c3d4e5f/kfs?language=hi',
+    '/v1/offers/0f1e2d3c-4b5a-4c6d-8e7f-0a1b2c3d4e5f/accept',
+    '/v1/agreements/0f1e2d3c-4b5a-4c6d-8e7f-0a1b2c3d4e5f/signing',
   ])('allows %s through to the network', async (path) => {
     const result = await api.get(path, any);
     expect(result.ok === false && result.code === 'path_not_allowed').toBe(false);

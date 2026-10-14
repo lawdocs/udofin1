@@ -1,6 +1,6 @@
 import { type COMPARISON_SORTS } from '@udofin/contracts';
 import * as Linking from 'expo-linking';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Platform } from 'react-native';
 import { errorKey } from '../../src/borrower/errors';
@@ -38,6 +38,7 @@ const platform = Platform.OS === 'ios' ? 'ios' : Platform.OS === 'web' ? 'web' :
 export default function OffersScreen() {
   const { request } = useLocalSearchParams<{ request?: string }>();
   const requestId = request ?? '';
+  const router = useRouter();
   const { t, language } = useI18n();
   const { client } = useBorrower();
   const [sort, setSort] = useState<Sort | undefined>(undefined);
@@ -133,7 +134,13 @@ export default function OffersScreen() {
           <Body>{t('offers.penal', { text: o.penalChargesSummary })}</Body>
           <Body muted>{t('offers.validUntil', { date: formatDate(o.validUntil, language) })}</Body>
           {o.revised ? <Body muted>{t('offers.revised', { n: o.revision })}</Body> : null}
-          <Button title={t('offers.kfs')} onPress={() => void openKfs(o.kfsUrl)} />
+          <Button
+            title={t('docs.title')}
+            onPress={() =>
+              router.push({ pathname: '/documents', params: { application: o.applicationId } })
+            }
+          />
+          <Button title={t('offers.kfs')} secondary onPress={() => void openKfs(o.kfsUrl)} />
           <Body muted>{t('offers.kfsNote')}</Body>
         </Card>
       ))}

@@ -17,8 +17,17 @@ import {
 } from '@udofin/contracts';
 import { type ApiClient, type ApiResult } from '@udofin/auth-client';
 import {
+  AcceptResult,
+  AcknowledgeResult,
+  ApplicationDocuments,
   BorrowerApplicationList,
   Comparison,
+  DeliveryList,
+  DeliveryRequested,
+  IssuedDocumentContent,
+  KfsView,
+  SigningStarted,
+  SigningStatusView,
   MatchingLenderList,
   RouteResult,
   SelectionCreated,
@@ -192,6 +201,66 @@ export function createBorrowerClient(api: ApiClient) {
         input,
         key(idempotencyKey),
       ),
+
+    // ---- Phase 07: documents, acknowledgement, acceptance, signing, delivery ----------------------------------------
+    applicationDocuments: (applicationId: string) =>
+      api.get(
+        `/v1/applications/${encodeURIComponent(applicationId)}/documents`,
+        ApplicationDocuments,
+      ),
+    kfsView: (documentId: string, language: Language) =>
+      api.get(`/v1/documents/${encodeURIComponent(documentId)}/kfs?language=${language}`, KfsView),
+    documentContent: (documentId: string, purpose: 'view' | 'download' = 'view') =>
+      api.get(
+        `/v1/documents/${encodeURIComponent(documentId)}/content?purpose=${purpose}`,
+        IssuedDocumentContent,
+      ),
+    acknowledgeKfs: (
+      documentId: string,
+      input: {
+        noticeId: string;
+        sections: ('part1' | 'apr_sheet' | 'schedule' | 'part2')[];
+        action: 'checkbox_and_button' | 'button';
+        explanationVersion: string;
+        appVersion: string;
+      },
+      idempotencyKey?: string,
+    ) =>
+      api.post(
+        `/v1/documents/${encodeURIComponent(documentId)}/acknowledge`,
+        AcknowledgeResult,
+        { ...input, channel: 'mobile_app' },
+        key(idempotencyKey),
+      ),
+    acceptOffer: (
+      offerId: string,
+      input: { kfsDocumentId: string; acknowledgementId: string },
+      idempotencyKey?: string,
+    ) =>
+      api.post(
+        `/v1/offers/${encodeURIComponent(offerId)}/accept`,
+        AcceptResult,
+        input,
+        key(idempotencyKey),
+      ),
+    startSigning: (agreementId: string, idempotencyKey?: string) =>
+      api.post(
+        `/v1/agreements/${encodeURIComponent(agreementId)}/signing`,
+        SigningStarted,
+        {},
+        key(idempotencyKey),
+      ),
+    signingStatus: (agreementId: string) =>
+      api.get(`/v1/agreements/${encodeURIComponent(agreementId)}/signing`, SigningStatusView),
+    requestDelivery: (documentId: string, channel: 'sms_notice' | 'email_notice') =>
+      api.post(
+        `/v1/documents/${encodeURIComponent(documentId)}/delivery`,
+        DeliveryRequested,
+        { channel },
+        key(),
+      ),
+    deliveries: (documentId: string) =>
+      api.get(`/v1/documents/${encodeURIComponent(documentId)}/deliveries`, DeliveryList),
 
     requestDeletion: () => api.post('/v1/borrower/deletion-requests', Created, {}, key()),
     cancelDeletion: () => api.post('/v1/borrower/deletion-requests/cancel', Ok, {}, key()),
