@@ -7,6 +7,8 @@
 -- `forced` = row-level security is also enforced for the table owner. Reference tables and
 -- consent.notices are deliberately not forced: SECURITY DEFINER functions owned by the migration
 -- role read them; end users and service_role are governed by grants and policies regardless.
+-- The six unforced tables are exactly: consent.notices, lending.application_transitions,
+-- lending.product_categories, tenancy.permissions, tenancy.roles, tenancy.role_permissions.
 begin;
 create extension if not exists pgtap with schema extensions;
 select plan(8);
@@ -54,6 +56,7 @@ insert into expected_tables values
   ('onboarding.verification_history', '-', 's', 'siud', true),
   ('ops.idempotency_keys', '-', '-', 'siud', true),
   ('ops.outbox_events', '-', '-', 'siud', true),
+  ('ops.seen_webhooks', '-', '-', 'sd', true),
   ('lending.lender_connectors', '-', 's', 'siud', true),
   ('lending.lender_selections', '-', 's', 'siud', true),
   ('lending.lender_selection_items', '-', 's', 'siud', true),
@@ -75,9 +78,26 @@ insert into expected_tables values
   ('lending.offers', '-', 'siu', 'siud', true),
   ('lending.panel_views', '-', 'siu', 'siud', true),
   ('lending.product_categories', '-', 's', 'siud', false),
+  ('documents.acceptances', '-', 's', 'siud', true),
+  ('documents.access_log', '-', 's', 'siud', true),
+  ('documents.acknowledgements', '-', 's', 'siud', true),
+  ('documents.applicability_rules', '-', 's', 'siud', true),
+  ('documents.calendar_exceptions', '-', 's', 'siud', true),
+  ('documents.calendars', '-', 's', 'siud', true),
+  ('documents.deliveries', '-', 's', 'siud', true),
+  ('documents.document_types', '-', 's', 'siud', true),
+  ('documents.generation_jobs', '-', 's', 'siud', true),
+  ('documents.item_events', '-', 's', 'siud', true),
+  ('documents.items', '-', 's', 'siud', true),
+  ('documents.kfs_inputs', '-', 's', 'siud', true),
+  ('documents.proposals', '-', 's', 'siud', true),
+  ('documents.signing_events', '-', 's', 'siud', true),
+  ('documents.signing_requests', '-', 's', 'siud', true),
+  ('documents.templates', '-', 's', 'siud', true),
   ('payments.payment_intents', '-', 'su', 'siud', true),
   ('payments.provider_events', '-', 's', 'siud', true),
   ('servicing.loan_accounts', '-', 's', 'siud', true),
+  ('servicing.loan_account_events', '-', 's', 'siud', true),
   ('servicing.schedule_installments', '-', 's', 'siud', true),
   ('servicing.schedule_snapshots', '-', 's', 'siud', true),
   ('tenancy.change_requests', '-', 's', 'siud', true),
@@ -92,7 +112,7 @@ insert into expected_tables values
 create temp table actual_tables as
 select n.nspname || '.' || c.relname as tbl, c.oid as oid, c.relrowsecurity as rls, c.relforcerowsecurity as forced
 from pg_class c join pg_namespace n on n.oid = c.relnamespace
-where c.relkind in ('r', 'p') and n.nspname in ('tenancy', 'identity', 'consent', 'audit', 'lending', 'servicing', 'payments', 'ops', 'onboarding');
+where c.relkind in ('r', 'p') and n.nspname in ('tenancy', 'identity', 'consent', 'audit', 'lending', 'servicing', 'payments', 'ops', 'onboarding', 'documents');
 
 select is((select coalesce(string_agg(tbl, ', '), '') from (select tbl from actual_tables except select tbl from expected_tables) x), '',
   'every domain table has a row in the matrix (add new tables here)');

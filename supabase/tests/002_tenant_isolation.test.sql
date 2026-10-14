@@ -1,7 +1,7 @@
 -- Tenant isolation and least privilege: who can see and change what, across lenders and borrowers.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(34);
+select plan(52);
 
 -- ---------------------------------------------------------------------------------------------
 -- Shared fixture (identical in 002 and 003; keep in sync). Synthetic data only.
@@ -235,6 +235,62 @@ select pg_temp.as_owner();
 update tenancy.memberships set status = 'suspended' where id = 'a1a10000-0000-4000-8000-000000000001';
 select pg_temp.as_user('aaaaaaaa-0000-4000-8000-000000000001');
 select is((select count(*) from lending.applications), 0::bigint, 'suspended membership loses all access immediately');
+
+-- ============================== Settlement accounts (tenancy.lender_settlement_accounts) ======================
+-- Visible to members holding payment.read in the owning lender and to platform staff holding payment.read; never to
+-- another lender, a borrower or anon; nobody can write through the API role.
+select pg_temp.as_owner();
+insert into tenancy.lender_settlement_accounts (id, lender_org_id, label, bank_name, masked_account_ref) values
+  ('a7000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000000', 'Alpha collections (test)', 'Test Bank', 'XXXXXX1234'),
+  ('b7000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000000', 'Beta collections (test)', 'Test Bank', 'XXXXXX5678');
+
+select pg_temp.as_user('aaaaaaaa-0000-4000-8000-000000000003');
+select is((select array_agg(label) from tenancy.lender_settlement_accounts), array['Alpha collections (test)'], 'lender A admin sees only lender A''s settlement account');
+select is((select count(*) from tenancy.lender_settlement_accounts where lender_org_id = 'b1000000-0000-4000-8000-000000000000'), 0::bigint,
+  'lender A admin sees no settlement account of lender B');
+select throws_ok($$insert into tenancy.lender_settlement_accounts (lender_org_id, label, bank_name, masked_account_ref)
+    values ('a1000000-0000-4000-8000-000000000000', 'Mine', 'Test Bank', 'XXXXXX9999')$$, '42501', null, 'a lender cannot create settlement accounts through the API role');
+select throws_ok($$update tenancy.lender_settlement_accounts set status = 'verified' where id = 'a7000000-0000-4000-8000-000000000001'$$,
+  '42501', null, 'nor change one (verification is an operator action outside the API role)');
+select pg_temp.as_user('bbbbbbbb-0000-4000-8000-000000000003');
+select is((select array_agg(label) from tenancy.lender_settlement_accounts), array['Beta collections (test)'], 'lender B admin sees only lender B''s settlement account');
+select pg_temp.as_user('bbbbbbbb-0000-4000-8000-000000000001');
+select is((select count(*) from tenancy.lender_settlement_accounts), 0::bigint, 'a credit officer without payment.read sees no settlement account, not even the lender''s own');
+select pg_temp.as_user('11111111-1111-4111-8111-111111111111');
+select is((select count(*) from tenancy.lender_settlement_accounts), 0::bigint, 'a borrower sees no settlement account');
+select pg_temp.as_user('0e0e0e0e-0000-4000-8000-000000000001');
+select is((select count(*) from tenancy.lender_settlement_accounts), 2::bigint, 'platform operations (payment.read) can read both lenders'' accounts, as designed');
+select throws_ok($$delete from tenancy.lender_settlement_accounts$$, '42501', null, 'but cannot delete them');
+select pg_temp.as_user('0f0f0f0f-0000-4000-8000-000000000001');
+select is((select count(*) from tenancy.lender_settlement_accounts), 0::bigint, 'platform staff without a role see none');
+select pg_temp.as_owner();
+set local role anon;
+select throws_ok($$select count(*) from tenancy.lender_settlement_accounts$$, '42501', null, 'anon is refused outright');
+select pg_temp.as_owner();
+select throws_ok(
+  $$insert into payments.payment_intents (lender_org_id, loan_account_id, borrower_id, purpose, amount_minor, settlement_account_ref, settlement_account_id, provider, idempotency_key)
+    values ('a1000000-0000-4000-8000-000000000000', 'a4000000-0000-4000-8000-000000000001',
+      (select id from identity.borrowers where user_id = '11111111-1111-4111-8111-111111111111'), 'installment', 100, 'alpha-collections',
+      'b7000000-0000-4000-8000-000000000001', 'mock_gateway', 'idem-cross-0000000001')$$,
+  '23503', null, 'a payment instruction cannot point at another lender''s settlement account (composite key)');
+
+-- ============================== Loan-account history (servicing.loan_account_events) ===========================
+select pg_temp.as_user('aaaaaaaa-0000-4000-8000-000000000003');
+select is((select array_agg(distinct lender_org_id) from servicing.loan_account_events), array['a1000000-0000-4000-8000-000000000000'::uuid],
+  'lender A admin sees the history of lender A''s loan account only');
+select pg_temp.as_user('bbbbbbbb-0000-4000-8000-000000000003');
+select is((select count(*) from servicing.loan_account_events where lender_org_id = 'a1000000-0000-4000-8000-000000000000'), 0::bigint, 'lender B admin sees none of lender A''s loan-account history');
+select pg_temp.as_user('11111111-1111-4111-8111-111111111111');
+select is((select count(*) from servicing.loan_account_events), 1::bigint, 'borrower 1 sees the history of their own loan account only');
+select pg_temp.as_user('22222222-2222-4222-8222-222222222222');
+select is((select count(*) from servicing.loan_account_events where lender_org_id = 'a1000000-0000-4000-8000-000000000000'), 0::bigint, 'borrower 2 does not see borrower 1''s loan-account history');
+select throws_ok($$insert into servicing.loan_account_events (lender_org_id, loan_account_id, event_type, new_status, new_sanctioned_amount_minor, source_system, actor)
+    values ('b1000000-0000-4000-8000-000000000000', 'b4000000-0000-4000-8000-000000000001', 'created', 'active', 1, 'lender_lms', 'system')$$,
+  '42501', null, 'nobody can write loan-account history through the API role');
+select pg_temp.as_owner();
+set local role anon;
+select throws_ok($$select count(*) from servicing.loan_account_events$$, '42501', null, 'anon is refused outright');
+select pg_temp.as_owner();
 
 select pg_temp.as_owner();
 select * from finish();

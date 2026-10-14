@@ -38,6 +38,18 @@ create table if not exists auth.users (
 );
 grant all on auth.users to supabase_auth_admin;
 
+-- Supabase Auth's session table (subset of columns). The API checks it on every request (private.session_is_active).
+create table if not exists auth.sessions (
+  id uuid primary key,
+  user_id uuid not null references auth.users (id) on delete cascade,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  not_after timestamptz,
+  aal text
+);
+create index if not exists sessions_user_id_idx on auth.sessions (user_id);
+grant all on auth.sessions to supabase_auth_admin;
+
 create or replace function auth.jwt() returns jsonb
 language sql stable
 as $$
