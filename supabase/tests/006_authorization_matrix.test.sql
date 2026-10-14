@@ -117,6 +117,9 @@ create temp table expected_permissions (key text primary key, platform_grantable
 insert into expected_permissions values
   ('application.decide', false, false),
   ('platform.lender_routing.manage', false, true),
+  ('document.prepare', false, false),
+  ('document.approve', false, false),
+  ('platform.documents.manage', false, true),
   ('application.read', true, false),
   ('audit.read', true, false),
   ('collections.manage', false, true),
@@ -144,6 +147,9 @@ insert into expected_permissions values
 create temp table expected_role_permissions (role_key text, permission_key text, primary key (role_key, permission_key));
 insert into expected_role_permissions values
   ('lender.credit_officer', 'application.decide'),
+  ('lender.credit_officer', 'document.approve'),
+  ('lender.credit_officer', 'document.prepare'),
+  ('lender.lender_admin', 'document.approve'),
   ('lender.credit_officer', 'application.read'),
   ('lender.credit_officer', 'loan.read'),
   ('lender.credit_officer', 'product.read'),
@@ -194,6 +200,7 @@ insert into expected_role_permissions values
   ('platform.operations_agent', 'product.read'),
   ('platform.platform_admin', 'org.members.read'),
   ('platform.platform_admin', 'platform.lender_routing.manage'),
+  ('platform.platform_admin', 'platform.documents.manage'),
   ('platform.platform_admin', 'platform.consent_notices.manage'),
   ('platform.platform_admin', 'platform.organizations.manage'),
   ('platform.platform_admin', 'platform.organizations.read');
