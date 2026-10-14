@@ -593,23 +593,23 @@ Raised by `docs/specs/07-kfs-documents-acceptance.md` section 14, which holds th
 
 Raised by `docs/specs/08-servicing-payments-mandates-collections.md` section 23, which holds the recommendations, classes and what is built regardless. D-10 (5% DLG) and D-11 (Udofin as recovery agent) are already decided; D-76 to D-79 below are only their go-live conditions, and collections and DLG stay switched off per lender until those are evidenced. D-04, D-05, D-06, D-13, D-25, D-31, D-35, D-43 and D-47 stay open as recorded above.
 
-| ID   | Subject                                                                                                                                    |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| D-64 | How each launch lender exposes its LMS (Finbyx, own REST API, file import, manual entry) and which is first                                |
-| D-65 | Payment provider(s) and access model (lender as merchant of record; delegated keys or partner access); India data processing by provider   |
-| D-66 | Mandate rails at launch (eNACH/API mandate, UPI AutoPay), sponsor bank and utility per lender, who initiates debits, pre-debit lead time     |
-| D-67 | Mandate policy per lender: required before disbursal, required before first due date, or optional                                         |
-| D-68 | Webhook authentication scheme per provider and the fallback when callbacks fail (authenticated status lookup)                              |
-| D-69 | Reconciliation inputs per lender, cadence, timing tolerance and exception ownership                                                        |
-| D-70 | Borrower wording between provider confirmation and lender posting; partial-payment display                                                 |
-| D-71 | Sync cadence and staleness threshold per lender                                                                                            |
-| D-72 | Reminder schedule, channels, contact window and the DLT principal entity and sender header                                                 |
-| D-73 | Source and structure of the penal-charge text and levy notices; treatment of bounce charges                                                |
+| ID   | Subject                                                                                                                                     |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| D-64 | How each launch lender exposes its LMS (Finbyx, own REST API, file import, manual entry) and which is first                                 |
+| D-65 | Payment provider(s) and access model (lender as merchant of record; delegated keys or partner access); India data processing by provider    |
+| D-66 | Mandate rails at launch (eNACH/API mandate, UPI AutoPay), sponsor bank and utility per lender, who initiates debits, pre-debit lead time    |
+| D-67 | Mandate policy per lender: required before disbursal, required before first due date, or optional                                           |
+| D-68 | Webhook authentication scheme per provider and the fallback when callbacks fail (authenticated status lookup)                               |
+| D-69 | Reconciliation inputs per lender, cadence, timing tolerance and exception ownership                                                         |
+| D-70 | Borrower wording between provider confirmation and lender posting; partial-payment display                                                  |
+| D-71 | Sync cadence and staleness threshold per lender                                                                                             |
+| D-72 | Reminder schedule, channels, contact window and the DLT principal entity and sender header                                                  |
+| D-73 | Source and structure of the penal-charge text and levy notices; treatment of bounce charges                                                 |
 | D-74 | Statement of account, foreclosure quote and NOC: lender-issued or Udofin-rendered; quote validity; NOC SLA default; statement frequency     |
-| D-75 | Payment limits: minimum and maximum amounts, link expiry, part-prepayment, foreclosure payment by link                                     |
+| D-75 | Payment limits: minimum and maximum amounts, link expiry, part-prepayment, foreclosure payment by link                                      |
 | D-76 | Collections go-live conditions (counsel review of conduct, unread 6 Aug 2026 recovery amendment, lender mandate, sub-agency consent)        |
-| D-77 | Recovery commission or incentive for Udofin, if any (legal)                                                                                |
-| D-78 | Telephony, call recording and retention, 1600-series numbering                                                                             |
+| D-77 | Recovery commission or incentive for Udofin, if any (legal)                                                                                 |
+| D-78 | Telephony, call recording and retention, 1600-series numbering                                                                              |
 | D-79 | DLG go-live conditions: counsel on an OPC as provider, capital model, cover instruments, statutory auditor declaration, disclosure approver |
-| D-80 | Closure and security release: who confirms lien release (LAMF, pledge) and the NOC timeline for unsecured loans                            |
-| D-81 | Failed-debit retries and borrower communication after a returned debit                                                                     |
+| D-80 | Closure and security release: who confirms lien release (LAMF, pledge) and the NOC timeline for unsecured loans                             |
+| D-81 | Failed-debit retries and borrower communication after a returned debit                                                                      |
