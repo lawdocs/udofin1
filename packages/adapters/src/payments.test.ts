@@ -9,6 +9,7 @@ import {
   MOCK_PAYMENT_WEBHOOK_SCHEME,
   PAYMENT_SUCCESS_STATUSES,
   signMockWebhook,
+  UNSUPPORTED_OBJECT_KIND,
   type CreateOrderRequest,
   type MockDelivery,
   type MockPaymentScenario,
@@ -132,6 +133,64 @@ describe('mock webhook scheme mock-standard-webhooks-v1', () => {
     );
   });
 
+  it('requires canonical base64: junk after the signature, base64url and stripped padding are not the signature', () => {
+    const [captured] = script('success').slice(1) as [MockDelivery];
+    const given = captured.headers['webhook-signature'];
+    const check = (signature: string) =>
+      verifier.verify(
+        captured.rawBody,
+        { ...captured.headers, 'webhook-signature': signature },
+        { secret: SECRET, now: NOW },
+      ).outcome;
+    expect(check(given)).toBe('verified');
+    expect(check(`${given}==garbage!!`)).toBe('unverified');
+    expect(check(given.replace(/=+$/, ''))).toBe('unverified');
+    expect(check(given.replaceAll('+', '-').replaceAll('/', '_'))).toBe(
+      given.includes('+') || given.includes('/') ? 'unverified' : 'verified',
+    );
+    expect(check(`${given}A`)).toBe('unverified');
+  });
+
+  it('matches a signature computed outside this code (python hmac, base64)', () => {
+    // python: base64(hmac_sha256(b'SAMPLE-WEBHOOK-SECRET', b'SAMPLE-DLV-1.1791936000.' + body))
+    const rawBody = new TextEncoder().encode('{"event_id":"SAMPLE-EVT-1"}');
+    const headers = signMockWebhook({
+      secret: 'SAMPLE-WEBHOOK-SECRET',
+      deliveryId: 'SAMPLE-DLV-1',
+      timestampSeconds: 1_791_936_000,
+      rawBody,
+    });
+    expect(headers['webhook-signature']).toBe('v1,vhC76i8cTs9WirPSlJqT1YaT/sBOAKGprPfFdidIN7g=');
+  });
+
+  it('refuses an unusable tolerance instead of switching the replay window off (NaN) or on (negative)', () => {
+    const [captured] = script('success').slice(1) as [MockDelivery];
+    for (const toleranceSeconds of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+      expect(() =>
+        verifier.verify(captured.rawBody, captured.headers, {
+          secret: SECRET,
+          now: NOW,
+          toleranceSeconds,
+        }),
+      ).toThrow(RangeError);
+    }
+    expect(
+      verifier.verify(captured.rawBody, captured.headers, {
+        secret: SECRET,
+        now: NOW,
+        toleranceSeconds: 0,
+      }).outcome,
+    ).toBe('verified');
+  });
+
+  it('checks the size before any signature work: an oversize body is invalid even with no signature', () => {
+    const rawBody = new Uint8Array(70_000).fill(97);
+    expect(verifier.verify(rawBody, {}, { secret: SECRET, now: NOW })).toMatchObject({
+      outcome: 'invalid',
+      reason: 'body_too_large',
+    });
+  });
+
   it('stale timestamp: an authentic but old delivery is stale_timestamp, never verified; the boundary is 5 minutes', () => {
     const [old] = script('old_timestamp') as [MockDelivery];
     expect(verify(old)).toMatchObject({
@@ -208,9 +267,10 @@ describe('mock webhook scheme mock-standard-webhooks-v1', () => {
         reason: 'invalid_amount',
       });
     }
-    expect(verified(signedWith(JSON.stringify({ ...base, amount: '10.5' }))).amountMinor).toBe(
-      1_050n,
-    );
+    expect(
+      verified(signedWith(JSON.stringify({ ...base, amount: '10.5', currency: 'INR' })))
+        .amountMinor,
+    ).toBe(1_050n);
     expect(verified(signedWith(JSON.stringify(base))).amountMinor).toBeNull();
   });
 
@@ -237,9 +297,48 @@ describe('mock webhook scheme mock-standard-webhooks-v1', () => {
       outcome: 'invalid',
       reason: 'invalid_timestamp',
     });
-    expect(signedWith(JSON.stringify({ ...base, object_kind: 'subscription' }))).toMatchObject({
+    expect(signedWith(JSON.stringify({ ...base, object_kind: '' }))).toMatchObject({
       outcome: 'invalid',
       reason: 'unsupported_event',
+    });
+    expect(signedWith(JSON.stringify({ ...base, object_kind: 5 }))).toMatchObject({
+      outcome: 'invalid',
+      reason: 'unsupported_event',
+    });
+  });
+
+  it('stores an authentic delivery of an unsupported kind as verified-and-ignored, never as invalid', () => {
+    const result = signedWith(
+      JSON.stringify({ ...base, object_kind: 'dispute_note', amount: '1.00', currency: 'USD' }),
+    );
+    expect(result.outcome).toBe('verified');
+    const event = verified(result);
+    expect(event.objectKind).toBe(UNSUPPORTED_OBJECT_KIND);
+    expect(event.status).toBe('unmapped');
+    expect(event.rank).toBe(0);
+    // It carries nothing that could authorise or move money, and not the provider's kind word.
+    expect(event.amountMinor).toBeNull();
+    expect(event.currency).toBeNull();
+    expect(JSON.stringify(event)).not.toContain('dispute_note');
+    expect(PAYMENT_SUCCESS_STATUSES).not.toContain(event.status);
+    // Still inert without a valid time or identifiers, and still unverified without a good signature.
+    expect(
+      signedWith(JSON.stringify({ ...base, object_kind: 'dispute_note', occurred_at: 'soon' })),
+    ).toMatchObject({ outcome: 'invalid', reason: 'invalid_timestamp' });
+    expect(
+      signedWith(JSON.stringify({ ...base, object_kind: 'dispute_note', event_id: 'has space' })),
+    ).toMatchObject({ outcome: 'invalid', reason: 'invalid_identifier' });
+    const forged = verify({
+      ...(script('success')[0] as MockDelivery),
+      rawBody: new TextEncoder().encode(JSON.stringify({ ...base, object_kind: 'dispute_note' })),
+    });
+    expect(forged.outcome).toBe('unverified');
+  });
+
+  it('refuses an amount without a currency, so INR is always confirmed', () => {
+    expect(signedWith(JSON.stringify({ ...base, amount: '10.50' }))).toMatchObject({
+      outcome: 'invalid',
+      reason: 'unsupported_currency',
     });
   });
 
@@ -368,6 +467,45 @@ describe('mock payment provider', () => {
       outcome: 'ok',
       value: { source: 'provider_authenticated_lookup', status: 'captured', amountMinor: 450_000n },
     });
+  });
+
+  it('gives distinct operation keys distinct refs, even when they share a long prefix or are UUIDs', async () => {
+    const p = createMockPaymentProvider('test');
+    const keys = [
+      'SAMPLE-INTENT-000000000000001',
+      'SAMPLE-INTENT-000000000000002',
+      '0198a1b2-c3d4-7e5f-8a6b-111111111111',
+      '0198a1b2-c3d4-7e5f-8a6b-222222222222',
+      'key with spaces and a very long tail '.repeat(4),
+      'key with spaces and a very long tail '.repeat(4) + 'x',
+    ];
+    const refs: string[] = [];
+    for (const operationKey of keys) {
+      const created = await p.createOrder(ctx, { ...request, operationKey });
+      expect(created.outcome).toBe('ok');
+      if (created.outcome === 'ok') refs.push(created.value.orderRef);
+    }
+    expect(new Set(refs).size).toBe(keys.length);
+    // Refs stay usable in a webhook body (the identifier rule), and a lookup returns the right order.
+    for (const ref of refs) expect(ref).toMatch(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/);
+    const second = await p.getOrderStatus(ctx, {
+      orderRef: refs[1] ?? null,
+      operationKey: 'unknown',
+    });
+    expect(second).toMatchObject({ outcome: 'ok', value: { orderRef: refs[1] } });
+    const settled = await p.fetchSettlements(ctx, '2026-10-14');
+    const items = settled.outcome === 'ok' ? (settled.value.batches[0]?.items ?? []) : [];
+    expect(new Set(items.map((i) => i.providerPaymentRef)).size).toBe(keys.length);
+  });
+
+  it('refuses a reused operation key with different parameters instead of returning the first order', async () => {
+    const p = createMockPaymentProvider('test');
+    expect((await p.createOrder(ctx, request)).outcome).toBe('ok');
+    expect(await p.createOrder(ctx, { ...request, amountMinor: 999_999n })).toEqual({
+      outcome: 'rejected',
+      reason: 'invalid_request',
+    });
+    expect(p.created).toHaveLength(1);
   });
 
   it('refuses malformed requests', async () => {

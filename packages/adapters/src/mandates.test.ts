@@ -202,6 +202,37 @@ describe('mock mandate provider', () => {
   });
 });
 
+describe('mock mandate refs and idempotency', () => {
+  it('gives distinct keys distinct refs, including UUIDs that differ only in the last group', async () => {
+    const p = createMockMandateProvider('test');
+    const refs: string[] = [];
+    for (const operationKey of [
+      '0198a1b2-c3d4-7e5f-8a6b-111111111111',
+      '0198a1b2-c3d4-7e5f-8a6b-222222222222',
+    ]) {
+      const result = await p.createMandateRequest(ctx, { ...request, operationKey });
+      expect(result.outcome).toBe('ok');
+      if (result.outcome === 'ok') refs.push(result.value.providerMandateRef);
+    }
+    expect(new Set(refs).size).toBe(2);
+    const second = await p.getMandateStatus(ctx, {
+      providerMandateRef: refs[1] ?? null,
+      operationKey: 'unknown',
+    });
+    expect(second).toMatchObject({ outcome: 'ok', value: { providerMandateRef: refs[1] } });
+  });
+
+  it('refuses a reused operation key with different parameters', async () => {
+    const p = createMockMandateProvider('test');
+    expect((await p.createMandateRequest(ctx, request)).outcome).toBe('ok');
+    expect(await p.createMandateRequest(ctx, { ...request, maxAmountMinor: 5_000_000n })).toEqual({
+      outcome: 'rejected',
+      reason: 'invalid_request',
+    });
+    expect(p.requests).toHaveLength(1);
+  });
+});
+
 describe('scripted mandate deliveries', () => {
   const verifier = createMockPaymentProvider('test').webhookVerifier;
   const params = {

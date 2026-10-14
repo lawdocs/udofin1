@@ -35,8 +35,10 @@ import {
  * kind = loan (one row per report)
  *   lms_loan_ref          required  lender's loan reference
  *   borrower_ref          required  an OPAQUE reference as supplied: Udofin application reference or lender customer
- *                                   reference. Never a name, phone number, PAN or Aadhaar number: values that look
- *                                   like one are rejected (`borrower_ref_looks_personal`)
+ *                                   reference. Never a name, phone number, PAN, Aadhaar or account number: values
+ *                                   shaped like a PAN, or like a 9 to 18 digit number (separators - . : / _ ignored),
+ *                                   are rejected (`borrower_ref_looks_personal`). A name cannot be recognised by shape,
+ *                                   so keeping names out is the lender's responsibility
  *   status                required  active | closed | foreclosed | written_off | cancelled
  *   sanctioned_amount     required  decimal rupees, > 0
  *   disbursed_amount, disbursement_ref, disbursement_date (YYYY-MM-DD)
@@ -64,8 +66,12 @@ import {
  * always a JSON STRING (a JSON number is rejected, because floats are never money).
  *
  * File limits (override per call): 5 MiB, 10 000 records. Duplicates inside a file: the same key twice with identical
- * content keeps the first and reports the rest as `duplicate_row`; the same key with different content rejects ALL
- * occurrences as `conflicting_duplicate`. Nothing about a file ever reaches the network.
+ * content keeps the first and reports the rest as `duplicate_row` (a WARNING, not an error); the same key with
+ * different content rejects ALL occurrences as `conflicting_duplicate`. Nothing about a file ever reaches the network.
+ *
+ * ALL OR NOTHING (owner decision, 14 Oct 2026): the whole file is validated first. If any record has an error, `rows`
+ * is empty and `importable` is false; a partial file is never returned, so a truncated schedule cannot be mistaken for
+ * a complete one. Only `errors` block; `warnings` (duplicate_row) do not.
  */
 
 export const LMS_IMPORT_FORMAT = 'udofin-lms-import-v1';
@@ -358,8 +364,11 @@ export interface LmsImportError {
 }
 
 const REFERENCE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$/;
-const PAN_LIKE = /^[A-Za-z]{5}[0-9]{4}[A-Za-z]$/;
-const PHONE_OR_AADHAAR_LIKE = /^\+?[0-9]{10,13}$/;
+/** A PAN anywhere in the reference, once separators are removed ('ABCDE-1234-F', 'PAN:ABCDE1234F'). */
+const PAN_LIKE = /[A-Za-z]{5}[0-9]{4}[A-Za-z]/;
+/** Only digits (9 to 18) once separators are removed: phone, Aadhaar, account or card number shaped. */
+const NUMBER_LIKE = /^\+?[0-9]{9,18}$/;
+const REFERENCE_SEPARATORS = /[-.:/_]/g;
 const SOURCE_SYSTEM = /^[a-z][a-z0-9_]{1,49}$/;
 const ISO_DATE = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/;
 const ISO_TIMESTAMP =
@@ -411,7 +420,9 @@ class FieldReader {
   /** Rejects any key the format does not define. */
   allow(fields: readonly string[]): void {
     const allowed = new Set(fields);
-    for (const key of Object.keys(this.raw)) if (!allowed.has(key)) this.fail(key, 'unknown_field');
+    // The key is caller text (it could be a PAN or a phone number), so it is never echoed: field is null.
+    for (const key of Object.keys(this.raw))
+      if (!allowed.has(key)) this.fail(null, 'unknown_field');
   }
 
   /** The raw cell: undefined when absent, null or the empty string. */
@@ -435,11 +446,17 @@ class FieldReader {
     return this.cell(name) === undefined ? null : this.reference(name);
   }
 
-  /** A reference that must never be a name, phone number, PAN or Aadhaar number. */
+  /**
+   * A reference that must not look like a PAN, phone, Aadhaar, account or card number. This is a shape check only: a
+   * name cannot be recognised by pattern, so the lender's file specification (and the lender) must keep names out.
+   */
   opaqueReference(name: string): string | undefined {
     const value = this.cell(name);
-    if (typeof value === 'string' && (PAN_LIKE.test(value) || PHONE_OR_AADHAAR_LIKE.test(value))) {
-      return this.fail(name, 'borrower_ref_looks_personal');
+    if (typeof value === 'string') {
+      const compact = value.replace(REFERENCE_SEPARATORS, '');
+      if (PAN_LIKE.test(compact) || NUMBER_LIKE.test(compact)) {
+        return this.fail(name, 'borrower_ref_looks_personal');
+      }
     }
     return this.reference(name);
   }
@@ -1024,8 +1041,14 @@ export interface LmsImportResult<K extends LmsImportKind> {
   readonly fileSha256: string;
   /** Records in the file (rows for CSV, records for JSON; schedule CSV counts installment rows). */
   readonly recordCount: number;
+  /** Empty unless `importable`: a file with any error yields no rows at all. */
   readonly rows: readonly LmsImportReportMap[K][];
+  /** Blocking problems. Any entry means nothing in the file may be imported. */
   readonly errors: readonly LmsImportError[];
+  /** Non-blocking notes (an identical repeated record, kept once). */
+  readonly warnings: readonly LmsImportError[];
+  /** True only when there is no error: the caller may import `rows`. */
+  readonly importable: boolean;
 }
 
 export const LMS_IMPORT_DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
@@ -1247,6 +1270,8 @@ export function parseLmsImportFile<K extends LmsImportKind>(
     recordCount,
     rows: [],
     errors,
+    warnings: [],
+    importable: false,
   });
   if (bytes.length > maxBytes) return empty([fileError('file_too_large')]);
   const body = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
@@ -1317,14 +1342,20 @@ export function parseLmsImportFile<K extends LmsImportKind>(
   }
   kept.sort((a, b) => a.rowNumber - b.rowNumber);
   errors.sort((a, b) => a.rowNumber - b.rowNumber);
+  const blocking = errors.filter((e) => e.code !== 'duplicate_row');
+  const warnings = errors.filter((e) => e.code === 'duplicate_row');
+  const importable = blocking.length === 0;
   return {
     kind: spec.kind,
     formatVersion: LMS_IMPORT_FORMAT,
     fileSha256,
     recordCount: parsed.recordCount,
-    // The reports were produced by the normaliser that matches spec.kind, so the union narrows to LmsImportReportMap[K].
-    rows: kept.map((c) => c.report) as LmsImportReportMap[K][],
-    errors,
+    // All or nothing. The reports were produced by the normaliser that matches spec.kind, so the union narrows to
+    // LmsImportReportMap[K].
+    rows: importable ? (kept.map((c) => c.report) as LmsImportReportMap[K][]) : [],
+    errors: blocking,
+    warnings,
+    importable,
   };
 }
 
@@ -1642,26 +1673,63 @@ function sampleDocument(
 ): LmsDocumentRef {
   const reportedAt = '2026-10-13T06:00:00.000Z';
   const lenderDocumentRef = `SAMPLE-DOC-${documentKind.toUpperCase()}-0001`;
+  const mediaType = 'application/pdf';
+  const documentSha256 = sha256Hex(`SAMPLE ${documentKind} document for ${lmsLoanRef}`);
   return {
     reportType: 'document',
     sourceSystem: MOCK_SOURCE,
     sourceRecordId: lenderDocumentRef,
     reportedAt,
     sequence: null,
-    contentSha256: lmsReportHash('document', [
-      ['lms_loan_ref', lmsLoanRef],
-      ['kind', documentKind],
-      ['ref', lenderDocumentRef],
-      ['period_from', periodFrom],
-      ['period_to', periodTo],
-      ['reported_at', reportedAt],
-    ]),
+    contentSha256: lmsDocumentContentHash({
+      lmsLoanRef,
+      documentKind,
+      lenderDocumentRef,
+      mediaType,
+      documentSha256,
+      periodFrom,
+      periodTo,
+      reportedAt,
+      sequence: null,
+    }),
     lmsLoanRef,
     documentKind,
     lenderDocumentRef,
-    mediaType: 'application/pdf',
-    documentSha256: sha256Hex(`SAMPLE ${documentKind} document for ${lmsLoanRef}`),
+    mediaType,
+    documentSha256,
     periodFrom,
     periodTo,
   };
+}
+
+/**
+ * The content hash of a document reference: covers every field that identifies the document, including the SHA-256 of
+ * its bytes and its media type, so a re-issued document with changed bytes is a NEW fact and not an exact re-send. Any
+ * connector that produces `LmsDocumentRef` values must use this function.
+ */
+export function lmsDocumentContentHash(
+  fields: Pick<
+    LmsDocumentRef,
+    | 'lmsLoanRef'
+    | 'documentKind'
+    | 'lenderDocumentRef'
+    | 'mediaType'
+    | 'documentSha256'
+    | 'periodFrom'
+    | 'periodTo'
+    | 'reportedAt'
+    | 'sequence'
+  >,
+): string {
+  return lmsReportHash('document', [
+    ['lms_loan_ref', fields.lmsLoanRef],
+    ['kind', fields.documentKind],
+    ['ref', fields.lenderDocumentRef],
+    ['media_type', fields.mediaType],
+    ['document_sha256', fields.documentSha256],
+    ['period_from', fields.periodFrom],
+    ['period_to', fields.periodTo],
+    ['reported_at', fields.reportedAt],
+    ['sequence', fields.sequence],
+  ]);
 }

@@ -90,6 +90,56 @@ describe('mock notifier (mock_notifier)', () => {
     expect(n.sent).toHaveLength(1);
   });
 
+  it('keeps channels apart: the same key on in-app and push sends both, and a reused key with other content is refused', async () => {
+    const n = createMockNotifier('test');
+    const viaInApp = await n.channels.in_app.send({
+      channel: 'in_app',
+      idempotencyKey: 'shared-key',
+      recipientRef: 'borrower-ref-1',
+      payload: inApp,
+    });
+    const viaPush = await n.channels.push.send({
+      channel: 'push',
+      idempotencyKey: 'shared-key',
+      recipientRef: 'device-ref-1',
+      payload: push,
+    });
+    expect(viaInApp).toEqual({ state: 'accepted', providerRef: 'mock-notice-1' });
+    expect(viaPush).toEqual({ state: 'accepted', providerRef: 'mock-notice-2' });
+    expect(n.sent.map((s) => s.channel)).toEqual(['in_app', 'push']);
+    const changed = await n.channels.push.send({
+      channel: 'push',
+      idempotencyKey: 'shared-key',
+      recipientRef: 'device-ref-1',
+      payload: { ...push, titleKey: 'payment_update' },
+    });
+    expect(changed).toEqual({ state: 'failed', reason: 'invalid_request' });
+    expect(n.sent).toHaveLength(2);
+  });
+
+  it('refuses a recipient that looks like a phone number and an unknown language', async () => {
+    const n = createMockNotifier('test');
+    for (const recipientRef of ['+919999900001', '9999900001', '1234567890123456', 'a@b.c', '']) {
+      expect(
+        await n.channels.in_app.send({
+          channel: 'in_app',
+          idempotencyKey: 'k',
+          recipientRef,
+          payload: inApp,
+        }),
+      ).toEqual({ state: 'failed', reason: 'invalid_request' });
+    }
+    expect(
+      await n.channels.in_app.send({
+        channel: 'in_app',
+        idempotencyKey: 'k2',
+        recipientRef: 'borrower-ref-1',
+        payload: { ...inApp, language: 'fr' as 'en' },
+      }),
+    ).toEqual({ state: 'failed', reason: 'invalid_request' });
+    expect(n.sent).toHaveLength(0);
+  });
+
   it('refuses a push payload with extra content and an in-app message with variables outside the closed set', async () => {
     const n = createMockNotifier('test');
     const bad = { ...push, body: 'secret' } as unknown as PushPayload;
@@ -97,7 +147,7 @@ describe('mock notifier (mock_notifier)', () => {
       await n.channels.push.send({
         channel: 'push',
         idempotencyKey: 'k',
-        recipientRef: 'r',
+        recipientRef: 'recipient-ref-1',
         payload: bad,
       }),
     ).toEqual({ state: 'failed', reason: 'invalid_request' });
@@ -106,7 +156,7 @@ describe('mock notifier (mock_notifier)', () => {
       await n.channels.in_app.send({
         channel: 'in_app',
         idempotencyKey: 'k',
-        recipientRef: 'r',
+        recipientRef: 'recipient-ref-1',
         payload: sneaky,
       }),
     ).toEqual({ state: 'failed', reason: 'invalid_request' });
@@ -119,7 +169,7 @@ describe('mock notifier (mock_notifier)', () => {
     await n.channels.in_app.send({
       channel: 'in_app',
       idempotencyKey: 'k',
-      recipientRef: 'r',
+      recipientRef: 'recipient-ref-1',
       payload,
     });
     (payload.variables as Record<string, string>).amount = '1.00';
@@ -142,7 +192,7 @@ describe('SMS channel', () => {
       await sms.send({
         channel: 'sms',
         idempotencyKey: 'k',
-        recipientRef: 'r',
+        recipientRef: 'recipient-ref-1',
         payload: smsPayload,
       }),
     ).toEqual({ state: 'not_configured' });
@@ -150,7 +200,7 @@ describe('SMS channel', () => {
       await sms.send({
         channel: 'sms',
         idempotencyKey: 'k2',
-        recipientRef: 'r',
+        recipientRef: 'recipient-ref-1',
         payload: { ...smsPayload, dltTemplateId: 'SAMPLE-DLT-1' },
       }),
     ).toEqual({ state: 'not_configured' });

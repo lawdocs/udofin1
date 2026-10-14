@@ -37,12 +37,14 @@ describe('parseMoneyMinor (same rules as private.parse_money_minor)', () => {
 
   it('never puts the rejected text in an error', () => {
     for (const text of ['SECRET-1,5', '9876543210123456789012', '1.2345', '١٢']) {
+      let caught: unknown;
       try {
         parseMoneyMinor(text);
-        throw new Error('should have thrown');
       } catch (error) {
-        expect((error as Error).message).not.toContain(text);
+        caught = error;
       }
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).not.toContain(text);
     }
   });
 });

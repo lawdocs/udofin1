@@ -108,12 +108,16 @@ describe('provider guard for the new capabilities', () => {
   });
 
   it('error messages name the capability and key but carry no input data', () => {
+    expect(() => createMockLms('production')).toThrow(ProviderNotAllowedError);
+    let caught: unknown;
     try {
       createMockLms('production');
     } catch (error) {
-      expect((error as Error).message).toBe(
-        'lms provider "mock_lms" in mock mode is not allowed in production',
-      );
+      caught = error;
     }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toBe(
+      'lms provider "mock_lms" in mock mode is not allowed in production',
+    );
   });
 });

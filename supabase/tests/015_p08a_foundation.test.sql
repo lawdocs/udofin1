@@ -3,7 +3,7 @@
 -- Synthetic data only. Error codes are reported as SQLSTATE|hint.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(204);
+select plan(214);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -208,6 +208,9 @@ select is(pg_temp.err($$select servicing.request_feature_change('f8b00000-0000-4
 select is(pg_temp.err($$select servicing.request_feature_change('f8a00000-0000-4000-8000-000000000000', 'payments', true, '{"contract_ref":"SAMPLE-MSA-1"}', 'req-key-0000000013')$$), 'P0002|', 'a switch can only be requested for a lender organisation');
 select is(pg_temp.err($$select servicing.request_feature_change('f8b00000-0000-4000-8000-000000000001', 'payments', false, '{}', 'req-key-0000000014')$$), '22023|reason_required', 'turning off needs a reason');
 select is(pg_temp.err($$select servicing.request_feature_change('f8b00000-0000-4000-8000-000000000001', 'payments', false, '{}', 'req-key-0000000015', 'too short')$$), '22023|reason_required', 'a reason must be meaningful');
+select is(pg_temp.err($$select servicing.request_feature_change('f8b00000-0000-4000-8000-000000000001', 'payments', true, '{"contract_ref":"SAMPLE-MSA-1"}', 'req-key-0000000310', 'x')$$), '22023|reason_invalid', 'a reason given when turning on must be 10 to 1000 characters (too short)');
+select is(pg_temp.err(format($$select servicing.request_feature_change('f8b00000-0000-4000-8000-000000000001', 'payments', true, '{"contract_ref":"SAMPLE-MSA-1"}', 'req-key-0000000311', %L)$$, repeat('r', 1001))), '22023|reason_invalid', 'and too long: a stable hint, not a raw check violation');
+select is(pg_temp.err(format($$select servicing.request_feature_change('f8b00000-0000-4000-8000-000000000001', 'payments', false, '{}', 'req-key-0000000312', %L)$$, repeat('r', 1001))), '22023|reason_invalid', 'a too long reason is refused when turning off too');
 select is(pg_temp.err($$select servicing.request_feature_change('f8b00000-0000-4000-8000-000000000001', 'payments', false, '{}', 'req-key-0000000016', 'already off, nothing to do')$$), '55000|no_change', 'turning off what is already off is a no-op and is refused');
 
 -- Collections and DLG can never be enabled ------------------------------------------------------------------------------
@@ -283,6 +286,8 @@ select pg_temp.as_user('f8000000-0000-4000-8000-000000000002', 'aal1');
 select is(pg_temp.err(format($$select servicing.decide_feature_change(%L, true)$$, pg_temp.got('req1'))), '42501|mfa_required', 'a decider without the second factor is refused');
 select pg_temp.as_user('f8000000-0000-4000-8000-000000000002');
 select is(pg_temp.err(format($$select servicing.decide_feature_change(%L, false)$$, pg_temp.got('req1'))), '22023|reason_required', 'a rejection needs a reason');
+select is(pg_temp.err(format($$select servicing.decide_feature_change(%L, true, %L)$$, pg_temp.got('req1'), repeat('n', 1001))), '22023|reason_invalid', 'an approval note over 1000 characters is refused with a stable hint');
+select is(pg_temp.err(format($$select servicing.decide_feature_change(%L, false, %L)$$, pg_temp.got('req1'), repeat('n', 1001))), '22023|reason_invalid', 'and so is a rejection note');
 select is(pg_temp.err($$select servicing.decide_feature_change('f8e00000-0000-4000-8000-0000000000aa', true)$$), 'P0002|', 'an unknown request is not found');
 select is(servicing.decide_feature_change(pg_temp.got('req1')::uuid, true, 'evidence reviewed'), 'applied', 'a different platform user approves and the change is applied');
 select pg_temp.as_system();
@@ -431,6 +436,7 @@ select is(pg_temp.err($$select servicing.kill_feature('f8b00000-0000-4000-8000-0
 select pg_temp.as_user('f8000000-0000-4000-8000-000000000001');
 select is(pg_temp.err($$select servicing.kill_feature('f8b00000-0000-4000-8000-000000000001', 'payments', 'short', 'kill-key-0000000011')$$), '22023|reason_required', 'the kill switch needs a reason');
 select is(pg_temp.err($$select servicing.kill_feature('f8b00000-0000-4000-8000-000000000001', 'payments', null, 'kill-key-0000000012')$$), '22023|reason_required', 'null reason is refused');
+select is(pg_temp.err(format($$select servicing.kill_feature('f8b00000-0000-4000-8000-000000000001', 'payments', %L, 'kill-key-0000000312')$$, repeat('r', 1001))), '22023|reason_invalid', 'a kill switch reason over 1000 characters is refused with a stable hint');
 select is(pg_temp.err($$select servicing.kill_feature('f8b00000-0000-4000-8000-000000000001', 'nothing_here', 'a long enough reason here', 'kill-key-0000000013')$$), '22023|unknown_feature', 'unknown feature');
 select is(pg_temp.err($$select servicing.kill_feature('f8b00000-0000-4000-8000-000000000001', 'payments', 'a long enough reason here', 'k')$$), '22023|bad_request', 'idempotency key required');
 -- A pending enable request for the same switch must not survive a kill.
@@ -544,6 +550,21 @@ select is(pg_temp.err($$insert into tenancy.role_permissions (role_id, permissio
   select r.id, 'payment.config.approve' from tenancy.roles r where r.org_id is null and r.applies_to = 'lender' and r.key = 'payments_admin'$$), '23514|segregation_of_duties', 'a role cannot carry both (approve added to the drafting role)');
 select is(pg_temp.err($$insert into tenancy.role_permissions (role_id, permission_key)
   select r.id, 'payment.configure' from tenancy.roles r where r.org_id is null and r.applies_to = 'lender' and r.key = 'payments_approver'$$), '23514|segregation_of_duties', 'nor the other way round');
+-- Role level, when the role already has holders: u08 holds payments_approver and reconciler.
+select is(pg_temp.err($$insert into tenancy.role_permissions (role_id, permission_key)
+  select r.id, 'payment.configure' from tenancy.roles r where r.org_id is null and r.applies_to = 'lender' and r.key = 'reconciler'$$), '23514|segregation_of_duties',
+  'a permission cannot be added to a system role if a login holding that role already holds the other half through another role');
+insert into tenancy.roles (id, org_id, applies_to, key, name) values
+  ('f8d00000-0000-4000-8000-000000000001', 'f8b00000-0000-4000-8000-000000000001', 'lender', 'custom_payments_reader', 'Custom payments reader (test)'),
+  ('f8d00000-0000-4000-8000-000000000002', 'f8b00000-0000-4000-8000-000000000001', 'lender', 'custom_unassigned', 'Custom role without holders (test)');
+insert into tenancy.role_permissions (role_id, permission_key) values
+  ('f8d00000-0000-4000-8000-000000000001', 'payment.read'),
+  ('f8d00000-0000-4000-8000-000000000002', 'payment.read');
+insert into tenancy.membership_roles (membership_id, role_id) values ('f8c10000-0000-4000-8000-000000000007', 'f8d00000-0000-4000-8000-000000000001');
+select is(pg_temp.err($$insert into tenancy.role_permissions (role_id, permission_key) values ('f8d00000-0000-4000-8000-000000000001', 'payment.config.approve')$$), '23514|segregation_of_duties',
+  'and for a custom lender role: u07 drafts configurations and holds it, so it cannot gain the approve permission');
+select is(pg_temp.err($$insert into tenancy.role_permissions (role_id, permission_key) values ('f8d00000-0000-4000-8000-000000000002', 'payment.config.approve')$$), 'ok',
+  'a role nobody holds can gain it (control: only the real conflict is refused)');
 -- Platform pair
 select is(pg_temp.err($$insert into tenancy.membership_roles (membership_id, role_id)
   select 'f8c10000-0000-4000-8000-000000000009', r.id from tenancy.roles r where r.org_id is null and r.applies_to = 'platform' and r.key = 'platform_account_verifier'$$), '23514|segregation_of_duties',
@@ -556,6 +577,9 @@ select is(pg_temp.err($$insert into tenancy.role_permissions (role_id, permissio
 select is(pg_temp.err($$insert into tenancy.membership_roles (membership_id, role_id)
   select 'f8c10000-0000-4000-8000-000000000009', r.id from tenancy.roles r where r.org_id is null and r.applies_to = 'platform' and r.key = 'platform_features_admin'$$), 'ok',
   'a payments administrator may also hold the features role: only the named pairs are segregated');
+select is(pg_temp.err($$insert into tenancy.role_permissions (role_id, permission_key)
+  select r.id, 'platform.accounts.registry.verify' from tenancy.roles r where r.org_id is null and r.applies_to = 'platform' and r.key = 'platform_features_admin'$$), '23514|segregation_of_duties',
+  'the same for the platform pair (u09 registers accounts and holds the features role)');
 -- The existing rule still works.
 select is(pg_temp.err($$insert into tenancy.membership_roles (membership_id, role_id)
   select 'f8c10000-0000-4000-8000-000000000010', r.id from tenancy.roles r where r.org_id is null and r.applies_to = 'platform' and r.key = 'collections_agent'$$), 'ok', 'collections work is unrelated to the new pairs');

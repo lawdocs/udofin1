@@ -3,6 +3,7 @@ import { isValidIsoDate } from './lms.js';
 import { MAX_MONEY_MINOR } from './money.js';
 import {
   buildMockWebhookBody,
+  mockRefSuffix,
   signMockWebhook,
   type MockDelivery,
   type PlatformEventStatus,
@@ -136,11 +137,14 @@ export interface MandateDebitQuery {
 
 export type MandateResult<T> =
   | { readonly outcome: 'ok'; readonly value: T }
-  /** The provider may or may not have acted. Look it up by operation key before any retry. */
-  | { readonly outcome: 'unknown'; readonly reason: 'timeout' | 'network' }
+  /**
+   * The provider may or may not have acted. Look it up by operation key before any retry. This includes a 5xx or an
+   * unparseable answer (`provider_error`). `rejected` is only a definite refusal.
+   */
+  | { readonly outcome: 'unknown'; readonly reason: 'timeout' | 'network' | 'provider_error' }
   | {
       readonly outcome: 'rejected';
-      readonly reason: 'invalid_request' | 'rail_not_supported' | 'provider_error';
+      readonly reason: 'invalid_request' | 'rail_not_supported';
     }
   | { readonly outcome: 'not_found' }
   | { readonly outcome: 'unsupported' }
@@ -221,6 +225,18 @@ const SAMPLE_DEBIT_MINOR = 450_000n;
 
 const sha256Hex = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex');
 
+function sameMandateRequest(a: MandateRequest, b: MandateRequest): boolean {
+  return (
+    a.rail === b.rail &&
+    a.merchantRef === b.merchantRef &&
+    a.maxAmountMinor === b.maxAmountMinor &&
+    a.currency === b.currency &&
+    a.startDate === b.startDate &&
+    a.endDate === b.endDate &&
+    a.maskedAccountRef === b.maskedAccountRef
+  );
+}
+
 /**
  * TEST DOUBLE, `mock_mandate_provider`. No network, no bank, deterministic. Allowed in local development and tests only
  * (staging is refused as well). The mock UPI rail reports `needsAfaEachDebit: true`, the conservative answer.
@@ -239,7 +255,7 @@ export function createMockMandateProvider(
   const cancelRequests: MandateCancelRequest[] = [];
   const mandates = new Map<string, { providerMandateRef: string; request: MandateRequest }>();
   const lookups = new Map<string, number>();
-  const refFor = (operationKey: string): string => `MOCK-MANDATE-${operationKey.slice(0, 24)}`;
+  const refFor = (operationKey: string): string => `MOCK-MANDATE-${mockRefSuffix(operationKey)}`;
   const findMandate = (query: MandateLookupQuery) =>
     mandates.get(query.operationKey) ??
     [...mandates.values()].find(
@@ -285,8 +301,13 @@ export function createMockMandateProvider(
         return Promise.resolve({ outcome: 'rejected', reason: 'invalid_request' });
       }
       const existing = mandates.get(request.operationKey);
-      if (existing)
+      if (existing) {
+        // The same key with different parameters is a caller bug (a reused key), not the same request.
+        if (!sameMandateRequest(existing.request, request)) {
+          return Promise.resolve({ outcome: 'rejected', reason: 'invalid_request' });
+        }
         return Promise.resolve({ outcome: 'ok', value: handOff(existing.providerMandateRef) });
+      }
       const providerMandateRef = refFor(request.operationKey);
       mandates.set(request.operationKey, { providerMandateRef, request });
       requests.push(request);

@@ -84,6 +84,7 @@ declare
   v_user uuid;
   v_new_keys text[];
   v_keys text[];
+  v_partner text;
   i integer;
 begin
   if tg_table_name = 'membership_roles' then
@@ -98,14 +99,26 @@ begin
       end if;
     end loop;
   else
+    -- A permission added to a role: the role must not already carry the other half, and no login that already holds the
+    -- role may end up with both halves through any of its other roles.
     for i in 1 .. cardinality(v_pairs) / 2 loop
-      if new.permission_key in (v_pairs[2 * i - 1], v_pairs[2 * i]) and exists (
-        select 1 from tenancy.role_permissions rp
-        where rp.role_id = new.role_id
-          and rp.permission_key = case new.permission_key when v_pairs[2 * i - 1] then v_pairs[2 * i] else v_pairs[2 * i - 1] end
-      ) then
-        raise exception 'segregation of duties: a role cannot carry both % and %', v_pairs[2 * i - 1], v_pairs[2 * i]
-          using errcode = '23514', hint = 'segregation_of_duties';
+      if new.permission_key in (v_pairs[2 * i - 1], v_pairs[2 * i]) then
+        v_partner := case new.permission_key when v_pairs[2 * i - 1] then v_pairs[2 * i] else v_pairs[2 * i - 1] end;
+        if exists (select 1 from tenancy.role_permissions rp where rp.role_id = new.role_id and rp.permission_key = v_partner) then
+          raise exception 'segregation of duties: a role cannot carry both % and %', v_pairs[2 * i - 1], v_pairs[2 * i]
+            using errcode = '23514', hint = 'segregation_of_duties';
+        end if;
+        for v_user in
+          select distinct m.user_id
+          from tenancy.membership_roles mr
+          join tenancy.memberships m on m.id = mr.membership_id
+          where mr.role_id = new.role_id and m.status <> 'revoked'
+        loop
+          if v_partner = any (private.user_permission_keys(v_user)) then
+            raise exception 'segregation of duties: one login cannot hold both % and %', v_pairs[2 * i - 1], v_pairs[2 * i]
+              using errcode = '23514', hint = 'segregation_of_duties';
+          end if;
+        end loop;
       end if;
     end loop;
   end if;
@@ -652,6 +665,10 @@ begin
   elsif p_reason is null or length(trim(p_reason)) < 10 then
     raise exception 'a reason of at least 10 characters is required to turn a feature off' using errcode = '22023', hint = 'reason_required';
   end if;
+  -- A reason, when given, must fit the table check (10 to 1000 characters after trimming); say so here with a stable hint.
+  if p_reason is not null and length(trim(p_reason)) not between 10 and 1000 then
+    raise exception 'a reason must be 10 to 1000 characters' using errcode = '22023', hint = 'reason_invalid';
+  end if;
   if p_enable = coalesce((select f.enabled from servicing.lender_features f where f.lender_org_id = p_lender and f.feature = p_feature), false) then
     raise exception 'the feature is already in that state' using errcode = '55000', hint = 'no_change';
   end if;
@@ -707,6 +724,9 @@ begin
     return 'expired';
   end if;
 
+  if p_note is not null and length(p_note) > 1000 then
+    raise exception 'a decision note must be at most 1000 characters' using errcode = '22023', hint = 'reason_invalid';
+  end if;
   if not p_approve then
     if p_note is null or length(trim(p_note)) < 10 then
       raise exception 'a rejection needs a reason' using errcode = '22023', hint = 'reason_required';
@@ -796,6 +816,9 @@ begin
   end if;
   if p_reason is null or length(trim(p_reason)) < 10 then
     raise exception 'a reason of at least 10 characters is required for the kill switch' using errcode = '22023', hint = 'reason_required';
+  end if;
+  if length(trim(p_reason)) > 1000 then
+    raise exception 'a reason must be 10 to 1000 characters' using errcode = '22023', hint = 'reason_invalid';
   end if;
   if not exists (select 1 from servicing.feature_catalog c where c.feature = p_feature) then
     raise exception 'unknown feature' using errcode = '22023', hint = 'unknown_feature';

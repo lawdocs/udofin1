@@ -44,6 +44,8 @@ export interface PushPayload {
 }
 
 const OPAQUE_ID = /^[A-Za-z0-9_-]{16,64}$/;
+/** A recipient is an opaque reference. Digits only (a phone number, an account number) or any '+' / '@' is not one. */
+const RECIPIENT_REF = /^[A-Za-z0-9_-]{6,128}$/;
 
 /** Runtime guard for the push payload shape (also protects against a cast around the type). */
 export function isPushPayload(value: unknown): value is PushPayload {
@@ -88,7 +90,7 @@ export interface SmsPayload {
 }
 
 interface BaseRequest {
-  /** One message per key: the channel (and the mock) treat a repeat as the same message. */
+  /** One message per key and channel: the channel (and the mock) treat a repeat as the same message. */
   readonly idempotencyKey: string;
   /** Opaque recipient reference (a device registration or borrower reference). Never a phone number or name. */
   readonly recipientRef: string;
@@ -108,7 +110,13 @@ export type NotificationRequestFor<C extends NotificationChannel> = Extract<
 export type ChannelSendResult =
   | { readonly state: 'accepted'; readonly providerRef?: string }
   | { readonly state: 'not_configured' }
-  | { readonly state: 'failed'; readonly reason: 'invalid_request' | 'provider_error' | 'timeout' };
+  /** A DEFINITE refusal: the channel did not take the message. Safe to treat as not sent. */
+  | { readonly state: 'failed'; readonly reason: 'invalid_request' }
+  /**
+   * The channel may or may not have taken the message (a timeout, a 5xx or an unparseable answer). Not a refusal:
+   * look the message up by its idempotency key before any retry that could send it twice.
+   */
+  | { readonly state: 'unknown'; readonly reason: 'timeout' | 'network' | 'provider_error' };
 
 export interface NotificationChannelPort<C extends NotificationChannel = NotificationChannel> {
   readonly descriptor: ProviderDescriptor;
@@ -174,7 +182,7 @@ export interface MockNotifier {
     readonly in_app: NotificationChannelPort<'in_app'>;
     readonly push: NotificationChannelPort<'push'>;
   };
-  /** Everything accepted, in order. A repeated idempotency key is recorded once. */
+  /** Everything accepted, in order. A repeated channel and idempotency key is recorded once. */
   readonly sent: readonly RecordedNotification[];
 }
 
@@ -197,12 +205,23 @@ export function createMockNotifier(environment: AppEnvironment): MockNotifier {
   };
   assertLocalOrTestOnly(descriptor, environment, 'mock notifier');
   const sent: RecordedNotification[] = [];
-  const seen = new Map<string, string>();
+  // Keyed by channel AND idempotency key: one notification id used for both channels sends both.
+  const seen = new Map<string, { providerRef: string; content: string }>();
   const accept = (request: RecordedNotification): ChannelSendResult => {
-    const known = seen.get(request.idempotencyKey);
-    if (known !== undefined) return { state: 'accepted', providerRef: known };
+    if (!RECIPIENT_REF.test(request.recipientRef) || /^[0-9]+$/.test(request.recipientRef)) {
+      return { state: 'failed', reason: 'invalid_request' };
+    }
+    const mapKey = `${request.channel}\u0000${request.idempotencyKey}`;
+    const content = JSON.stringify([request.recipientRef, request.payload]);
+    const known = seen.get(mapKey);
+    if (known !== undefined) {
+      // The same key with different content is a caller bug (a reused key), not a repeat of the same message.
+      return known.content === content
+        ? { state: 'accepted', providerRef: known.providerRef }
+        : { state: 'failed', reason: 'invalid_request' };
+    }
     const providerRef = `mock-notice-${String(sent.length + 1)}`;
-    seen.set(request.idempotencyKey, providerRef);
+    seen.set(mapKey, { providerRef, content });
     sent.push(structuredClone(request));
     return { state: 'accepted', providerRef };
   };
@@ -215,7 +234,9 @@ export function createMockNotifier(environment: AppEnvironment): MockNotifier {
         channel: 'in_app',
         send: (request) =>
           Promise.resolve(
-            OPAQUE_ID.test(request.payload.id) && validVariables(request.payload.variables)
+            OPAQUE_ID.test(request.payload.id) &&
+              (request.payload.language === 'en' || request.payload.language === 'hi') &&
+              validVariables(request.payload.variables)
               ? accept(request)
               : { state: 'failed', reason: 'invalid_request' },
           ),

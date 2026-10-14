@@ -3,6 +3,7 @@ import {
   createMockLms,
   createUnconfiguredLmsPort,
   isValidIsoDate,
+  lmsDocumentContentHash,
   LMS_IMPORT_FORMAT,
   MOCK_LMS_LOAN_REF,
   MOCK_LMS_UNKNOWN_LOAN_REF,
@@ -178,6 +179,42 @@ describe('LMS import file v1: loan reports', () => {
       'borrower_ref',
       'borrower_ref_looks_personal',
     ],
+    [
+      'hyphenated Aadhaar as borrower ref',
+      { borrower_ref: '2345-6789-0123' },
+      'borrower_ref',
+      'borrower_ref_looks_personal',
+    ],
+    [
+      'dotted Aadhaar as borrower ref',
+      { borrower_ref: '2345.6789.0123' },
+      'borrower_ref',
+      'borrower_ref_looks_personal',
+    ],
+    [
+      'hyphenated phone as borrower ref',
+      { borrower_ref: '98765-43210' },
+      'borrower_ref',
+      'borrower_ref_looks_personal',
+    ],
+    [
+      'hyphenated PAN as borrower ref',
+      { borrower_ref: 'ABCDE-1234-F' },
+      'borrower_ref',
+      'borrower_ref_looks_personal',
+    ],
+    [
+      'PAN with a prefix as borrower ref',
+      { borrower_ref: 'PAN:ABCDE1234F' },
+      'borrower_ref',
+      'borrower_ref_looks_personal',
+    ],
+    [
+      '16 digits (card or account shaped) as borrower ref',
+      { borrower_ref: '1234567890123456' },
+      'borrower_ref',
+      'borrower_ref_looks_personal',
+    ],
     ['name as borrower ref', { borrower_ref: 'Asha Kumar' }, 'borrower_ref', 'invalid_reference'],
     ['e-mail as borrower ref', { borrower_ref: 'a@b.c' }, 'borrower_ref', 'invalid_reference'],
     ['unknown status', { status: 'overdue' }, 'status', 'invalid_status'],
@@ -242,7 +279,8 @@ describe('LMS import file v1: loan reports', () => {
       { ...LOAN_ROW, lms_loan_ref: 'SAMPLE-LOAN-0004', source_record_id: '+1-1' },
       { ...LOAN_ROW, lms_loan_ref: 'SAMPLE-LOAN-0005', source_record_id: '-2+3' },
     ]);
-    expect(result.rows).toHaveLength(1);
+    expect(result.rows).toEqual([]);
+    expect(result.importable).toBe(false);
     expect(codes(result.errors)).toEqual([
       '2:source_record_id:invalid_reference',
       '3:source_record_id:invalid_reference',
@@ -261,24 +299,27 @@ describe('LMS import file v1: loan reports', () => {
     expect(text).not.toContain('12.345');
   });
 
-  it('keeps the first of identical duplicates and reports the rest; rejects conflicting duplicates entirely', () => {
+  it('keeps the first of identical duplicates and warns about the rest; rejects conflicting duplicates entirely', () => {
     const dup = parseLoans([LOAN_ROW, LOAN_ROW]);
     expect(dup.rows).toHaveLength(1);
-    expect(codes(dup.errors)).toEqual(['2:-:duplicate_row']);
+    expect(dup.importable).toBe(true);
+    expect(dup.errors).toEqual([]);
+    expect(codes(dup.warnings)).toEqual(['2:-:duplicate_row']);
 
     const conflict = parseLoans([
       LOAN_ROW,
       { ...LOAN_ROW, outstanding_principal: '1.00' },
       { ...LOAN_ROW, lms_loan_ref: 'SAMPLE-LOAN-0002', source_record_id: 'SAMPLE-REC-9' },
     ]);
-    expect(conflict.rows.map((r) => r.lmsLoanRef)).toEqual(['SAMPLE-LOAN-0002']);
+    expect(conflict.rows).toEqual([]);
+    expect(conflict.importable).toBe(false);
     expect(codes(conflict.errors)).toEqual([
       '1:-:conflicting_duplicate',
       '2:-:conflicting_duplicate',
     ]);
   });
 
-  it('reports row-level errors without dropping the good rows', () => {
+  it('is all or nothing: one bad row means no rows at all, and every error is still reported', () => {
     const result = parseLoans([
       LOAN_ROW,
       {
@@ -289,7 +330,15 @@ describe('LMS import file v1: loan reports', () => {
       },
       { ...LOAN_ROW, lms_loan_ref: 'SAMPLE-LOAN-0003', source_record_id: 'C' },
     ]);
-    expect(result.rows.map((r) => r.lmsLoanRef)).toEqual(['SAMPLE-LOAN-0001', 'SAMPLE-LOAN-0003']);
+    expect(result.rows).toEqual([]);
+    expect(result.importable).toBe(false);
+    expect(codes(result.errors)).toEqual(['2:sanctioned_amount:invalid_amount']);
+  });
+
+  it('does not let a valid sibling of an invalid record with the same key through', () => {
+    const result = parseLoans([LOAN_ROW, { ...LOAN_ROW, sanctioned_amount: 'x' }]);
+    expect(result.rows).toEqual([]);
+    expect(result.importable).toBe(false);
     expect(codes(result.errors)).toEqual(['2:sanctioned_amount:invalid_amount']);
   });
 
@@ -323,9 +372,12 @@ describe('LMS import file v1: loan reports', () => {
     it('flags a row with the wrong number of cells and ignores a BOM and CRLF', () => {
       const header = Object.keys(LOAN_ROW).join(',');
       const full = Object.values(LOAN_ROW).join(',');
+      const clean = parseLmsImportFile(`\uFEFF${header}\r\n${full}\r\n`, loanSpec());
+      expect(clean.rows).toHaveLength(1);
+      expect(clean.importable).toBe(true);
       const text = `\uFEFF${header}\r\n${full}\r\nSAMPLE-LOAN-0002,x\r\n`;
       const result = parseLmsImportFile(text, loanSpec());
-      expect(result.rows).toHaveLength(1);
+      expect(result.rows).toEqual([]);
       expect(codes(result.errors)).toEqual(['2:-:column_count_mismatch']);
     });
     it('reads quoted cells with commas and doubled quotes as plain text', () => {
@@ -368,8 +420,24 @@ describe('LMS import file v1: JSON', () => {
     expect(result.rows).toEqual([]);
     expect(codes(result.errors)).toEqual([
       '1:sanctioned_amount:invalid_amount',
-      '2:__proto__:unknown_field',
+      '2:-:unknown_field',
     ]);
+  });
+
+  it('never echoes an unknown key, because a key can be a PAN or a phone number', () => {
+    const result = parseLmsImportFile(
+      JSON.stringify([
+        { ...LOAN_ROW, ABCDE1234F: 'x', '9876543210': 'y', [`k${'a'.repeat(300)}`]: 'z' },
+      ]),
+      jsonSpec(),
+    );
+    expect(result.errors).toEqual([
+      { rowNumber: 1, field: null, code: 'unknown_field' },
+      { rowNumber: 1, field: null, code: 'unknown_field' },
+      { rowNumber: 1, field: null, code: 'unknown_field' },
+    ]);
+    expect(JSON.stringify(result.errors)).not.toContain('ABCDE1234F');
+    expect(JSON.stringify(result.errors)).not.toContain('9876543210');
   });
 
   it('refuses malformed JSON, a wrong wrapper, a wrong version and non-object records', () => {
@@ -532,6 +600,42 @@ describe('LMS import file v1: schedules', () => {
       spec,
     );
     expect(codes(result.errors)).toContain('2:-:inconsistent_report_head');
+    expect(result.rows).toEqual([]);
+  });
+
+  it('never returns a truncated schedule when the LAST installment row is bad', () => {
+    const lines = toCsv([line(1, '2026-11-05'), line(2, '2026-12-05'), line(3, '2027-01-05')])
+      .trimEnd()
+      .split('\n');
+    lines[3] = (lines[3] ?? '').split(',').slice(0, 6).join(',');
+    const short = parseLmsImportFile(`${lines.join('\n')}\n`, spec);
+    expect(codes(short.errors)).toEqual(['3:-:column_count_mismatch']);
+    expect(short.rows).toEqual([]);
+    expect(short.importable).toBe(false);
+
+    const head = parseLmsImportFile(
+      toCsv([
+        line(1, '2026-11-05'),
+        line(2, '2026-12-05'),
+        { ...line(3, '2027-01-05'), reported_as_of: '2026-10-13T07:00:00Z' },
+      ]),
+      spec,
+    );
+    expect(codes(head.errors)).toEqual(['3:-:inconsistent_report_head']);
+    expect(head.rows).toEqual([]);
+  });
+
+  it('never returns a one-row report when the first row disagrees with the other two', () => {
+    const result = parseLmsImportFile(
+      toCsv([
+        { ...line(1, '2026-11-05'), reported_as_of: '2026-10-13T07:00:00Z' },
+        line(2, '2026-12-05'),
+        line(3, '2027-01-05'),
+      ]),
+      spec,
+    );
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.rows).toEqual([]);
   });
 
   it('accepts the same schedule as JSON installments', () => {
@@ -761,5 +865,45 @@ describe('unconfigured LMS and timeouts', () => {
       outcome: 'unknown',
       reason: 'network',
     });
+  });
+});
+
+describe('LMS document content hash', () => {
+  const base = {
+    lmsLoanRef: 'SAMPLE-LOAN-0001',
+    documentKind: 'statement',
+    lenderDocumentRef: 'SAMPLE-DOC-1',
+    mediaType: 'application/pdf',
+    documentSha256: 'a'.repeat(64),
+    periodFrom: '2026-09-01',
+    periodTo: '2026-09-30',
+    reportedAt: '2026-10-13T06:00:00.000Z',
+    sequence: null,
+  } as const;
+
+  it('changes when the document bytes (their SHA-256) change, so a re-issue is not an exact re-send', () => {
+    const original = lmsDocumentContentHash(base);
+    expect(original).toMatch(/^[0-9a-f]{64}$/);
+    expect(lmsDocumentContentHash({ ...base, documentSha256: 'b'.repeat(64) })).not.toBe(original);
+    expect(lmsDocumentContentHash({ ...base, sequence: 4 })).not.toBe(original);
+    expect(lmsDocumentContentHash({ ...base })).toBe(original);
+  });
+
+  it('is what the mock statement carries', async () => {
+    const lms = createMockLms('test', 'normal');
+    const statement = await lms.fetchStatement(ctx, MOCK_LMS_LOAN_REF, {
+      from: '2026-09-01',
+      to: '2026-09-30',
+    });
+    expect(statement.outcome).toBe('ok');
+    if (statement.outcome !== 'ok') return;
+    const {
+      contentSha256,
+      reportType: _type,
+      sourceSystem: _source,
+      sourceRecordId: _id,
+      ...doc
+    } = statement.value;
+    expect(contentSha256).toBe(lmsDocumentContentHash(doc));
   });
 });

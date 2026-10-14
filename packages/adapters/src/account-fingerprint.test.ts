@@ -4,8 +4,10 @@ import {
   createLocalKeyManager,
   fingerprintAccount,
   fingerprintsEqual,
+  INITIAL_IN_BANK_ACCOUNT_RULE,
   loadFingerprintKey,
   normaliseAccount,
+  type AccountFormatRule,
   type FingerprintKey,
 } from './index.js';
 
@@ -23,11 +25,12 @@ const key2: FingerprintKey = {
   key: new Uint8Array(32).fill(2),
 };
 const input = { ifsc: SAMPLE_IFSC, accountNumber: SAMPLE_ACCOUNT };
+const rule = INITIAL_IN_BANK_ACCOUNT_RULE;
 
 describe('fingerprintAccount', () => {
   it('is deterministic: 64 hex characters, the key version, and a masked reference with the last four digits only', () => {
-    const a = fingerprintAccount(key1, input);
-    expect(a).toEqual(fingerprintAccount(key1, input));
+    const a = fingerprintAccount(key1, input, rule);
+    expect(a).toEqual(fingerprintAccount(key1, input, rule));
     expect(a.fingerprint).toMatch(/^[0-9a-f]{64}$/);
     expect(a.keyVersion).toBe(1);
     expect(a.maskedRef).toBe('XXXXXX2222');
@@ -35,38 +38,62 @@ describe('fingerprintAccount', () => {
   });
 
   it('separates key versions: different key material gives a different fingerprint and reports its version', () => {
-    const a = fingerprintAccount(key1, input);
-    const b = fingerprintAccount(key2, input);
+    const a = fingerprintAccount(key1, input, rule);
+    const b = fingerprintAccount(key2, input, rule);
     expect(b.fingerprint).not.toBe(a.fingerprint);
     expect(b.keyVersion).toBe(2);
   });
 
   it('gives different accounts different fingerprints, including a different leading zero and a different IFSC', () => {
-    const base = fingerprintAccount(key1, input).fingerprint;
+    const base = fingerprintAccount(key1, input, rule).fingerprint;
     expect(
-      fingerprintAccount(key1, { ...input, accountNumber: '000011112223' }).fingerprint,
+      fingerprintAccount(key1, { ...input, accountNumber: '000011112223' }, rule).fingerprint,
     ).not.toBe(base);
     expect(
-      fingerprintAccount(key1, { ...input, accountNumber: '00011112222' }).fingerprint,
+      fingerprintAccount(key1, { ...input, accountNumber: '00011112222' }, rule).fingerprint,
     ).not.toBe(base);
-    expect(fingerprintAccount(key1, { ...input, ifsc: 'SAMP0000002' }).fingerprint).not.toBe(base);
+    expect(fingerprintAccount(key1, { ...input, ifsc: 'OTHR0000001' }, rule).fingerprint).not.toBe(
+      base,
+    );
+  });
+
+  it('treats the same account at another branch of the same bank as the same account, but not at another bank', () => {
+    const base = fingerprintAccount(key1, input, rule);
+    const otherBranch = fingerprintAccount(key1, { ...input, ifsc: 'SAMP0000002' }, rule);
+    expect(otherBranch.fingerprint).toBe(base.fingerprint);
+    expect(fingerprintsEqual(base.fingerprint, otherBranch.fingerprint)).toBe(true);
+    expect(otherBranch.maskedRef).toBe(base.maskedRef);
+    expect(fingerprintAccount(key1, { ...input, ifsc: 'SAMQ0000001' }, rule).fingerprint).not.toBe(
+      base.fingerprint,
+    );
+  });
+
+  it('matches a known answer computed outside this code (HMAC-SHA256 over length-prefixed domain, bank code, number)', () => {
+    // python: hmac.new(bytes([1])*32, lp('udofin-account-fingerprint-v2', 'SAMP', '000011112222'), sha256)
+    expect(fingerprintAccount(key1, input, rule).fingerprint).toBe(
+      '4ba9b4df6fdc0392c6d74091bc8ef7622943aa96c113eb4628b1463e4699988b',
+    );
   });
 
   it('is equivalent across harmless formatting: trimming and IFSC case', () => {
-    const base = fingerprintAccount(key1, input).fingerprint;
+    const base = fingerprintAccount(key1, input, rule).fingerprint;
     expect(
-      fingerprintAccount(key1, {
-        ifsc: ` ${SAMPLE_IFSC.toLowerCase()} `,
-        accountNumber: `  ${SAMPLE_ACCOUNT}\n`,
-      }).fingerprint,
+      fingerprintAccount(
+        key1,
+        {
+          ifsc: ` ${SAMPLE_IFSC.toLowerCase()} `,
+          accountNumber: `  ${SAMPLE_ACCOUNT}\n`,
+        },
+        rule,
+      ).fingerprint,
     ).toBe(base);
     expect(
-      normaliseAccount({ ifsc: ' samp0000001', accountNumber: ` ${SAMPLE_ACCOUNT} ` }),
+      normaliseAccount({ ifsc: ' samp0000001', accountNumber: ` ${SAMPLE_ACCOUNT} ` }, rule),
     ).toEqual(input);
   });
 
   it('never returns or contains the account number or the IFSC', () => {
-    const text = JSON.stringify(fingerprintAccount(key1, input));
+    const text = JSON.stringify(fingerprintAccount(key1, input, rule));
     expect(text).not.toContain(SAMPLE_ACCOUNT);
     expect(text).not.toContain(SAMPLE_IFSC);
     expect(text).not.toContain('0000111');
@@ -98,7 +125,7 @@ describe('fingerprintAccount', () => {
     (accountNumber) => {
       let caught: unknown;
       try {
-        fingerprintAccount(key1, { ifsc: SAMPLE_IFSC, accountNumber });
+        fingerprintAccount(key1, { ifsc: SAMPLE_IFSC, accountNumber }, rule);
       } catch (error) {
         caught = error;
       }
@@ -115,7 +142,7 @@ describe('fingerprintAccount', () => {
     (ifsc) => {
       let caught: unknown;
       try {
-        fingerprintAccount(key1, { ifsc, accountNumber: SAMPLE_ACCOUNT });
+        fingerprintAccount(key1, { ifsc, accountNumber: SAMPLE_ACCOUNT }, rule);
       } catch (error) {
         caught = error;
       }
@@ -129,10 +156,18 @@ describe('fingerprintAccount', () => {
 
   it('rejects non-string input and unusable keys without echoing anything', () => {
     expect(() =>
-      fingerprintAccount(key1, { ifsc: 5 as unknown as string, accountNumber: SAMPLE_ACCOUNT }),
+      fingerprintAccount(
+        key1,
+        { ifsc: 5 as unknown as string, accountNumber: SAMPLE_ACCOUNT },
+        rule,
+      ),
     ).toThrow(AccountFingerprintError);
     expect(() =>
-      fingerprintAccount(key1, { ifsc: SAMPLE_IFSC, accountNumber: null as unknown as string }),
+      fingerprintAccount(
+        key1,
+        { ifsc: SAMPLE_IFSC, accountNumber: null as unknown as string },
+        rule,
+      ),
     ).toThrow(AccountFingerprintError);
     for (const bad of [
       { ...key1, key: new Uint8Array(16) },
@@ -140,20 +175,64 @@ describe('fingerprintAccount', () => {
       { ...key1, keyVersion: 0 },
       { ...key1, keyId: '' },
     ]) {
-      expect(() => fingerprintAccount(bad, input)).toThrow(/invalid_key/);
+      expect(() => fingerprintAccount(bad, input, rule)).toThrow(/invalid_key/);
     }
     try {
-      fingerprintAccount({ ...key1, key: new Uint8Array(16).fill(7) }, input);
+      fingerprintAccount({ ...key1, key: new Uint8Array(16).fill(7) }, input, rule);
     } catch (error) {
       expect((error as Error).message).not.toContain(SAMPLE_ACCOUNT);
     }
   });
 });
 
+describe('the account-number format is data, not code', () => {
+  const narrow: AccountFormatRule = { ...rule, minDigits: 12, maxDigits: 12 };
+
+  it('applies the range of the rule it is given, so a changed range needs no code change', () => {
+    expect(() =>
+      fingerprintAccount(key1, { ...input, accountNumber: '00001111222' }, narrow),
+    ).toThrow(/invalid_account_number/);
+    expect(fingerprintAccount(key1, input, narrow).fingerprint).toBe(
+      fingerprintAccount(key1, input, rule).fingerprint,
+    );
+    const wide: AccountFormatRule = { ...rule, minDigits: 8, maxDigits: 20 };
+    expect(fingerprintAccount(key1, { ...input, accountNumber: '12345678' }, wide).maskedRef).toBe(
+      'XXXXXX5678',
+    );
+  });
+
+  it('reports the status of the rule next to the fingerprint: the initial range is unverified', () => {
+    expect(INITIAL_IN_BANK_ACCOUNT_RULE).toMatchObject({ status: 'unverified', source: null });
+    expect(fingerprintAccount(key1, input, rule).ruleStatus).toBe('unverified');
+    const verified: AccountFormatRule = { ...rule, status: 'verified', source: 'SAMPLE-SOURCE-1' };
+    expect(fingerprintAccount(key1, input, verified).ruleStatus).toBe('verified');
+  });
+
+  it('fails closed without a usable rule: nothing is fingerprinted', () => {
+    const bad: unknown[] = [
+      undefined,
+      null,
+      { ...rule, minDigits: 0 },
+      { ...rule, minDigits: 19, maxDigits: 9 },
+      { ...rule, maxDigits: 100 },
+      { ...rule, minDigits: 9.5 },
+      { ...rule, country: 'US' },
+      { ...rule, accountType: '' },
+      { ...rule, status: 'trusted' },
+      { ...rule, status: 'verified', source: null },
+    ];
+    for (const candidate of bad) {
+      expect(() => fingerprintAccount(key1, input, candidate as AccountFormatRule)).toThrow(
+        /invalid_rule/,
+      );
+    }
+  });
+});
+
 describe('fingerprintsEqual', () => {
   it('compares in constant time and treats anything that is not a 64-hex fingerprint as unequal', () => {
-    const a = fingerprintAccount(key1, input).fingerprint;
-    const b = fingerprintAccount(key2, input).fingerprint;
+    const a = fingerprintAccount(key1, input, rule).fingerprint;
+    const b = fingerprintAccount(key2, input, rule).fingerprint;
     expect(fingerprintsEqual(a, a)).toBe(true);
     expect(fingerprintsEqual(a, b)).toBe(false);
     expect(fingerprintsEqual(a, a.toUpperCase())).toBe(false);
@@ -164,45 +243,81 @@ describe('fingerprintsEqual', () => {
 });
 
 describe('loadFingerprintKey (key comes from the key-management port)', () => {
-  const masters = { 1: Buffer.alloc(32, 9).toString('base64') };
-
-  it('unwraps a key held by the key manager and uses its key reference and version', async () => {
-    const km = createLocalKeyManager('test', masters, 1);
-    const raw = new Uint8Array(32).fill(5);
-    const wrapped = await km.encrypt({
+  const masters = {
+    1: Buffer.alloc(32, 9).toString('base64'),
+    2: Buffer.alloc(32, 8).toString('base64'),
+  };
+  const wrapWith = async (
+    km: ReturnType<typeof createLocalKeyManager>,
+    raw: Uint8Array,
+    fingerprintKeyVersion: number,
+  ) =>
+    km.encrypt({
       keyRef: 'platform/account-fingerprint',
       plaintext: raw,
-      context: { purpose: 'account-fingerprint' },
+      context: {
+        purpose: 'account-fingerprint',
+        fingerprint_key_version: String(fingerprintKeyVersion),
+      },
     });
-    const loaded = await loadFingerprintKey(km, wrapped);
+
+  it('unwraps a key held by the key manager and uses its key reference and the version it is given', async () => {
+    const km = createLocalKeyManager('test', masters, 1);
+    const raw = new Uint8Array(32).fill(5);
+    const wrapped = await wrapWith(km, raw, 1);
+    const loaded = await loadFingerprintKey(km, wrapped, 1);
     expect(loaded).toMatchObject({ keyId: 'platform/account-fingerprint', keyVersion: 1 });
-    expect(fingerprintAccount(loaded, input).fingerprint).toBe(
-      fingerprintAccount({ keyId: 'x', keyVersion: 1, key: raw }, input).fingerprint,
+    expect(fingerprintAccount(loaded, input, rule).fingerprint).toBe(
+      fingerprintAccount({ keyId: 'x', keyVersion: 1, key: raw }, input, rule).fingerprint,
     );
     expect(JSON.stringify(wrapped)).not.toContain(Buffer.from(raw).toString('base64'));
   });
 
-  it('refuses a wrong context, a tampered blob and a key that is too short', async () => {
+  it('keeps the fingerprint key version when only the master key rotates (same key, same fingerprint, same version)', async () => {
+    const raw = new Uint8Array(32).fill(5);
+    const underMaster1 = await wrapWith(createLocalKeyManager('test', masters, 1), raw, 1);
+    const kmV2 = createLocalKeyManager('test', masters, 2);
+    const underMaster2 = await wrapWith(kmV2, raw, 1);
+    expect(underMaster1.keyVersion).toBe(1);
+    expect(underMaster2.keyVersion).toBe(2);
+    const a = await loadFingerprintKey(createLocalKeyManager('test', masters, 1), underMaster1, 1);
+    const b = await loadFingerprintKey(kmV2, underMaster2, 1);
+    expect(b.keyVersion).toBe(1);
+    const fa = fingerprintAccount(a, input, rule);
+    const fb = fingerprintAccount(b, input, rule);
+    expect(fb.fingerprint).toBe(fa.fingerprint);
+    expect(fb.keyVersion).toBe(fa.keyVersion);
+  });
+
+  it('gives a new fingerprint key its own version even under the same master key', async () => {
     const km = createLocalKeyManager('test', masters, 1);
-    const wrapped = await km.encrypt({
-      keyRef: 'platform/account-fingerprint',
-      plaintext: new Uint8Array(32).fill(5),
-      context: { purpose: 'account-fingerprint' },
-    });
-    await expect(loadFingerprintKey(km, wrapped, { purpose: 'something-else' })).rejects.toThrow(
+    const v1 = await loadFingerprintKey(km, await wrapWith(km, new Uint8Array(32).fill(5), 1), 1);
+    const v2 = await loadFingerprintKey(km, await wrapWith(km, new Uint8Array(32).fill(6), 2), 2);
+    const f1 = fingerprintAccount(v1, input, rule);
+    const f2 = fingerprintAccount(v2, input, rule);
+    expect(f2.fingerprint).not.toBe(f1.fingerprint);
+    expect(f2.keyVersion).toBe(2);
+    expect(f1.keyVersion).toBe(1);
+  });
+
+  it('refuses a blob loaded under a version it was not wrapped for, a wrong context, a tampered blob, a short key and a bad version', async () => {
+    const km = createLocalKeyManager('test', masters, 1);
+    const wrapped = await wrapWith(km, new Uint8Array(32).fill(5), 1);
+    await expect(loadFingerprintKey(km, wrapped, 2)).rejects.toThrow(/invalid_key/);
+    await expect(loadFingerprintKey(km, wrapped, 1, { purpose: 'something-else' })).rejects.toThrow(
       /invalid_key/,
     );
     await expect(
-      loadFingerprintKey(km, {
-        ...wrapped,
-        ciphertext: Buffer.from('tampered').toString('base64'),
-      }),
+      loadFingerprintKey(
+        km,
+        { ...wrapped, ciphertext: Buffer.from('tampered').toString('base64') },
+        1,
+      ),
     ).rejects.toThrow(/invalid_key/);
-    const short = await km.encrypt({
-      keyRef: 'platform/account-fingerprint',
-      plaintext: new Uint8Array(8),
-      context: { purpose: 'account-fingerprint' },
-    });
-    await expect(loadFingerprintKey(km, short)).rejects.toThrow(/invalid_key/);
+    const short = await wrapWith(km, new Uint8Array(8), 1);
+    await expect(loadFingerprintKey(km, short, 1)).rejects.toThrow(/invalid_key/);
+    for (const version of [0, -1, 1.5, Number.NaN]) {
+      await expect(loadFingerprintKey(km, wrapped, version)).rejects.toThrow(/invalid_key/);
+    }
   });
 });

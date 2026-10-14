@@ -32,6 +32,13 @@ import {
 export type ProviderObjectKind =
   'payment' | 'refund' | 'chargeback' | 'mandate' | 'debit' | 'settlement';
 
+/**
+ * Marker for an AUTHENTIC delivery whose object kind the platform does not support. It is stored verified-and-ignored
+ * (owner decision, 14 Oct 2026): it changes no state and is never rejected solely because its kind is unknown. The
+ * provider's own kind word is not kept (it is provider text); the receipt keeps the payload hash.
+ */
+export const UNSUPPORTED_OBJECT_KIND = 'unsupported';
+
 export const PROVIDER_OBJECT_KINDS: readonly ProviderObjectKind[] = [
   'payment',
   'refund',
@@ -107,7 +114,8 @@ export interface NormalisedProviderEvent {
   readonly deliveryId: string;
   /** Identifies the provider event. Several deliveries may carry the same event id. */
   readonly eventId: string;
-  readonly objectKind: ProviderObjectKind;
+  /** `unsupported` = verified-and-ignored: an authentic event of a kind the platform does not handle. */
+  readonly objectKind: ProviderObjectKind | typeof UNSUPPORTED_OBJECT_KIND;
   /** The provider's id of the object (payment, refund, mandate, debit, settlement). */
   readonly objectRef: string;
   /** The order/link the object belongs to, used to match an intent. */
@@ -159,6 +167,8 @@ export type WebhookInvalidReason =
  *  - unverified:      signature missing or wrong. Never a financial event.
  *  - stale_timestamp: authentic signature but outside the tolerance (replay of an old capture). Inert.
  *  - invalid:         the body cannot be used (or this provider has no scheme yet). Inert.
+ * An authentic, fresh delivery of an object kind the platform does not support is `verified` with objectKind
+ * `unsupported` (verified-and-ignored), not `invalid`; `unsupported_event` is only for a body with no usable kind.
  * `payloadSha256` is the hash of the raw body, always present, for the receipt. Raw bodies are never stored.
  */
 export type WebhookVerification =
@@ -278,11 +288,15 @@ export interface SettlementReport {
 
 export type PaymentResult<T> =
   | { readonly outcome: 'ok'; readonly value: T }
-  /** The provider may or may not have acted. Look the order up by `receiptRef` before ANY retry. */
-  | { readonly outcome: 'unknown'; readonly reason: 'timeout' | 'network' }
+  /**
+   * The provider may or may not have acted. Look the order up by `receiptRef` before ANY retry. This includes a 5xx or
+   * an unparseable answer (`provider_error`): the order may have been committed. `rejected` is only a definite refusal
+   * (a 4xx the provider says it did not act on).
+   */
+  | { readonly outcome: 'unknown'; readonly reason: 'timeout' | 'network' | 'provider_error' }
   | {
       readonly outcome: 'rejected';
-      readonly reason: 'invalid_request' | 'unsupported_currency' | 'provider_error';
+      readonly reason: 'invalid_request' | 'unsupported_currency';
     }
   | { readonly outcome: 'not_found' }
   | { readonly outcome: 'unsupported' }
@@ -368,6 +382,12 @@ const MAX_WEBHOOK_BODY_BYTES = 64 * 1024;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
 const EPOCH_SECONDS = /^[0-9]{1,12}$/;
 
+/** Canonical base64 only: the candidate must equal the re-encoding of what it decodes to (no junk, no base64url, no missing padding). */
+function decodeCanonicalBase64(candidate: string): Buffer | null {
+  const decoded = Buffer.from(candidate, 'base64');
+  return decoded.toString('base64') === candidate ? decoded : null;
+}
+
 function header(headers: WebhookHeaders, name: string): string | undefined {
   for (const [key, value] of Object.entries(headers)) {
     if (key.toLowerCase() === name) return value;
@@ -399,7 +419,8 @@ export function signMockWebhook(input: {
 
 export interface MockWebhookBodyFields {
   eventId: string;
-  objectKind: ProviderObjectKind;
+  /** Usually a supported kind; any text is allowed so tests can send an unsupported one. */
+  objectKind: ProviderObjectKind | (string & {});
   objectRef: string;
   orderRef?: string;
   /** Usually a platform status; any text is allowed so tests can send an unmapped one. */
@@ -444,6 +465,11 @@ function verifyMockWebhook(
   headers: WebhookHeaders,
   context: WebhookVerifyContext,
 ): WebhookVerification {
+  const tolerance = context.toleranceSeconds ?? 300;
+  if (!Number.isFinite(tolerance) || tolerance < 0) {
+    // A configuration error must stop the receiver, not silently switch the replay window off (NaN) or on (negative).
+    throw new RangeError('toleranceSeconds must be a finite number of seconds, zero or more');
+  }
   const payloadSha256 = sha256Hex(rawBody);
   const unverified = (reason: WebhookRejectionReason): WebhookVerification => ({
     outcome: 'unverified',
@@ -455,6 +481,9 @@ function verifyMockWebhook(
     reason,
     payloadSha256,
   });
+
+  // Bound the work first: no HMAC over a body above the limit. (The transport should also cap the body it reads.)
+  if (rawBody.length > MAX_WEBHOOK_BODY_BYTES) return invalid('body_too_large');
 
   const id = header(headers, 'webhook-id');
   const timestamp = header(headers, 'webhook-timestamp');
@@ -468,19 +497,17 @@ function verifyMockWebhook(
   const authentic = signature.split(' ').some((part) => {
     const [version, candidate] = part.split(',');
     if (version !== 'v1' || !candidate) return false;
-    const given = Buffer.from(candidate, 'base64');
-    return given.length === expected.length && timingSafeEqual(given, expected);
+    const given = decodeCanonicalBase64(candidate);
+    return given !== null && given.length === expected.length && timingSafeEqual(given, expected);
   });
   if (!authentic) return unverified('signature_mismatch');
 
   const now = Math.floor((context.now ?? new Date()).getTime() / 1000);
-  const tolerance = context.toleranceSeconds ?? 300;
   if (Math.abs(now - parseInt(timestamp, 10)) > tolerance) {
     return { outcome: 'stale_timestamp', reason: 'timestamp_outside_tolerance', payloadSha256 };
   }
 
   // From here on the sender is authentic; the body still has to be usable.
-  if (rawBody.length > MAX_WEBHOOK_BODY_BYTES) return invalid('body_too_large');
   let parsed: unknown;
   try {
     parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(rawBody));
@@ -515,8 +542,31 @@ function verifyMockWebhook(
   ) {
     return invalid('invalid_identifier');
   }
+  // A body with no usable kind word is malformed. A kind word we do not support is an authentic event that is stored
+  // verified-and-ignored: it carries identifiers and a time only, never an amount, a status or the kind text.
+  if (typeof objectKind !== 'string' || objectKind === '') return invalid('unsupported_event');
   const kind = PROVIDER_OBJECT_KINDS.find((candidate) => candidate === objectKind);
-  if (kind === undefined || typeof statusText !== 'string') return invalid('unsupported_event');
+  if (kind === undefined) {
+    const ignoredAt = typeof occurredText === 'string' ? normaliseTimestamp(occurredText) : null;
+    if (ignoredAt === null) return invalid('invalid_timestamp');
+    return {
+      outcome: 'verified',
+      payloadSha256,
+      event: {
+        provider: MOCK_PAYMENT_PROVIDER_KEY,
+        deliveryId: id,
+        eventId,
+        objectKind: UNSUPPORTED_OBJECT_KIND,
+        objectRef,
+        status: 'unmapped',
+        rank: defaultEventRank('unmapped'),
+        amountMinor: null,
+        currency: null,
+        occurredAt: ignoredAt,
+      },
+    };
+  }
+  if (typeof statusText !== 'string') return invalid('unsupported_event');
   const status: PlatformEventStatus =
     PLATFORM_EVENT_STATUSES.find((candidate) => candidate === statusText) ?? 'unmapped';
 
@@ -532,6 +582,8 @@ function verifyMockWebhook(
   if (currencyText === undefined || (currencyText !== null && currencyText !== 'INR')) {
     return invalid('unsupported_currency');
   }
+  // An amount without a currency would never confirm INR: refuse it.
+  if (amountMinor !== null && currencyText === null) return invalid('unsupported_currency');
   const occurredAt = typeof occurredText === 'string' ? normaliseTimestamp(occurredText) : null;
   if (occurredAt === null) return invalid('invalid_timestamp');
 
@@ -731,10 +783,31 @@ export interface MockPaymentProvider extends PaymentProviderPort {
   readonly created: readonly CreateOrderRequest[];
 }
 
+function sameOrderRequest(a: CreateOrderRequest, b: CreateOrderRequest): boolean {
+  return (
+    a.receiptRef === b.receiptRef &&
+    a.merchantRef === b.merchantRef &&
+    a.amountMinor === b.amountMinor &&
+    a.currency === b.currency &&
+    a.purpose === b.purpose &&
+    a.expiresAt === b.expiresAt
+  );
+}
+
 export interface MockPaymentProviderOptions {
   readonly scenario?: MockPaymentScenario;
   /** What the mock reports as the settlement destination, e.g. a masked reference ending in four digits. */
   readonly settlementDestinationMaskedRef?: string | null;
+}
+
+/**
+ * Reference text derived from the WHOLE operation key, for mock refs. A key that is already a safe reference is used
+ * as is (readable in test output); any other key is hashed. Never truncated, so distinct keys never share a ref.
+ */
+export function mockRefSuffix(operationKey: string): string {
+  return /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$/.test(operationKey)
+    ? operationKey
+    : `HASH-${sha256Hex(operationKey).slice(0, 32)}`;
 }
 
 /** Fixed time the mock reports lookups and settlements at, so its output never depends on the wall clock. */
@@ -758,7 +831,7 @@ export function createMockPaymentProvider(
   const created: CreateOrderRequest[] = [];
   const orders = new Map<string, { orderRef: string; request: CreateOrderRequest }>();
   const lookups = new Map<string, number>();
-  const orderRefFor = (operationKey: string): string => `MOCK-ORDER-${operationKey.slice(0, 24)}`;
+  const orderRefFor = (operationKey: string): string => `MOCK-ORDER-${mockRefSuffix(operationKey)}`;
   const reportedMerchant = (request: CreateOrderRequest): string =>
     scenario === 'wrong_merchant' ? MOCK_OTHER_MERCHANT_REF : request.merchantRef;
 
@@ -801,6 +874,10 @@ export function createMockPaymentProvider(
       }
       const existing = orders.get(request.operationKey);
       if (existing) {
+        // The same key with different parameters is a caller bug (a reused key), not the same order.
+        if (!sameOrderRequest(existing.request, request)) {
+          return Promise.resolve({ outcome: 'rejected', reason: 'invalid_request' });
+        }
         return Promise.resolve({
           outcome: 'ok',
           value: toCreated(existing.request, existing.orderRef),
@@ -858,7 +935,7 @@ export function createMockPaymentProvider(
           ...base,
           status: 'captured',
           amountMinor: capturedAmount(entry.request),
-          providerPaymentRef: `MOCK-PAY-${key.slice(0, 24)}`,
+          providerPaymentRef: `MOCK-PAY-${mockRefSuffix(key)}`,
         },
       });
     },
@@ -870,7 +947,7 @@ export function createMockPaymentProvider(
             const gross = capturedAmount(request);
             // Fees and tax are the provider's; the mock reports none rather than invent a rate.
             return {
-              providerPaymentRef: `MOCK-PAY-${request.operationKey.slice(0, 24)}`,
+              providerPaymentRef: `MOCK-PAY-${mockRefSuffix(request.operationKey)}`,
               orderRef,
               grossMinor: gross,
               feeMinor: 0n,
