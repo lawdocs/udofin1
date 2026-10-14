@@ -87,7 +87,6 @@ describe.skipIf(!enabled)(
     let app: Awaited<ReturnType<typeof buildApp>>;
     let blockedApp: Awaited<ReturnType<typeof buildApp>>;
     let handlers: ReturnType<typeof createHandlers>;
-    let dbName = '';
     const notice = { ack: '', ackHi: '' };
     const state: Record<string, string> = {};
 
@@ -173,10 +172,10 @@ describe.skipIf(!enabled)(
 
     beforeAll(async () => {
       admin = new pg.Pool({ connectionString: ADMIN, max: 3 });
-      dbName = (await q<{ d: string }>('select current_database() d'))[0]?.d ?? '';
       // The database must allow the labelled mock signer for this API pool; a second pool is told NOT to.
-      await admin.query(`alter database "${dbName}" set udofin.allow_mock_signing = 'on'`);
-      await admin.query(`alter database "${dbName}" set udofin.allow_sample_documents = 'on'`);
+      // Session settings travel as connection start-up options (a managed database does not let its admin set
+      // database-level custom settings); node-pg reads PGOPTIONS for every pool created after this line.
+      process.env.PGOPTIONS = '-c udofin.allow_mock_signing=on -c udofin.allow_sample_documents=on';
       apiPool = new pg.Pool({ connectionString: API, max: 10 });
       blockedPool = new pg.Pool({
         connectionString: API,
@@ -342,12 +341,7 @@ describe.skipIf(!enabled)(
     afterAll(async () => {
       await app?.close();
       await blockedApp?.close();
-      await admin
-        ?.query(`alter database "${dbName}" reset udofin.allow_mock_signing`)
-        .catch(() => undefined);
-      await admin
-        ?.query(`alter database "${dbName}" reset udofin.allow_sample_documents`)
-        .catch(() => undefined);
+      delete process.env.PGOPTIONS;
       await apiPool?.end();
       await blockedPool?.end();
       await systemPool?.end();
