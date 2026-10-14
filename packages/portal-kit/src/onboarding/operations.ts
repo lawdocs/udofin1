@@ -1,5 +1,6 @@
 import { z, type ZodType } from 'zod';
 import { APPLICATION_OPERATIONS } from '../applications/operations.js';
+import { DOCUMENT_OPERATIONS } from '../documents/operations.js';
 import { PRODUCT_OPERATIONS } from '../products/operations.js';
 import { type OnboardingApi, type OnboardingResult, type PortalKind } from './api.js';
 
@@ -397,6 +398,7 @@ export const OPERATIONS: Readonly<Record<string, Operation>> = {
   ...BASE_OPERATIONS,
   ...PRODUCT_OPERATIONS,
   ...APPLICATION_OPERATIONS,
+  ...DOCUMENT_OPERATIONS,
 };
 
 export type OperationOutcome = { ok: true } | { ok: false; code: string };

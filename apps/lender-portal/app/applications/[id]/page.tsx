@@ -1,10 +1,12 @@
 import { createApiClient } from '@udofin/auth-client';
 import {
   ApplicationDetailView,
+  DocumentsSection,
   ErrorState,
   capabilitiesFrom,
   loadApplication,
   loadApplications,
+  loadDocumentSection,
 } from '@udofin/portal-kit';
 import { notFound } from 'next/navigation';
 import { connection } from 'next/server';
@@ -51,6 +53,9 @@ export default async function ApplicationRoute({
   }
   if (!application) notFound();
   const detail = await loadApplication(api, id);
+  const offers = detail.ok ? detail.data.offers : [];
+  const currentOffer = [...offers].sort((a, b) => b.revision - a.revision)[0] ?? null;
+  const documentSection = await loadDocumentSection(api, id, currentOffer?.offerId ?? null);
   const caps = capabilitiesFrom(session.me.memberships.flatMap((m) => m.permissions));
   return (
     <PageFrame me={session.me} current="/applications">
@@ -67,6 +72,27 @@ export default async function ApplicationRoute({
         }}
         done={query.done === '1'}
         error={typeof query.error === 'string' ? query.error : undefined}
+      />
+      <DocumentsSection
+        applicationId={id}
+        offer={
+          currentOffer
+            ? {
+                offerId: currentOffer.offerId,
+                revision: currentOffer.revision,
+                status: currentOffer.status,
+              }
+            : null
+        }
+        documents={documentSection.documents}
+        inputs={documentSection.inputs}
+        ctx={{
+          portal: 'lender',
+          caps,
+          action: onboardingAction,
+          returnTo: `/applications/${id}`,
+          userId: session.me.userId,
+        }}
       />
     </PageFrame>
   );

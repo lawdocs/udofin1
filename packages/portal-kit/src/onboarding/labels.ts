@@ -54,6 +54,34 @@ export const ERROR_MESSAGES: Record<string, string> = {
   validation_failed: 'Please check the values you entered.',
   path_not_allowed: 'That action is not available.',
   network_error: 'The service could not be reached. Try again.',
+  applicability_unresolved:
+    'No approved regulatory rule applies to this lender and product yet. Compliance has to approve one first.',
+  template_not_ready: 'No approved template exists for this document and language yet.',
+  calendar_missing:
+    'No approved working-day calendar exists for your organisation yet, so the KFS validity cannot be computed.',
+  calendar_incomplete: 'The working-day calendar does not cover the dates needed.',
+  kfs_input_missing: 'Submit the KFS data first.',
+  kfs_input_held: 'The latest KFS data was held. Fix the listed issues and submit it again.',
+  kfs_input_stale: 'A newer KFS data submission exists. Use the latest accepted one.',
+  lender_inactive: 'Your organisation or connector is not active.',
+  product_inactive: 'The product is not active.',
+  offer_withdrawn: 'The offer was withdrawn.',
+  offer_expired: 'The offer has expired.',
+  offer_not_current: 'The offer is not current.',
+  offer_not_accepted: 'The borrower has not accepted the offer yet.',
+  offer_validity_shorter_than_kfs:
+    'The offer ends before the KFS validity would. Correct the offer or its validity.',
+  validity_below_minimum: 'The validity you declared is shorter than the minimum.',
+  kfs_not_issued: 'The Key Facts Statement has not been issued yet.',
+  hash_mismatch: 'The file you reviewed is not the current file. Reload and review it again.',
+  approval_required: 'The document needs lender approval first.',
+  segregation_of_duties: 'A different person has to do this.',
+  draft_stale: 'The prepared document is out of date. Prepare it again.',
+  newer_version_exists: 'A newer version exists.',
+  summary_box_mismatch: 'The summary box does not match the accepted KFS.',
+  accepted_cannot_withdraw: 'The offer was accepted, so its documents cannot be withdrawn here.',
+  kfs_data_invalid: 'The data is not valid JSON in the expected format.',
+  proposal_no_taken: 'That proposal number is already in use.',
 };
 
 export const errorMessage = (code: string | undefined): string =>

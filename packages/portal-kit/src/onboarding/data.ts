@@ -183,6 +183,8 @@ export interface Capabilities {
   panel?: boolean;
   applicationRead?: boolean;
   applicationDecide?: boolean;
+  documentPrepare?: boolean;
+  documentApprove?: boolean;
 }
 
 export function capabilitiesFrom(permissions: readonly string[]): Capabilities {
@@ -198,6 +200,8 @@ export function capabilitiesFrom(permissions: readonly string[]): Capabilities {
     panel: has('application.read') || has('loan.read') || has('payment.read'),
     applicationRead: has('application.read'),
     applicationDecide: has('application.decide'),
+    documentPrepare: has('document.prepare'),
+    documentApprove: has('document.approve'),
   };
 }
 

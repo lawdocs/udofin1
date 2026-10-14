@@ -10,3 +10,5 @@ export * from './panel/views.js';
 export { buildVersionBody } from './products/operations.js';
 export * from './applications/data.js';
 export * from './applications/views.js';
+export * from './documents/data.js';
+export * from './documents/views.js';
