@@ -362,7 +362,7 @@ must answer `409 idempotency_key_reused` without revealing the other intent. Con
 - Unsigned callbacks are hints only and must be confirmed by a status poll.
 - **Signature before anything else (implemented 14 October 2026).** The Supabase Send-SMS hook verifies the
   Standard Webhooks signature over the raw bytes **before** the body schema is applied and before any
-  database work, so an unsigned caller always gets `401` and learns nothing about the body rules.
+  database work, so an unsigned caller gets `401` and learns nothing about the body rules. The one exception is the framework's body parser, which runs first: malformed JSON or an unsupported content type is refused with `400`/`415` regardless of who sends it.
 - **Replay protection across instances (audit F-06).** After a valid signature and a valid body, the message
   id is recorded in `ops.seen_webhooks` through `private.mark_webhook_seen(source, id)`; a second delivery
   of the same id on any API instance gets `401 replayed`. The call runs on the API's normal login as role
@@ -372,9 +372,10 @@ must answer `409 idempotency_key_reused` without revealing the other intent. Con
   and the worker deletes rows older than one day. Without a database (a single local process) the old
   per-process cache is the fallback.
 - **Lender callback receiver (audit F-03).** Every outcome before the signature is verified, whether the
-  lender id is unknown, inactive, manual or `api` kind, the id or the headers are malformed, or our own
-  configuration is incomplete, is the same `401 invalid_signature` problem response, so lender ids cannot
-  be enumerated. The real reason is written to the server log only (a validated lender id and a reason
+  lender id is unknown, inactive, manual or `api` kind, the id (it must be a real UUID) or the headers are
+  malformed, a context lookup fails, or our own configuration is incomplete, is the same `401 invalid_signature`
+  problem response, so lender ids cannot be enumerated. Body-parser errors (malformed JSON, unsupported content
+  type) come first and answer `400`/`415` independently of the lender. The real reason is written to the server log only (a validated lender id and a reason
   code, never headers, bodies or secrets). After a valid signature, a body that fails validation is `422`.
 
 ---
@@ -434,7 +435,7 @@ must answer `409 idempotency_key_reused` without revealing the other intent. Con
 1. The error handler passes Fastify's own error codes through in lower case, so codes such as Fastify's
    media-type code still reach clients; map them to §6.1. Since 14 October 2026 the title and detail of 4xx
    answers are fixed text per status (never the framework's message, which can echo request fragments).
-2. JWT verification, route permissions and the per-request database transaction are not implemented yet.
+2. Authenticated access is implemented (JWT verification, route permissions, the per-request transaction and the session check). What remains: a shared store for the portals' sign-in limiter, and API keys for machine callers.
 3. Rate-limit counters are per process (§9). Per-principal limits exist since 14 October 2026.
 4. `private.record_audit_event` requires an authenticated user and labels every non-borrower as `staff`;
    `audit.actor_type` has a `partner` value that nothing sets yet. Partner and system audit paths need

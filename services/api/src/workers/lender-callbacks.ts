@@ -24,6 +24,8 @@ export interface CallbackDeps {
 }
 
 const MESSAGE_ID = /^[A-Za-z0-9._:-]{8,100}$/;
+/** A real UUID (not just 36 hex-and-dash characters), so a malformed id never reaches a `::uuid` cast in the database. */
+const LENDER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Never a real secret: used only to spend the same effort on lenders that do not exist as on ones that do. */
 const DECOY_SECRET = 'v1,whsec_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
 
@@ -94,14 +96,23 @@ export async function buildCallbackApp(
       return problem(reply, 401, 'invalid_signature', request.id);
     };
     const lenderId = (request.params as { lenderId?: string }).lenderId ?? '';
-    if (!/^[0-9a-f-]{36}$/i.test(lenderId)) return refuse('malformed_lender_id');
+    if (!LENDER_ID.test(lenderId)) return refuse('malformed_lender_id');
     const h = request.headers;
     const messageId = typeof h['webhook-id'] === 'string' ? h['webhook-id'] : '';
     if (!MESSAGE_ID.test(messageId)) return refuse('missing_or_malformed_message_id');
     const headerOf = (name: string): string | undefined =>
       typeof h[name] === 'string' ? h[name] : undefined;
 
-    const context = await deps.routing.hookContext(lenderId);
+    let context: Awaited<ReturnType<typeof deps.routing.hookContext>>;
+    try {
+      context = await deps.routing.hookContext(lenderId);
+    } catch (error) {
+      // A database problem must not turn into a different answer for an unauthenticated caller.
+      return refuse(
+        `context_lookup_failed:${(error as { code?: string }).code ?? 'error'}`,
+        'warn',
+      );
+    }
     if (!context || context.status !== 'active' || context.kind === 'manual') {
       // Do the same signature work a real lender would cost, so response time does not reveal the difference.
       verifyMockCallback({

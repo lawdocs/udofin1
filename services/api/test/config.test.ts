@@ -18,6 +18,19 @@ describe('loadConfig', () => {
     );
   });
 
+  it('treats a blank or whitespace-only TRUST_PROXY_HOPS as missing when deployed (review SEC-3)', () => {
+    const base = {
+      APP_ENV: 'production',
+      DATABASE_URL: 'postgres://api@db.example.internal:5432/udofin?sslmode=require',
+      SUPABASE_URL: 'https://example.supabase.co',
+      CORS_ALLOWED_ORIGINS: 'https://ops.udofin.com',
+    };
+    for (const blank of ['', ' ', '   ', '\t']) {
+      expect(() => loadConfig({ ...base, TRUST_PROXY_HOPS: blank })).toThrow(/TRUST_PROXY_HOPS/);
+    }
+    expect(loadConfig({ ...base, TRUST_PROXY_HOPS: '1' }).TRUST_PROXY_HOPS).toBe(1);
+  });
+
   it('rejects wildcard and plain-http origins when deployed', () => {
     const base = {
       APP_ENV: 'production',

@@ -53,7 +53,6 @@ export async function runAsUser<T>(
       'www-authenticate': 'Bearer',
     });
   }
-  if (limits) await limits.limits.enforce(request, claims.sub, limits.route);
   return deps.context.withUserContext(claims, async (tx) => {
     // ONE round trip for both questions: is the session behind this token still alive (F-01), and who
     // is the caller. The session lookup is by primary key, scoped to the caller inside the function;
@@ -65,6 +64,10 @@ export async function runAsUser<T>(
     if (claims.sessionId && row.rows[0]?.active !== true) {
       throw new ApiError(401, 'session_revoked', 'Unauthorized', undefined, SESSION_ENDED_HEADERS);
     }
+    // The per-principal limit counts only requests whose token is signed, unexpired AND whose session is alive.
+    // Counting earlier would let a revoked or expired (but still correctly signed) token burn the real user's
+    // allowance (review T1). The in-memory counter is cheap, so doing this inside the transaction costs nothing.
+    if (limits) await limits.limits.enforce(request, claims.sub, limits.route);
     const actor = row.rows[0]?.actor ?? 'none';
     if (actor === 'none' || actor === 'system') {
       throw new ApiError(403, 'no_active_access', 'Forbidden');

@@ -114,3 +114,52 @@ describe('per-principal rate limits', () => {
     expect(codes).toEqual([200, 200, 429]); // three users, one address
   });
 });
+
+describe('review T1: only requests with a live session count against a principal', () => {
+  it("a revoked (but correctly signed) token cannot burn the real user's allowance", async () => {
+    const sessionVerifier: TokenVerifier = {
+      verify: () =>
+        Promise.resolve({
+          sub: '00000000-0000-4000-8000-0000000000aa',
+          aal: 'aal2' as const,
+          sessionId: '11111111-1111-4111-8111-111111111111',
+        }),
+    };
+    let sessionAlive = false;
+    const sessionContext: UserContext = {
+      withUserContext: (_c, fn) =>
+        fn({
+          query: () =>
+            Promise.resolve({ rows: [{ actor: 'platform', active: sessionAlive }] } as never),
+        }),
+    };
+    app = Fastify({ trustProxy: true });
+    await app.register(rateLimit, { max: 1000, timeWindow: '1 minute' });
+    registerRoutes(
+      app,
+      [
+        userRoute({
+          method: 'get',
+          path: '/v1/probe',
+          operationId: 'probe',
+          summary: 'probe',
+          tags: ['Test'],
+          auth: 'staff',
+          responses: { 200: z.object({ ok: z.literal(true) }) },
+          handler: () => Promise.resolve({ status: 200, body: { ok: true as const } }),
+        }),
+      ],
+      {
+        auth: { verifier: sessionVerifier, context: sessionContext },
+        principalLimits: createPrincipalLimits(app, 2),
+      },
+    );
+    const call = () =>
+      app!.inject({ method: 'GET', url: '/v1/probe', headers: { authorization: 'Bearer x' } });
+    for (let i = 0; i < 5; i += 1) expect((await call()).statusCode).toBe(401); // revoked: never counted
+    sessionAlive = true;
+    expect((await call()).statusCode).toBe(200);
+    expect((await call()).statusCode).toBe(200);
+    expect((await call()).statusCode).toBe(429); // the live session does count
+  });
+});

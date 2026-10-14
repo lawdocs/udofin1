@@ -67,6 +67,8 @@ describe('system login posture (audit R-10)', () => {
     ['rolbypassrls', 'can bypass row-level security'],
     ['rolcreaterole', 'can create roles'],
     ['rolcreatedb', 'can create databases'],
+    ['rolreplication', 'can start replication'],
+    ['memberOfPrivilegedRole', 'is a member of a privileged role other than service_role'],
   ])('refuses to start when %s', async (field, message) => {
     const row = { ...systemSafe, [field]: true };
     expect(systemLoginViolations(row)).toEqual([message]);

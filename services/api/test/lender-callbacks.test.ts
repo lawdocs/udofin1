@@ -153,3 +153,35 @@ describe('lender callback receiver: unauthenticated outcomes are indistinguishab
     expect(res.statusCode).toBe(422);
   });
 });
+
+describe('review SEC-2: a malformed lender id never reaches the database', () => {
+  it('answers a 36-character non-UUID like an unknown lender (401), not 500', async () => {
+    await start();
+    const unknown = observable(await post(randomUUID(), signed()));
+    for (const id of [
+      '0123456789abcdef0123456789abcdef0123',
+      '------------------------------------',
+    ]) {
+      const res = await post(id, signed());
+      expect(res.statusCode).toBe(401);
+      expect(observable(res)).toEqual(unknown);
+    }
+  });
+
+  it('answers the same 401 when the context lookup itself fails', async () => {
+    app = await buildCallbackApp(
+      loadConfig({ APP_ENV: 'test', RATE_LIMIT_MAX_PER_MINUTE: '100000' }),
+      {
+        routing: {
+          hookContext: () => Promise.reject(Object.assign(new Error('boom'), { code: '08006' })),
+          ingest: () => Promise.resolve({ outcome: 'applied' }),
+        } as unknown as RoutingProcessor,
+        secret: () => SECRET,
+        environment: 'test',
+      },
+    );
+    const res = await post(randomUUID(), signed());
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({ code: 'invalid_signature' });
+  });
+});

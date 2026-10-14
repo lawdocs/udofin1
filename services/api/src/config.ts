@@ -35,7 +35,7 @@ const ConfigSchema = z
      * share one rate-limit bucket, or lets a client choose its own address. Defaults to 0 in local and test.
      */
     TRUST_PROXY_HOPS: z.preprocess(
-      (value) => (value === '' ? undefined : value),
+      (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
       z.coerce.number().int().min(0).max(5).optional(),
     ),
     /** Requests per minute per client address, applied to every route before authentication. */

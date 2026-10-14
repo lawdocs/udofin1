@@ -321,8 +321,8 @@ select throws_ok(
     values ('mock_gateway', 'evt_x', 'payment.captured', 'b1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000002', repeat('c', 64), true)$$,
   '23503', null, 'a provider event cannot be filed under a different lender than its payment');
 -- Success needs a verified event with a success status and the intent's exact amount (475000); see 013_remediation_db for the negatives.
-insert into payments.provider_events (provider, provider_event_id, event_type, lender_org_id, payment_intent_id, payload_sha256, signature_verified, provider_status, amount_minor)
-values ('mock_gateway', 'evt_1', 'payment.captured', 'a1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000002', repeat('a', 64), true, 'captured', 475000);
+insert into payments.provider_events (provider, provider_event_id, event_type, lender_org_id, payment_intent_id, payload_sha256, signature_verified, provider_status, amount_minor, currency)
+values ('mock_gateway', 'evt_1', 'payment.captured', 'a1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000002', repeat('a', 64), true, 'captured', 475000, 'INR');
 select lives_ok($$update payments.payment_intents set status = 'succeeded' where id = 'a6000000-0000-4000-8000-000000000002'$$,
   'the system records success after a verified provider event');
 select throws_ok($$update payments.payment_intents set status = 'failed' where id = 'a6000000-0000-4000-8000-000000000002'$$,

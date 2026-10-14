@@ -281,9 +281,9 @@ select is((select array_agg(distinct lender_org_id) from servicing.loan_account_
 select pg_temp.as_user('bbbbbbbb-0000-4000-8000-000000000003');
 select is((select count(*) from servicing.loan_account_events where lender_org_id = 'a1000000-0000-4000-8000-000000000000'), 0::bigint, 'lender B admin sees none of lender A''s loan-account history');
 select pg_temp.as_user('11111111-1111-4111-8111-111111111111');
-select is((select count(*) from servicing.loan_account_events), 1::bigint, 'borrower 1 sees the history of their own loan account only');
+select is((select count(*) from servicing.loan_account_events), 0::bigint, 'borrower 1 cannot read the loan-account audit trail (it can hold staff user ids)');
 select pg_temp.as_user('22222222-2222-4222-8222-222222222222');
-select is((select count(*) from servicing.loan_account_events where lender_org_id = 'a1000000-0000-4000-8000-000000000000'), 0::bigint, 'borrower 2 does not see borrower 1''s loan-account history');
+select is((select count(*) from servicing.loan_account_events where lender_org_id = 'a1000000-0000-4000-8000-000000000000'), 0::bigint, 'borrower 2 cannot read it either');
 select throws_ok($$insert into servicing.loan_account_events (lender_org_id, loan_account_id, event_type, new_status, new_sanctioned_amount_minor, source_system, actor)
     values ('b1000000-0000-4000-8000-000000000000', 'b4000000-0000-4000-8000-000000000001', 'created', 'active', 1, 'lender_lms', 'system')$$,
   '42501', null, 'nobody can write loan-account history through the API role');

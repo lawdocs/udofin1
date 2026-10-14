@@ -49,7 +49,7 @@ Rules:
 
 1. **Per-lender signature, verified first.** The message carries a signature over the exact bytes received (timestamp and message id included, replay window of minutes), made with a key or secret that belongs to that lender and is referenced by name in the lender's record.
    The receiver verifies it **before** the database sees anything. The scheme per lender (symmetric HMAC as the labelled mock scheme does today, or asymmetric) is decided with the first lender (D-43). Keys rotate with an overlap period.
-2. **Uniform refusal.** Anything that fails before the signature is verified (unknown or inactive lender, malformed id, missing header, our own configuration gap) looks identical from outside, so lender ids cannot be enumerated.
+2. **Uniform refusal.** Anything that fails before the signature is verified (unknown or inactive lender, malformed id, missing header, our own configuration gap) looks identical from outside (except body-parser errors, which come first), so lender ids cannot be enumerated.
 3. **Idempotent inbound, keyed by `(lenderId, messageId)`.** The first copy is applied; a repeat returns the first result and changes nothing. Rejected and quarantined messages are recorded with a reason class and no body. Ordering is **not** guaranteed;
    the apply functions must accept messages in any order or hold them.
 4. **One entry point.** The receiver and the lender portal's manual entry call the same private `apply_*` functions (ADR-0030, decision 5). A lender without an API uses the portal and needs no connector.

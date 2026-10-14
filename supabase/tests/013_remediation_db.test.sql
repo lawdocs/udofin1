@@ -6,7 +6,7 @@
 -- Synthetic data only.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(142);
+select plan(145);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -307,29 +307,29 @@ update payments.payment_intents set status = 'pending' where id::text like '%600
 select is(private.payment_success_statuses(), array['captured', 'paid', 'succeeded'], 'the success statuses are an explicit list');
 select throws_ok($$update payments.payment_intents set status = 'succeeded' where id = 'a6000000-0000-4000-8000-000000000001'$$, 'P0001', null, 'no provider event at all: success refused');
 
-insert into payments.provider_events (provider, provider_event_id, event_type, lender_org_id, payment_intent_id, amount_minor, provider_status, payload_sha256, signature_verified) values
-  ('mock_gateway', 'evt_unverified', 'payment.captured', 'a1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000001', 475000, 'captured', repeat('1', 64), false);
+insert into payments.provider_events (provider, provider_event_id, event_type, lender_org_id, payment_intent_id, amount_minor, provider_status, payload_sha256, signature_verified, currency) values
+  ('mock_gateway', 'evt_unverified', 'payment.captured', 'a1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000001', 475000, 'captured', repeat('1', 64), false, 'INR');
 select throws_ok($$update payments.payment_intents set status = 'succeeded' where id = 'a6000000-0000-4000-8000-000000000001'$$, 'P0001', null, 'an event whose signature was not verified proves nothing');
 
-insert into payments.provider_events (provider, provider_event_id, event_type, lender_org_id, payment_intent_id, amount_minor, provider_status, payload_sha256, signature_verified) values
-  ('mock_gateway', 'evt_failed', 'payment.failed', 'a1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000001', 475000, 'failed', repeat('2', 64), true),
-  ('mock_gateway', 'evt_created', 'order.created', 'a1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000001', 475000, 'created', repeat('3', 64), true),
-  ('mock_gateway', 'evt_nostatus', 'payment.captured', 'a1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000001', 475000, null, repeat('4', 64), true);
+insert into payments.provider_events (provider, provider_event_id, event_type, lender_org_id, payment_intent_id, amount_minor, provider_status, payload_sha256, signature_verified, currency) values
+  ('mock_gateway', 'evt_failed', 'payment.failed', 'a1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000001', 475000, 'failed', repeat('2', 64), true, 'INR'),
+  ('mock_gateway', 'evt_created', 'order.created', 'a1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000001', 475000, 'created', repeat('3', 64), true, 'INR'),
+  ('mock_gateway', 'evt_nostatus', 'payment.captured', 'a1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000001', 475000, null, repeat('4', 64), true, 'INR');
 select throws_ok($$update payments.payment_intents set status = 'succeeded' where id = 'a6000000-0000-4000-8000-000000000001'$$, 'P0001', null, 'verified events with a failed, created or missing status do not authorise success');
 
-insert into payments.provider_events (provider, provider_event_id, event_type, lender_org_id, payment_intent_id, amount_minor, provider_status, payload_sha256, signature_verified) values
-  ('mock_gateway', 'evt_higher', 'payment.captured', 'a1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000001', 475001, 'captured', repeat('5', 64), true),
-  ('mock_gateway', 'evt_lower', 'payment.captured', 'a1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000001', 474999, 'captured', repeat('6', 64), true);
+insert into payments.provider_events (provider, provider_event_id, event_type, lender_org_id, payment_intent_id, amount_minor, provider_status, payload_sha256, signature_verified, currency) values
+  ('mock_gateway', 'evt_higher', 'payment.captured', 'a1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000001', 475001, 'captured', repeat('5', 64), true, 'INR'),
+  ('mock_gateway', 'evt_lower', 'payment.captured', 'a1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000001', 474999, 'captured', repeat('6', 64), true, 'INR');
 select throws_ok($$update payments.payment_intents set status = 'succeeded' where id = 'a6000000-0000-4000-8000-000000000001'$$, 'P0001', null, 'a captured event for a different amount (higher or lower) is refused');
 
-insert into payments.provider_events (provider, provider_event_id, event_type, lender_org_id, payment_intent_id, amount_minor, provider_status, payload_sha256, signature_verified) values
-  ('mock_gateway', 'evt_noamount', 'payment.captured', 'a1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000001', null, 'captured', repeat('7', 64), true);
+insert into payments.provider_events (provider, provider_event_id, event_type, lender_org_id, payment_intent_id, amount_minor, provider_status, payload_sha256, signature_verified, currency) values
+  ('mock_gateway', 'evt_noamount', 'payment.captured', 'a1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000001', null, 'captured', repeat('7', 64), true, 'INR');
 select throws_ok($$update payments.payment_intents set status = 'succeeded' where id = 'a6000000-0000-4000-8000-000000000001'$$, 'P0001', null, 'a captured event without an amount is refused');
 
-insert into payments.provider_events (provider, provider_event_id, event_type, lender_org_id, payment_intent_id, amount_minor, provider_status, payload_sha256, signature_verified) values
-  ('mock_gateway', 'evt_other_intent', 'payment.captured', 'a1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000002', 475000, 'captured', repeat('8', 64), true),
-  ('mock_gateway', 'evt_other_lender', 'payment.captured', 'b1000000-0000-4000-8000-000000000000', 'b6000000-0000-4000-8000-000000000001', 475000, 'captured', repeat('9', 64), true),
-  ('other_gateway', 'evt_other_provider', 'payment.captured', 'a1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000001', 475000, 'captured', repeat('a', 64), true);
+insert into payments.provider_events (provider, provider_event_id, event_type, lender_org_id, payment_intent_id, amount_minor, provider_status, payload_sha256, signature_verified, currency) values
+  ('mock_gateway', 'evt_other_intent', 'payment.captured', 'a1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000002', 475000, 'captured', repeat('8', 64), true, 'INR'),
+  ('mock_gateway', 'evt_other_lender', 'payment.captured', 'b1000000-0000-4000-8000-000000000000', 'b6000000-0000-4000-8000-000000000001', 475000, 'captured', repeat('9', 64), true, 'INR'),
+  ('other_gateway', 'evt_other_provider', 'payment.captured', 'a1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000001', 475000, 'captured', repeat('a', 64), true, 'INR');
 select throws_ok($$update payments.payment_intents set status = 'succeeded' where id = 'a6000000-0000-4000-8000-000000000001'$$, 'P0001', null,
   'a perfect event for another intent, another lender or another provider does not count');
 select throws_ok(
@@ -346,9 +346,17 @@ select throws_ok(
   '23514', null, 'and so is an absurd one');
 
 insert into payments.provider_events (provider, provider_event_id, event_type, lender_org_id, payment_intent_id, amount_minor, provider_status, payload_sha256, signature_verified) values
-  ('mock_gateway', 'evt_good', 'payment.captured', 'a1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000001', 475000, 'captured', repeat('e', 64), true),
-  ('mock_gateway', 'evt_good_b', 'payment.captured', 'b1000000-0000-4000-8000-000000000000', 'b6000000-0000-4000-8000-000000000001', 300000, 'paid', repeat('f', 64), true),
-  ('mock_gateway', 'evt_good_3', 'payment.captured', 'a1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000003', 100000, 'captured', repeat('0', 64), true);
+  ('mock_gateway', 'evt_nocurrency', 'payment.captured', 'a1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000003', 100000, 'captured', repeat('1', 63) || '1', true);
+select throws_ok($$update payments.payment_intents set status = 'succeeded' where id = 'a6000000-0000-4000-8000-000000000003'$$, 'P0001', null, 'a verified captured event with the right amount but no stated currency is refused');
+select throws_ok(
+  $$insert into payments.provider_events (provider, provider_event_id, event_type, lender_org_id, payment_intent_id, amount_minor, provider_status, payload_sha256, signature_verified, currency)
+    values ('mock_gateway', 'evt_usd', 'payment.captured', 'a1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000003', 100000, 'captured', repeat('2', 64), true, 'USD')$$,
+  '23514', null, 'an event in a currency other than INR cannot be recorded');
+
+insert into payments.provider_events (provider, provider_event_id, event_type, lender_org_id, payment_intent_id, amount_minor, provider_status, payload_sha256, signature_verified, currency) values
+  ('mock_gateway', 'evt_good', 'payment.captured', 'a1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000001', 475000, 'captured', repeat('e', 64), true, 'INR'),
+  ('mock_gateway', 'evt_good_b', 'payment.captured', 'b1000000-0000-4000-8000-000000000000', 'b6000000-0000-4000-8000-000000000001', 300000, 'paid', repeat('f', 64), true, 'INR'),
+  ('mock_gateway', 'evt_good_3', 'payment.captured', 'a1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000003', 100000, 'captured', repeat('0', 64), true, 'INR');
 select lives_ok($$update payments.payment_intents set status = 'succeeded' where id = 'a6000000-0000-4000-8000-000000000001'$$, 'with the matching verified captured event the system records success');
 select lives_ok($$update payments.payment_intents set status = 'succeeded' where id = 'b6000000-0000-4000-8000-000000000001'$$, 'and for another lender''s intent with its own matching event (status paid)');
 select throws_ok($$update payments.payment_intents set status = 'succeeded' where id = 'a6000000-0000-4000-8000-000000000002'$$, 'P0001', null, 'an intent whose only event is for another intent is still pending');
@@ -376,7 +384,8 @@ select is((select count(*) from servicing.loan_account_events where loan_account
 select throws_ok(
   $$insert into servicing.loan_account_events (lender_org_id, loan_account_id, event_type, new_status, new_sanctioned_amount_minor, source_system, actor)
     values ('a1000000-0000-4000-8000-000000000000', 'b4000000-0000-4000-8000-000000000001', 'created', 'active', 1, 'lender_lms', 'system')$$,
-  '23503', null, 'a history row cannot be filed under another lender than its loan account (composite key)');
+  '42501', null, 'the system role cannot write history rows at all (only the trigger does; review SEC-1); the composite lender key is a second line of defence');
+select is(has_table_privilege('service_role', 'servicing.loan_account_events', 'insert,update,delete'), false, 'service_role has no write privilege on the history table');
 select pg_temp.as_owner();
 select throws_ok($$update servicing.loan_account_events set new_status = 'active'$$, 'P0001', null, 'history cannot be rewritten, even by the owner');
 select throws_ok($$delete from servicing.loan_account_events$$, 'P0001', null, 'nor deleted');

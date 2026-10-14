@@ -97,7 +97,7 @@ insert into expected_tables values
   ('payments.payment_intents', '-', 'su', 'siud', true),
   ('payments.provider_events', '-', 's', 'siud', true),
   ('servicing.loan_accounts', '-', 's', 'siud', true),
-  ('servicing.loan_account_events', '-', 's', 'siud', true),
+  ('servicing.loan_account_events', '-', 's', 's', true),
   ('servicing.schedule_installments', '-', 's', 'siud', true),
   ('servicing.schedule_snapshots', '-', 's', 'siud', true),
   ('tenancy.change_requests', '-', 's', 'siud', true),

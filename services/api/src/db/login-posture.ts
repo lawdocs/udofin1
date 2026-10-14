@@ -6,7 +6,10 @@ export interface LoginPosture {
   rolcreaterole: boolean;
   /** Only inspected for the system login. */
   rolcreatedb?: boolean;
+  rolreplication?: boolean;
   canAssumeServiceRole: boolean;
+  /** True when the login is a member (directly or through inheritance) of a role other than service_role that is a superuser or holds BYPASSRLS, CREATEROLE, CREATEDB or REPLICATION. Only inspected for the system login. */
+  memberOfPrivilegedRole?: boolean;
 }
 
 export class LoginPostureError extends Error {
@@ -49,6 +52,9 @@ export function systemLoginViolations(posture: LoginPosture): string[] {
   if (posture.rolbypassrls) problems.push('can bypass row-level security');
   if (posture.rolcreaterole) problems.push('can create roles');
   if (posture.rolcreatedb) problems.push('can create databases');
+  if (posture.rolreplication) problems.push('can start replication');
+  if (posture.memberOfPrivilegedRole)
+    problems.push('is a member of a privileged role other than service_role');
   if (!posture.canAssumeServiceRole) problems.push('cannot assume service_role');
   return problems;
 }
@@ -69,8 +75,14 @@ export async function assertSystemLoginPosture(pool: SystemPoolLike): Promise<vo
   try {
     row = await pool.withSystem(async (tx) => {
       const result = await tx.query<LoginPosture>(
-        `select r.rolsuper, r.rolbypassrls, r.rolcreaterole, r.rolcreatedb,
-                pg_has_role(session_user, 'service_role', 'member') as "canAssumeServiceRole"
+        `select r.rolsuper, r.rolbypassrls, r.rolcreaterole, r.rolcreatedb, r.rolreplication,
+                pg_has_role(session_user, 'service_role', 'member') as "canAssumeServiceRole",
+                exists (
+                  select 1 from pg_roles p
+                   where p.rolname <> 'service_role' and p.rolname <> session_user
+                     and (p.rolsuper or p.rolbypassrls or p.rolcreaterole or p.rolcreatedb or p.rolreplication)
+                     and pg_has_role(session_user, p.oid, 'member')
+                ) as "memberOfPrivilegedRole"
            from pg_roles r where r.rolname = session_user`,
       );
       return result.rows[0];

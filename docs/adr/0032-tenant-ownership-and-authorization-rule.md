@@ -48,8 +48,7 @@ Out of scope: per-lender cryptographic isolation of documents (ADR-0009, ADR-001
 Written from the code as it stood on 14 October 2026; each point is checkable.
 
 - Points 1, 2, 4 and 9: composite tenant keys and forced row level security on all tenant tables; the helpers above; the authorisation matrix `supabase/tests/006_authorization_matrix.test.sql` and
-  cross-tenant tests in `002`, `008` to `012`. Known gaps recorded in the audit and not closed by this ADR: the `documents` schema being absent from the grant snapshot test (F-07),
-  the definer/search-path check covering only the `private` schema (F-08), and six deliberately unforced shared reference tables.
+  cross-tenant tests in `002`, `008` to `012`. Gaps recorded in the audit: the `documents` schema being absent from the grant snapshot test (F-07) and the definer/search-path check covering only the `private` schema (F-08) were closed in commits `ae79a85` and `4fc97d3`. Still open by design: six deliberately unforced shared reference tables.
 - Point 3: `services/api/src/db/user-context.ts`, `services/api/src/db/login-posture.ts`, `services/api/test/user-context.test.ts`, `services/api/test/login-posture.test.ts`.
 - Point 6: root `eslint.config.mjs` restricts imports of the system pool; `services/api/test/boundary.test.ts` checks the same and that the server entry point does not import `src/system` or `src/workers`.
 - Point 7: for example the routing jobs hold only an application id, and consent, state and tenant are re-checked inside the database when the job runs (`services/api/src/workers/routing-handlers.ts`,

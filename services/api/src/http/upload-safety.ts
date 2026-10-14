@@ -173,7 +173,7 @@ export function inspectUpload(bytes: Uint8Array, declaredMimeType: string): Uplo
 }
 
 const ACTIVE_CONTENT_DETAIL =
-  'This PDF contains scripts, launch actions or attached files, which are not accepted. Export a flat copy (for example, print to PDF) and upload that.';
+  'This PDF was refused because it appears to contain scripts, launch actions or attached files (a check on the raw file can also refuse a clean file by mistake). Export a flat copy (for example, print to PDF) and upload that.';
 
 /**
  * Route guard. Throws 422 `document_type_mismatch` (the code the upload routes already return) when
