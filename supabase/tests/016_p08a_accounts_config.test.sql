@@ -1126,25 +1126,30 @@ select pg_temp.keep('cascade_off', 'yes');
 -- ============================================================================================================================
 -- 8. Payment intents need an ACTIVE, currently valid configuration
 -- ============================================================================================================================
-select pg_temp.as_system();
-create function pg_temp.intent(p_key text, p_cfg text, p_extra text default '', p_provider text default 'sample_provider') returns text language plpgsql as $fn$
+select pg_temp.as_owner();
+-- The helpers run SECURITY DEFINER (created by the owner) so the insert is allowed, while the session stays the system role: the
+-- system role has no INSERT on payment_intents any more, but the guards under test still see it as the actor.
+create function pg_temp.intent(p_key text, p_cfg text, p_extra text default '', p_provider text default 'sample_provider') returns text language plpgsql security definer as $fn$
 begin
-  return pg_temp.err(format($q$insert into payments.payment_intents (lender_org_id, loan_account_id, borrower_id, purpose, amount_minor, config_id, provider, idempotency_key %s)
-    values ('f6b00000-0000-4000-8000-000000000001', 'f6d20000-0000-4000-8000-000000000001', %L, 'installment', 475000, %s, %L, %L %s)$q$,
+  -- target_installment_seq is taken from the key's number so that several accepted intents on one loan do not collide on the
+  -- one-open-intent-per-installment index.
+  return pg_temp.err(format($q$insert into payments.payment_intents (lender_org_id, loan_account_id, borrower_id, purpose, amount_minor, config_id, provider, idempotency_key, target_installment_seq %s)
+    values ('f6b00000-0000-4000-8000-000000000001', 'f6d20000-0000-4000-8000-000000000001', %L, 'installment', 475000, %s, %L, %L, %s %s)$q$,
     case when p_extra = '' then '' else ', ' || split_part(p_extra, '=', 1) end, pg_temp.got('borrower')::uuid,
-    case when p_cfg is null then 'null' else quote_literal(p_cfg) || '::uuid' end, p_provider, p_key,
+    case when p_cfg is null then 'null' else quote_literal(p_cfg) || '::uuid' end, p_provider, p_key, right(p_key, 4)::int::text,
     case when p_extra = '' then '' else ', ' || split_part(p_extra, '=', 2) end));
 end
 $fn$;
 grant execute on function pg_temp.intent(text, text, text, text) to public;
-create function pg_temp.imsg(p_key text, p_cfg text, p_provider text default 'sample_provider') returns text language plpgsql as $fn$
+create function pg_temp.imsg(p_key text, p_cfg text, p_provider text default 'sample_provider') returns text language plpgsql security definer as $fn$
 begin
-  return pg_temp.msg(format($q$insert into payments.payment_intents (lender_org_id, loan_account_id, borrower_id, purpose, amount_minor, config_id, provider, idempotency_key)
-    values ('f6b00000-0000-4000-8000-000000000001', 'f6d20000-0000-4000-8000-000000000001', %L, 'installment', 475000, %s, %L, %L)$q$,
-    pg_temp.got('borrower')::uuid, case when p_cfg is null then 'null' else quote_literal(p_cfg) || '::uuid' end, p_provider, p_key));
+  return pg_temp.msg(format($q$insert into payments.payment_intents (lender_org_id, loan_account_id, borrower_id, purpose, amount_minor, config_id, provider, idempotency_key, target_installment_seq)
+    values ('f6b00000-0000-4000-8000-000000000001', 'f6d20000-0000-4000-8000-000000000001', %L, 'installment', 475000, %s, %L, %L, %s)$q$,
+    pg_temp.got('borrower')::uuid, case when p_cfg is null then 'null' else quote_literal(p_cfg) || '::uuid' end, p_provider, p_key, right(p_key, 4)::int::text));
 end
 $fn$;
 grant execute on function pg_temp.imsg(text, text, text) to public;
+select pg_temp.as_system();
 select is(pg_temp.intent('intent-key-00000001', null), '55000|collection_target_invalid', 'an intent without a configuration is refused');
 select is(pg_temp.imsg('intent-key-00000001', null), 'collection target invalid: config_required', 'with the reason config_required');
 select is(pg_temp.intent('intent-key-00000002', pg_temp.got('c1'), 'settlement_account_ref=''alpha-collections'''), '22023|free_text_settlement_ref', 'a free-text settlement account reference is no longer accepted');
@@ -1165,8 +1170,12 @@ select is((select (config_id = pg_temp.got('c1')::uuid, provider_mode::text, set
   '(t,production,t,t,sample_provider)', 'it carries the configuration, the provider mode and the verified settlement account; the free-text reference is null');
 select is(pg_temp.intent('intent-key-00000013', pg_temp.got('c1'), 'settlement_account_ref=''via_payment_config'''), 'ok', 'the fixed marker is accepted for the free-text column');
 select is(pg_temp.intent('intent-key-00000013', pg_temp.got('c1')), '23505|', 'idempotency still holds');
+select pg_temp.as_owner();
 select is(pg_temp.err(format($$update payments.payment_intents set config_id = %L where idempotency_key = 'intent-key-00000012'$$, pg_temp.got('c_p2'))), 'P0001|', 'the configuration of an intent is immutable');
+select pg_temp.as_system();
+select pg_temp.as_owner();
 select is(pg_temp.err($$update payments.payment_intents set provider_mode = 'mock' where idempotency_key = 'intent-key-00000012'$$), 'P0001|', 'and so is its provider mode');
+select pg_temp.as_system();
 -- Mock configuration: valid only while mocks are allowed.
 select pg_temp.as_owner();
 select set_config('udofin.allow_mock_providers', 'on', true);

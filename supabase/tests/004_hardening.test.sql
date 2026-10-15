@@ -193,11 +193,13 @@ select pg_temp.as_owner();
 select pg_temp.sample_collection_config('a1000000-0000-4000-8000-000000000000', gen_random_uuid(), 'SAMPLE collections', 'XXXXXX1234');
 select pg_temp.sample_collection_config('b1000000-0000-4000-8000-000000000000', gen_random_uuid(), 'SAMPLE collections', 'XXXXXX5678');
 select pg_temp.as_system();
+select pg_temp.as_owner();
 insert into payments.payment_intents (id, lender_org_id, loan_account_id, borrower_id, purpose, amount_minor, config_id, provider, idempotency_key) values
   ('a6000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000000', 'a4000000-0000-4000-8000-000000000001',
    (select id from identity.borrowers where user_id = '11111111-1111-4111-8111-111111111111'), 'installment', 475000, (select id from payments.lender_payment_configs where lender_org_id = 'a1000000-0000-4000-8000-000000000000'), 'mock_gateway', 'idem-a-0000000000001'),
   ('b6000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000000', 'b4000000-0000-4000-8000-000000000001',
    (select id from identity.borrowers where user_id = '22222222-2222-4222-8222-222222222222'), 'installment', 960000, (select id from payments.lender_payment_configs where lender_org_id = 'b1000000-0000-4000-8000-000000000000'), 'mock_gateway', 'idem-b-0000000000001');
+select pg_temp.as_system();
 
 insert into consent.notices (id, purpose, version, language, title, body_markdown, status, published_at, drafted_by, approved_by) values
   ('c0000000-0000-4000-8000-000000000001', 'share_with_lenders', 1, 'en', 'Share my request with lenders', 'Test notice body.', 'published', now(),

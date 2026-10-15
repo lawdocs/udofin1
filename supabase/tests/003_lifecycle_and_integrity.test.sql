@@ -191,11 +191,13 @@ select pg_temp.as_owner();
 select pg_temp.sample_collection_config('a1000000-0000-4000-8000-000000000000', gen_random_uuid(), 'SAMPLE collections', 'XXXXXX1234');
 select pg_temp.sample_collection_config('b1000000-0000-4000-8000-000000000000', gen_random_uuid(), 'SAMPLE collections', 'XXXXXX5678');
 select pg_temp.as_system();
+select pg_temp.as_owner();
 insert into payments.payment_intents (id, lender_org_id, loan_account_id, borrower_id, purpose, amount_minor, config_id, provider, idempotency_key) values
   ('a6000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000000', 'a4000000-0000-4000-8000-000000000001',
    (select id from identity.borrowers where user_id = '11111111-1111-4111-8111-111111111111'), 'installment', 475000, (select id from payments.lender_payment_configs where lender_org_id = 'a1000000-0000-4000-8000-000000000000'), 'mock_gateway', 'idem-a-0000000000001'),
   ('b6000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000000', 'b4000000-0000-4000-8000-000000000001',
    (select id from identity.borrowers where user_id = '22222222-2222-4222-8222-222222222222'), 'installment', 960000, (select id from payments.lender_payment_configs where lender_org_id = 'b1000000-0000-4000-8000-000000000000'), 'mock_gateway', 'idem-b-0000000000001');
+select pg_temp.as_system();
 
 insert into consent.notices (id, purpose, version, language, title, body_markdown, status, published_at, drafted_by, approved_by) values
   ('c0000000-0000-4000-8000-000000000001', 'share_with_lenders', 1, 'en', 'Share my request with lenders', 'Test notice body.', 'published', now(),
@@ -360,13 +362,16 @@ select lives_ok($$update lending.loan_requests set status = 'withdrawn' where id
 
 -- ============================== Payment intents ==============================================
 select pg_temp.as_system();
+select pg_temp.as_owner();
 select lives_ok(
   $$insert into payments.payment_intents (id, lender_org_id, loan_account_id, borrower_id, purpose, amount_minor, config_id,
       provider, idempotency_key)
     values ('a6000000-0000-4000-8000-000000000002', 'a1000000-0000-4000-8000-000000000000', 'a4000000-0000-4000-8000-000000000001',
-      (select id from identity.borrowers where user_id = '11111111-1111-4111-8111-111111111111'), 'installment', 475000, (select id from payments.lender_payment_configs where lender_org_id = 'a1000000-0000-4000-8000-000000000000'),
+      (select id from identity.borrowers where user_id = '11111111-1111-4111-8111-111111111111'), 'overdue', 475000, (select id from payments.lender_payment_configs where lender_org_id = 'a1000000-0000-4000-8000-000000000000'),
       'mock_gateway', 'idem-a-0000000000002')$$,
   'the system creates a repayment instruction on the borrower''s loan');
+select pg_temp.as_system();
+select pg_temp.as_owner();
 select throws_ok(
   $$insert into payments.payment_intents (lender_org_id, loan_account_id, borrower_id, purpose, amount_minor, config_id,
       provider, idempotency_key)
@@ -374,6 +379,8 @@ select throws_ok(
       (select id from identity.borrowers where user_id = '11111111-1111-4111-8111-111111111111'), 'installment', 475000, (select id from payments.lender_payment_configs where lender_org_id = 'a1000000-0000-4000-8000-000000000000'),
       'mock_gateway', 'idem-a-0000000000002')$$,
   '23505', null, 'a replayed request with the same idempotency key cannot create a second payment');
+select pg_temp.as_system();
+select pg_temp.as_owner();
 select throws_ok(
   $$insert into payments.payment_intents (lender_org_id, loan_account_id, borrower_id, purpose, amount_minor, config_id,
       provider, idempotency_key)
@@ -381,32 +388,51 @@ select throws_ok(
       (select id from identity.borrowers where user_id = '22222222-2222-4222-8222-222222222222'), 'installment', 1, (select id from payments.lender_payment_configs where lender_org_id = 'a1000000-0000-4000-8000-000000000000'),
       'mock_gateway', 'idem-a-0000000000099')$$,
   '23514', null, 'a payment cannot name a borrower other than the loan''s borrower');
+select pg_temp.as_system();
+select pg_temp.as_owner();
 select throws_ok($$update payments.payment_intents set status = 'succeeded' where id = 'a6000000-0000-4000-8000-000000000002'$$,
   'P0001', null, 'created -> succeeded skips the provider round-trip and is rejected');
+select pg_temp.as_system();
+select pg_temp.as_owner();
 update payments.payment_intents set status = 'pending', provider_order_ref = 'order_test_1' where id = 'a6000000-0000-4000-8000-000000000002';
+select pg_temp.as_system();
 select pg_temp.as_user('11111111-1111-4111-8111-111111111111');
 select throws_ok($$update payments.payment_intents set status = 'succeeded' where id = 'a6000000-0000-4000-8000-000000000002'$$,
   '42501', null, 'a borrower cannot mark their own payment as succeeded');
 select pg_temp.as_system();
+select pg_temp.as_owner();
 select throws_ok($$update payments.payment_intents set status = 'succeeded' where id = 'a6000000-0000-4000-8000-000000000002'$$,
   'P0001', null, 'even the system cannot mark success without a signature-verified provider event');
+select pg_temp.as_system();
+select pg_temp.as_owner();
 select throws_ok(
   $$insert into payments.provider_events (provider, provider_event_id, event_type, lender_org_id, payment_intent_id, payload_sha256, signature_verified)
     values ('mock_gateway', 'evt_x', 'payment.captured', 'b1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000002', repeat('c', 64), true)$$,
   '23503', null, 'a provider event cannot be filed under a different lender than its payment');
+select pg_temp.as_system();
 -- Success needs a verified event with a success status and the intent's exact amount (475000); see 013_remediation_db for the negatives.
+select pg_temp.as_owner();
 insert into payments.provider_events (provider, provider_event_id, event_type, lender_org_id, payment_intent_id, payload_sha256, signature_verified, provider_status, amount_minor, currency)
 values ('mock_gateway', 'evt_1', 'payment.captured', 'a1000000-0000-4000-8000-000000000000', 'a6000000-0000-4000-8000-000000000002', repeat('a', 64), true, 'captured', 475000, 'INR');
+select pg_temp.as_system();
+select pg_temp.as_owner();
 select lives_ok($$update payments.payment_intents set status = 'succeeded' where id = 'a6000000-0000-4000-8000-000000000002'$$,
   'the system records success after a verified provider event');
+select pg_temp.as_system();
+select pg_temp.as_owner();
 select throws_ok($$update payments.payment_intents set status = 'failed' where id = 'a6000000-0000-4000-8000-000000000002'$$,
   'P0001', null, 'a succeeded payment cannot be flipped to failed');
+select pg_temp.as_system();
+select pg_temp.as_owner();
 select throws_ok($$update payments.payment_intents set amount_minor = 1 where id = 'a6000000-0000-4000-8000-000000000001'$$,
   'P0001', null, 'payment amounts are immutable');
+select pg_temp.as_system();
+select pg_temp.as_owner();
 select throws_ok(
   $$insert into payments.provider_events (provider, provider_event_id, event_type, payload_sha256, signature_verified)
     values ('mock_gateway', 'evt_1', 'payment.captured', repeat('b', 64), true)$$,
   '23505', null, 'a replayed provider webhook is rejected as a duplicate');
+select pg_temp.as_system();
 
 -- ============================== Append-only records ==========================================
 select pg_temp.as_owner();
