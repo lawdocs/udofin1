@@ -80,7 +80,8 @@ security definer
 set search_path = ''
 as $$
 declare
-  v_pairs text[] := array['payment.configure', 'payment.config.approve', 'platform.accounts.registry.manage', 'platform.accounts.registry.verify'];
+  v_pairs text[] := array['payment.configure', 'payment.config.approve', 'platform.accounts.registry.manage', 'platform.accounts.registry.verify',
+                          'reminder.policy.manage', 'reminder.template.approve'];
   v_user uuid;
   v_new_keys text[];
   v_keys text[];
@@ -141,7 +142,7 @@ as $$
 declare
   -- The Phase 08a pairs and the Phase 02 pair (collections.work / dlg.manage), whose own trigger has the same gap.
   v_pairs text[] := array['payment.configure', 'payment.config.approve', 'platform.accounts.registry.manage', 'platform.accounts.registry.verify',
-                          'collections.work', 'dlg.manage'];
+                          'reminder.policy.manage', 'reminder.template.approve', 'collections.work', 'dlg.manage'];
   v_keys text[];
   i integer;
 begin

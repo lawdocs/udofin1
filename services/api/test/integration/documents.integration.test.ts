@@ -395,18 +395,22 @@ describe.skipIf(!enabled)(
         expect(items.every((r) => r.approvalStatus === 'draft' && r.reviewerRef === null)).toBe(
           true,
         );
-        // Two Phase 07 document rules and three Phase 08a servicing-deadline rules, all seeded as drafts for the
-        // ICC and D categories only. Servicing deadlines are platform settings or unreviewed text, never approved by seed.
+        // Two Phase 07 document rules, three Phase 08a servicing-deadline rules and three Phase 08a reminder rules, all
+        // seeded as drafts for the ICC and D categories only. Servicing deadlines and reminder settings are platform
+        // settings or unreviewed text, never approved by seed.
         expect(items.map((r) => r.ruleKey).sort()).toEqual([
           'agreement.nbfc.kfs_summary_box',
           'kfs.nbfc.retail_msme_term',
           'servicing.noc_sla_days_default',
+          'servicing.reminder_max_per_day',
+          'servicing.reminder_window.default',
           'servicing.security_release_sla_days',
           'servicing.statement_sla_days_default',
+          'servicing.suppress_after_payment_hours',
         ]);
         expect(items.flatMap((r) => r.lenderCategoryKeys).sort()).toEqual([
-          ...Array<string>(5).fill('nbfc_d'),
-          ...Array<string>(5).fill('nbfc_icc'),
+          ...Array<string>(8).fill('nbfc_d'),
+          ...Array<string>(8).fill('nbfc_icc'),
         ]);
         expect(code(await get('/v1/platform/document-rules', ids.aPrep))).toBe('forbidden');
       });

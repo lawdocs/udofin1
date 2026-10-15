@@ -238,15 +238,15 @@ select is((select array_agg(c.table_name || '.' || c.column_name order by c.tabl
 select is((select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname in ('servicing', 'documents', 'private') and p.proname ~* '(generate|render|compose|draft)_(statement|quote|quotation|noc|closure|letter)'), 0::bigint,
   'no function generates or renders a statement, quotation, NOC or closure letter: Udofin issues none of them');
-select is((select array_agg(rule_key || ':' || approval_status || ':' || evidence_status order by rule_key) from documents.applicability_rules where rule_key like 'servicing.%'),
+select is((select array_agg(rule_key || ':' || approval_status || ':' || evidence_status order by rule_key) from documents.applicability_rules where rule_key like 'servicing.%' and rule_key !~ '^servicing\.(reminder|suppress)'),
   array['servicing.noc_sla_days_default:draft:unverified', 'servicing.security_release_sla_days:draft:confirmed', 'servicing.statement_sla_days_default:draft:unverified'],
   'the three servicing rules are seeded as draft with their evidence label (NOC and statement defaults unverified platform settings; security release confirmed in text)');
 select is((select paragraph_refs from documents.applicability_rules where rule_key = 'servicing.security_release_sla_days'), array['35', '36'], 'the security-release rule cites RBC paras 35 and 36');
 select ok((select direction_ref like '%NOT a regulatory deadline%' and exclusions like '%PLATFORM SETTING, NOT A REGULATORY CLAIM%' from documents.applicability_rules where rule_key = 'servicing.noc_sla_days_default'),
   'the NOC default says in its citation that it is a platform setting and not a regulatory deadline');
-select is((select array_agg(rule_key || '=' || (validity_rule ->> 'days') order by rule_key) from documents.applicability_rules where rule_key like 'servicing.%'),
+select is((select array_agg(rule_key || '=' || (validity_rule ->> 'days') order by rule_key) from documents.applicability_rules where rule_key like 'servicing.%' and rule_key !~ '^servicing\.(reminder|suppress)'),
   array['servicing.noc_sla_days_default=30', 'servicing.security_release_sla_days=30', 'servicing.statement_sla_days_default=7'], 'the periods are data in the rules, not code');
-select is((select array_agg(key order by key) from documents.document_types where data_source = 'lender_issued' and issuing_authority = 'lender'),
+select is((select array_agg(key order by key) from documents.document_types where data_source = 'lender_issued' and issuing_authority = 'lender' and key <> 'service_reminder'),
   array['noc', 'security_release', 'statement_of_account'], 'the lender-issued document types exist with the lender as the only issuing authority');
 select is((select availability from lending.product_categories where key = 'loan_against_securities'), 'feasibility_review',
   'no LAMF product is enabled: loan_against_securities stays in feasibility review, so the lien prompt is exercised with a test-only fixture');

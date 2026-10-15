@@ -432,6 +432,22 @@ update servicing.feature_catalog set enableable = true, locked_reason = null whe
 select pg_temp.as_system();
 select is(private.feature_enabled('f8b00000-0000-4000-8000-000000000001', 'payments'), true, 'everything restored: enabled again');
 
+-- Fixture (owner, triggers off for these inserts only): the lender already runs servicing_sync and has an approved reminder policy and approved
+-- English wording, so the generic request flow below meets the feature-specific prerequisites of reminders and statements_noc.
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+insert into servicing.lender_features (lender_org_id, feature, enabled, evidence, enabled_by, enabled_at)
+values ('f8b00000-0000-4000-8000-000000000001', 'servicing_sync', true, '{"lms_ref":"SAMPLE-LMS-1"}', 'f8000000-0000-4000-8000-000000000001', now());
+insert into servicing.reminder_policies (lender_org_id, version, status, offsets_days, channels, window_from, window_to, max_per_day, drafted_by, approved_by, approved_at)
+values ('f8b00000-0000-4000-8000-000000000001', 1, 'approved', array[-3, 0, 3], array['in_app'], time '09:00', time '18:00', 1,
+        'f8000000-0000-4000-8000-000000000001', 'f8000000-0000-4000-8000-000000000002', now());
+insert into servicing.reminder_templates (lender_org_id, kind, language, version, status, body, body_sha256, drafted_by, approved_by, approved_at)
+select 'f8b00000-0000-4000-8000-000000000001', k.kind, 'en', 1, 'approved', k.body, encode(sha256(convert_to(k.body, 'UTF8')), 'hex'),
+       'f8000000-0000-4000-8000-000000000001', 'f8000000-0000-4000-8000-000000000002', now()
+from (values ('pre_due', 'Your installment of {{amount}} to {{lender_name}} is due on {{due_date}}.'),
+             ('due_day', 'Your installment of {{amount}} to {{lender_name}} is due today, {{due_date}}.'),
+             ('overdue', 'Your payment of {{amount}} to {{lender_name}} is overdue. {{penal_text}}')) as k (kind, body);
+set local session_replication_role = origin;
 select pg_temp.as_user('f8000000-0000-4000-8000-000000000001');
 select pg_temp.keep('req_rem', servicing.request_feature_change('f8b00000-0000-4000-8000-000000000001', 'reminders', true, '{"policy_ref":"SAMPLE-POLICY-1"}', 'req-key-0000000200')::text);
 select pg_temp.as_owner();

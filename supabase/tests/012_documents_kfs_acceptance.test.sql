@@ -193,8 +193,8 @@ from (values (1, 'a1000000-0000-4000-8000-000000000000'::uuid, 'a2000000-0000-40
 select pg_temp.as_user('aaaaaaaa-0000-4000-8000-000000000001');
 select is((select count(*) from documents.applicability_rules), 0::bigint, 'a lender cannot read platform rules');
 select pg_temp.as_user('0e0e0e0e-0000-4000-8000-000000000001');
-select is((select string_agg(rule_key || ':' || approval_status, ',' order by rule_key) from documents.applicability_rules), 'agreement.nbfc.kfs_summary_box:draft,kfs.nbfc.retail_msme_term:draft,servicing.noc_sla_days_default:draft,servicing.security_release_sla_days:draft,servicing.statement_sla_days_default:draft',
-  'the seeded rules (NBFC document rules and the Phase 08a servicing SLA rules) are drafts, not approved');
+select is((select string_agg(rule_key || ':' || approval_status, ',' order by rule_key) from documents.applicability_rules), 'agreement.nbfc.kfs_summary_box:draft,kfs.nbfc.retail_msme_term:draft,servicing.noc_sla_days_default:draft,servicing.reminder_max_per_day:draft,servicing.reminder_window.default:draft,servicing.security_release_sla_days:draft,servicing.statement_sla_days_default:draft,servicing.suppress_after_payment_hours:draft',
+  'the seeded rules (NBFC document rules and the Phase 08a servicing SLA and reminder rules) are drafts, not approved');
 select is((select count(*) from documents.applicability_rules where approval_status = 'approved'), 0::bigint, 'nothing is approved by default');
 select is((select reviewer_ref from documents.applicability_rules where rule_key = 'kfs.nbfc.retail_msme_term'), null, 'the reviewer is unassigned');
 select is((select lender_category_keys from documents.applicability_rules where rule_key = 'kfs.nbfc.retail_msme_term'), array['nbfc_icc', 'nbfc_d'], 'only NBFC categories are named (no bank, UCB or HFC rule is seeded)');

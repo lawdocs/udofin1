@@ -36,7 +36,7 @@ as $$
     and not exists (
       select 1 from jsonb_each(p_subject) e
       where e.key <> all (array['intent_id', 'provider_payment_id', 'event_id', 'config_id', 'loan_account_id', 'mandate_id', 'debit_id',
-                                'settlement_item_id', 'settlement_batch_id', 'receipt_id', 'run_id', 'installment_seq'])
+                                'settlement_item_id', 'settlement_batch_id', 'receipt_id', 'run_id', 'lender_org_id', 'installment_seq'])
          or jsonb_typeof(e.value) <> 'string'
          or (e.key = 'installment_seq' and (e.value #>> '{}') !~ '^[0-9]{1,6}$')
          or (e.key <> 'installment_seq' and (e.value #>> '{}') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'))
