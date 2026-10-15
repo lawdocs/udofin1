@@ -25,7 +25,9 @@ const key2: FingerprintKey = {
   key: new Uint8Array(32).fill(2),
 };
 const input = { ifsc: SAMPLE_IFSC, accountNumber: SAMPLE_ACCOUNT };
-const rule = INITIAL_IN_BANK_ACCOUNT_RULE;
+// A SAMPLE id standing in for a row the database holds as approved; the library cannot tell approval from a draft.
+const SAMPLE_RULE_ID = '01990000-0000-7000-8000-00000000a001';
+const rule: AccountFormatRule = { ...INITIAL_IN_BANK_ACCOUNT_RULE, ruleId: SAMPLE_RULE_ID };
 
 describe('fingerprintAccount', () => {
   it('is deterministic: 64 hex characters, the key version, and a masked reference with the last four digits only', () => {
@@ -203,6 +205,8 @@ describe('the account-number format is data, not code', () => {
 
   it('reports the status of the rule next to the fingerprint: the initial range is unverified', () => {
     expect(INITIAL_IN_BANK_ACCOUNT_RULE).toMatchObject({ status: 'unverified', source: null });
+    // The initial value has no id: it is not an AccountFormatRule and can never be passed as one (never "approved").
+    expect('ruleId' in INITIAL_IN_BANK_ACCOUNT_RULE).toBe(false);
     expect(fingerprintAccount(key1, input, rule).ruleStatus).toBe('unverified');
     const verified: AccountFormatRule = { ...rule, status: 'verified', source: 'SAMPLE-SOURCE-1' };
     expect(fingerprintAccount(key1, input, verified).ruleStatus).toBe('verified');
@@ -220,12 +224,69 @@ describe('the account-number format is data, not code', () => {
       { ...rule, accountType: '' },
       { ...rule, status: 'trusted' },
       { ...rule, status: 'verified', source: null },
+      { ...rule, ruleId: undefined },
+      { ...rule, ruleId: '' },
+      { ...rule, ruleId: 5 },
+      { ...rule, ruleId: 'not-a-uuid' },
+      { ...rule, ruleId: SAMPLE_RULE_ID.toUpperCase() },
+      { ...rule, ruleId: ` ${SAMPLE_RULE_ID}` },
     ];
     for (const candidate of bad) {
       expect(() => fingerprintAccount(key1, input, candidate as AccountFormatRule)).toThrow(
         /invalid_rule/,
       );
     }
+  });
+});
+
+describe('registry attestation: the rule id and the validated flag', () => {
+  it('carries the id of the rule it validated under, and formatValidated true, for payments.register_account', () => {
+    const result = fingerprintAccount(key1, input, rule);
+    expect(result.formatRuleId).toBe(SAMPLE_RULE_ID);
+    expect(result.formatValidated).toBe(true);
+    const other = '01990000-0000-7000-8000-00000000a002';
+    expect(fingerprintAccount(key1, input, { ...rule, ruleId: other }).formatRuleId).toBe(other);
+    // The rule id is not part of the fingerprint: the same account is the same account under any rule version.
+    expect(fingerprintAccount(key1, input, { ...rule, ruleId: other }).fingerprint).toBe(
+      result.fingerprint,
+    );
+  });
+
+  it('refuses a rule object without an id at the type level and at runtime, with no input value in the error', () => {
+    // @ts-expect-error a rule without ruleId is not an AccountFormatRule (the initial value is not one either)
+    const idless: AccountFormatRule = INITIAL_IN_BANK_ACCOUNT_RULE;
+    let caught: unknown;
+    try {
+      fingerprintAccount(key1, input, idless);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(AccountFingerprintError);
+    expect((caught as AccountFingerprintError).reason).toBe('invalid_rule');
+    const rendered = `${String(caught)} ${JSON.stringify(caught)} ${(caught as Error).stack ?? ''}`;
+    expect(rendered).not.toContain(SAMPLE_ACCOUNT);
+    expect(rendered).not.toContain(SAMPLE_IFSC);
+    expect(() => normaliseAccount(input, idless)).toThrow(/invalid_rule/);
+  });
+
+  it('never puts an input value in an error caused by a bad rule id (sentinel strings)', () => {
+    const sentinel = 'SENTINEL-RULE-ID-VALUE-9f3a';
+    let caught: unknown;
+    try {
+      fingerprintAccount(key1, input, { ...rule, ruleId: sentinel });
+    } catch (error) {
+      caught = error;
+    }
+    expect((caught as AccountFingerprintError).reason).toBe('invalid_rule');
+    const rendered = `${String(caught)} ${JSON.stringify(caught)} ${(caught as Error).stack ?? ''}`;
+    expect(rendered).not.toContain(sentinel);
+    expect(rendered).not.toContain(SAMPLE_ACCOUNT);
+  });
+
+  it('does not put the rule id or the validated flag where they could be confused with the account (result carries no number)', () => {
+    const text = JSON.stringify(fingerprintAccount(key1, input, rule));
+    expect(text).not.toContain(SAMPLE_ACCOUNT);
+    expect(text).not.toContain(SAMPLE_IFSC);
   });
 });
 

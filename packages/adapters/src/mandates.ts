@@ -172,6 +172,47 @@ export interface MandateProviderPort {
   ): Promise<MandateResult<readonly MandateDebitReport[]>>;
 }
 
+/**
+ * Bounds every mandate-provider call. A call that outlasts `milliseconds`, or that throws, becomes the explicit
+ * `unknown` outcome (`timeout` / `network`), never an empty value, a hand-off, a cancellation or an activation: the
+ * provider may have acted, so look the mandate up by operation key before any retry. A late answer to a call that has
+ * already timed out is discarded. `milliseconds` must be a finite number > 0, otherwise `RangeError` (a wiring mistake,
+ * raised when the port is wrapped).
+ */
+export function withMandateTimeout(
+  inner: MandateProviderPort,
+  milliseconds: number,
+): MandateProviderPort {
+  if (!Number.isFinite(milliseconds) || milliseconds <= 0) {
+    throw new RangeError('mandate timeout must be a finite number of milliseconds above zero');
+  }
+  const bound = async <T>(call: () => Promise<MandateResult<T>>): Promise<MandateResult<T>> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<MandateResult<T>>((resolve) => {
+      timer = setTimeout(() => resolve({ outcome: 'unknown', reason: 'timeout' }), milliseconds);
+    });
+    try {
+      return await Promise.race([
+        (async () => call())().catch((): MandateResult<T> => ({
+          outcome: 'unknown',
+          reason: 'network',
+        })),
+        timeout,
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+  return {
+    descriptor: inner.descriptor,
+    capabilities: inner.capabilities,
+    createMandateRequest: (ctx, request) => bound(() => inner.createMandateRequest(ctx, request)),
+    getMandateStatus: (ctx, query) => bound(() => inner.getMandateStatus(ctx, query)),
+    cancelMandate: (ctx, request) => bound(() => inner.cancelMandate(ctx, request)),
+    listDebitStatus: (ctx, query) => bound(() => inner.listDebitStatus(ctx, query)),
+  };
+}
+
 /** No mandate provider or sponsor-bank arrangement exists: refuses honestly. */
 export function createUnconfiguredMandateProvider(): MandateProviderPort {
   const notConfigured = (): Promise<{ readonly outcome: 'not_configured' }> =>

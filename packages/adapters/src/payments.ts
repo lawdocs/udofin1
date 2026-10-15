@@ -330,6 +330,48 @@ export interface PaymentProviderPort {
   ): Promise<PaymentResult<SettlementReport>>;
 }
 
+/**
+ * Bounds every provider call. A call that outlasts `milliseconds`, or that throws, becomes the explicit
+ * `unknown` outcome (`timeout` / `network`), never an empty value, a success and never a refusal: the provider may
+ * have acted (an order may have been created), so look it up by `receiptRef` / operation key before any retry. A late
+ * answer to a call that has already timed out is discarded. The webhook verifier is passed through unchanged (it is
+ * synchronous and makes no network call). `milliseconds` must be a finite number > 0, otherwise `RangeError` (a
+ * wiring mistake, raised when the port is wrapped, not at call time).
+ */
+export function withPaymentTimeout(
+  inner: PaymentProviderPort,
+  milliseconds: number,
+): PaymentProviderPort {
+  if (!Number.isFinite(milliseconds) || milliseconds <= 0) {
+    throw new RangeError('payment timeout must be a finite number of milliseconds above zero');
+  }
+  const bound = async <T>(call: () => Promise<PaymentResult<T>>): Promise<PaymentResult<T>> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<PaymentResult<T>>((resolve) => {
+      timer = setTimeout(() => resolve({ outcome: 'unknown', reason: 'timeout' }), milliseconds);
+    });
+    try {
+      return await Promise.race([
+        (async () => call())().catch((): PaymentResult<T> => ({
+          outcome: 'unknown',
+          reason: 'network',
+        })),
+        timeout,
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+  return {
+    descriptor: inner.descriptor,
+    capabilities: inner.capabilities,
+    webhookVerifier: inner.webhookVerifier,
+    createOrder: (ctx, request) => bound(() => inner.createOrder(ctx, request)),
+    getOrderStatus: (ctx, query) => bound(() => inner.getOrderStatus(ctx, query)),
+    fetchSettlements: (ctx, date) => bound(() => inner.fetchSettlements(ctx, date)),
+  };
+}
+
 /** No provider is contracted or specified: refuses honestly. Webhooks answer `provider_scheme_not_configured`. */
 export function createUnconfiguredPaymentProvider(): PaymentProviderPort {
   const notConfigured = (): Promise<{ readonly outcome: 'not_configured' }> =>

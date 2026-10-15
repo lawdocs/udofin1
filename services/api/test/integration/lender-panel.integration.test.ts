@@ -52,6 +52,105 @@ describe.skipIf(!enabled)('product configuration and lender panel over HTTP', ()
       },
       ...(payload === undefined ? {} : { payload: payload as object }),
     });
+  // A payment intent needs an active payment configuration whose collection target is a verified, registered account
+  // (Phase 08a, fail closed). This builds the SAMPLE chain, in mock mode, in one transaction: approved format rule,
+  // verified registry row, verified settlement account, provider register, merchant claim, two-person active config.
+  // Everything is labelled SAMPLE and uses the mock provider; no real account detail is involved.
+  const insertSampleIntent = async (
+    lender: string,
+    loan: string,
+    borrower: string,
+    code: string,
+  ) => {
+    const [maker, checker, submitter] = [randomUUID(), randomUUID(), randomUUID()];
+    const tag = lender.replaceAll('-', '').slice(0, 12);
+    const client = await admin.connect();
+    try {
+      await client.query('begin');
+      await client.query(`select set_config('udofin.allow_mock_providers', 'on', true)`);
+      for (const u of [maker, checker, submitter]) {
+        await client.query(
+          `insert into auth.users (id, raw_app_meta_data) values ($1, '{"actor_type":"staff"}')`,
+          [u],
+        );
+      }
+      await client.query(
+        `insert into onboarding.lender_gates (lender_org_id, stage) values ($1, 'activated')
+           on conflict (lender_org_id) do update set stage = 'activated'`,
+        [lender],
+      );
+      await client.query(
+        `insert into payments.account_format_rules (country, account_type, version, min_digits, max_digits, ifsc_required, status, evidence_label, source_note,
+                                                    effective_from, drafted_by, submitted_by, submitted_at, approved_by, approved_at)
+           values ('IN', 'sample_fixture', 1, 9, 18, true, 'approved', 'unverified', 'SAMPLE fixture rule, not a real source', date '2026-01-01', $1, $1, now(), $2, now())
+           on conflict (country, account_type, version) do nothing`,
+        [maker, checker],
+      );
+      const rule = (
+        await client.query<{ id: string }>(
+          `select id from payments.account_format_rules where country = 'IN' and account_type = 'sample_fixture' and version = 1`,
+        )
+      ).rows[0]?.id;
+      const registry = (
+        await client.query<{ id: string }>(
+          `insert into payments.account_registry (fingerprint, key_version, masked_ref, country, account_type, format_rule_id, format_validated, owner_kind, owner_org_id,
+                                                  legal_owner_name, permitted_purposes, verification_status, evidence_ref, effective_from, registered_by,
+                                                  idempotency_key, verified_by, verified_at)
+             values (encode(sha256(convert_to('SAMPLE-FIXTURE-' || $1::uuid::text, 'UTF8')), 'hex'), 1, 'XXXXXX0000', 'IN', 'sample_fixture', $2, true, 'lender', $1,
+                     'SAMPLE Lender Ltd (fixture)', array['repayment_settlement'], 'verified', 'SAMPLE-EVIDENCE-1', current_date - 30, $3,
+                     $4, $5, now())
+             returning id`,
+          [lender, rule, maker, `sample-fixture-registry-${tag}`, checker],
+        )
+      ).rows[0]?.id;
+      const settlement = randomUUID();
+      await client.query(
+        `insert into tenancy.lender_settlement_accounts (id, lender_org_id, label, bank_name, masked_account_ref, status, registry_id, verified_by, verified_at)
+           values ($1, $2, 'SAMPLE collections', 'Test Bank', 'XXXXXX0000', 'verified', $3, $4, now())`,
+        [settlement, lender, registry, maker],
+      );
+      await client.query(
+        `insert into payments.provider_register (provider, display_name, kind, status, authorisation_evidence_ref)
+           values ('mock_gateway', 'SAMPLE provider (fixture)', 'payment', 'approved', 'SAMPLE-AUTH-EVIDENCE-1')
+           on conflict (provider) do nothing`,
+      );
+      const merchant = (
+        await client.query<{ id: string }>(
+          `insert into payments.merchant_registry (provider, merchant_ref, owner_kind, owner_org_id, purpose, claimed_by)
+             values ('mock_gateway', $2, 'lender', $1, 'repayment', $3) returning id`,
+          [lender, `SAMPLE-MERCHANT-${tag}`, maker],
+        )
+      ).rows[0]?.id;
+      const config = (
+        await client.query<{ id: string }>(
+          `insert into payments.lender_payment_configs (lender_org_id, provider, provider_mode, merchant_registry_id, settlement_account_id, secret_ref, webhook_secret_ref,
+                                                        endpoint_token_hash, evidence_ref, contract_section_ref, idempotency_key, drafted_by)
+             values ($1, 'mock_gateway', 'mock', $2, $3, 'SAMPLE_SECRET', 'SAMPLE_WEBHOOK_SECRET',
+                     encode(sha256(convert_to('SAMPLE-TOKEN-' || $1::uuid::text, 'UTF8')), 'hex'), 'SAMPLE-EVIDENCE-2', 'SAMPLE-CONTRACT-1', $4, $5) returning id`,
+          [lender, merchant, settlement, `sample-fixture-config-${tag}`, maker],
+        )
+      ).rows[0]?.id;
+      await client.query(
+        `update payments.lender_payment_configs set status = 'pending_approval', submitted_by = $2, submitted_at = now(), status_changed_by = $2 where id = $1`,
+        [config, submitter],
+      );
+      await client.query(
+        `update payments.lender_payment_configs set status = 'active', approved_by = $2, approved_at = now(), status_changed_by = $2 where id = $1`,
+        [config, checker],
+      );
+      await client.query(
+        `insert into payments.payment_intents (lender_org_id, loan_account_id, borrower_id, purpose, amount_minor, config_id, provider, idempotency_key)
+           values ($1, $2, $3, 'installment', 175000, $4, 'mock_gateway', $5)`,
+        [lender, loan, borrower, config, `idem-${code}-${randomUUID()}`],
+      );
+      await client.query('commit');
+    } catch (error) {
+      await client.query('rollback');
+      throw error;
+    } finally {
+      client.release();
+    }
+  };
   const get = (url: string, user: string) => call('GET', url, user);
   const post = (url: string, user: string, payload: unknown = {}) =>
     call('POST', url, user, payload);
@@ -217,11 +316,7 @@ describe.skipIf(!enabled)('product configuration and lender panel over HTTP', ()
           [lender, application, borrower, `LN-${code}`],
         )
       ).rows[0]?.id;
-      await admin.query(
-        `insert into payments.payment_intents (lender_org_id, loan_account_id, borrower_id, purpose, amount_minor, settlement_account_ref, provider, idempotency_key)
-         values ($1, $2, $3, 'installment', 175000, 'masked-ref', 'mock_gateway', $4)`,
-        [lender, loan, borrower, `idem-${code}-${randomUUID()}`],
-      );
+      await insertSampleIntent(lender, loan, borrower, code);
       const snap = (
         await admin.query<{ id: string }>(
           `insert into servicing.schedule_snapshots (lender_org_id, loan_account_id, version) values ($1, $2, 1) returning id`,

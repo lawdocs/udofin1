@@ -16,8 +16,9 @@ import type { EncryptedBlob, KeyManager } from './key-management.js';
  * never share an account number, so the cost is nothing. The full IFSC is still validated and is kept elsewhere for
  * display.
  *
- * The account-number format is DATA: the caller passes the `AccountFormatRule` that applies (country, account type,
- * length range, status). Without a valid rule nothing is fingerprinted. A rule whose status is `unverified` still
+ * The account-number format is DATA: the caller passes the `AccountFormatRule` that applies (rule id, country, account
+ * type, length range, status). The caller must load only rules the database marks approved; the result carries the rule
+ * id and `formatValidated: true` so the API can attest both to `payments.register_account`. Without a valid rule nothing is fingerprinted. A rule whose status is `unverified` still
  * validates, but the result says so (`ruleStatus`), so the registry can see that the format has no source on file.
  *
  * This module:
@@ -44,6 +45,18 @@ export class AccountFingerprintError extends Error {
  * type, `unverified` until its source is supplied). Nothing here is a universal banking rule.
  */
 export interface AccountFormatRule {
+  /**
+   * The id of the rule row in `payments.account_format_rules` (uuid, canonical lower case). The backend attests to the
+   * database that the number was validated under THIS rule id (`payments.register_account(..., p_format_rule_id,
+   * p_format_validated)`), and the database accepts it only if the rule is APPROVED and effective.
+   *
+   * APPROVAL IS A DATABASE STATE, NOT A PROPERTY OF THIS OBJECT. This module cannot tell an approved rule from a
+   * draft one and does not try to: the caller MUST load only rules the database marks `status = 'approved'` (and
+   * effective today) and pass those. A rule object assembled by hand, copied from `INITIAL_IN_BANK_ACCOUNT_RULE` or
+   * read from a draft row is not approved, whatever its `status` field here says (that field is the EVIDENCE label,
+   * `verified`/`unverified`, not the approval state). The database refuses a rule it does not hold as approved.
+   */
+  readonly ruleId: string;
   /** ISO 3166-1 alpha-2. Only `IN` today, because the IFSC is an Indian code. */
   readonly country: string;
   /** For example `bank_account`. Identifies which rule this is; the caller selects the applicable one. */
@@ -58,9 +71,11 @@ export interface AccountFormatRule {
 
 /**
  * The owner's initial range (9 to 18 digits). An UNVERIFIED assumption, not a text on file. It is a starting value for
- * the configuration that supplies rules, not something this module applies by itself.
+ * the configuration that supplies rules, not something this module applies by itself. It deliberately has NO `ruleId`
+ * and is therefore not an `AccountFormatRule`: it is never approved. Only a row the database holds as approved can
+ * become a rule (with that row's id).
  */
-export const INITIAL_IN_BANK_ACCOUNT_RULE: AccountFormatRule = {
+export const INITIAL_IN_BANK_ACCOUNT_RULE: Omit<AccountFormatRule, 'ruleId'> = {
   country: 'IN',
   accountType: 'bank_account',
   minDigits: 9,
@@ -89,6 +104,14 @@ export interface AccountInput {
 export interface AccountFingerprint {
   /** 64 lowercase hex characters. */
   readonly fingerprint: string;
+  /** The id of the rule the number was validated under (the rule given to `fingerprintAccount`), for `p_format_rule_id`. */
+  readonly formatRuleId: string;
+  /**
+   * Always `true`: a result exists only if the number passed the rule's checks (otherwise `fingerprintAccount`
+   * throws), so this is the backend's attestation for `p_format_validated`. It says nothing about the rule's approval,
+   * which the database checks against its own data.
+   */
+  readonly formatValidated: true;
   readonly keyVersion: number;
   /** Whether the account-number rule that validated this account has a source on file. */
   readonly ruleStatus: AccountFormatRule['status'];
@@ -98,6 +121,7 @@ export interface AccountFingerprint {
 
 const IFSC = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 const DIGITS = /^[0-9]+$/;
+const RULE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MIN_KEY_BYTES = 32;
 const DOMAIN = 'udofin-account-fingerprint-v2';
 
@@ -106,6 +130,8 @@ function assertRule(rule: AccountFormatRule): void {
   if (
     typeof rule !== 'object' ||
     rule === null ||
+    typeof rule.ruleId !== 'string' ||
+    !RULE_ID.test(rule.ruleId) ||
     rule.country !== 'IN' ||
     typeof rule.accountType !== 'string' ||
     rule.accountType.length === 0 ||
@@ -170,6 +196,8 @@ export function fingerprintAccount(
     .digest('hex');
   return {
     fingerprint,
+    formatRuleId: rule.ruleId,
+    formatValidated: true,
     keyVersion: key.keyVersion,
     ruleStatus: rule.status,
     maskedRef: `XXXXXX${accountNumber.slice(-4)}`,

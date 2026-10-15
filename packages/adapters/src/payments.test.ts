@@ -10,6 +10,8 @@ import {
   PAYMENT_SUCCESS_STATUSES,
   signMockWebhook,
   UNSUPPORTED_OBJECT_KIND,
+  withPaymentTimeout,
+  type PaymentProviderPort,
   type CreateOrderRequest,
   type MockDelivery,
   type MockPaymentScenario,
@@ -665,5 +667,105 @@ describe('unconfigured payment provider', () => {
       reason: 'provider_scheme_not_configured',
       payloadSha256: expect.stringMatching(/^[0-9a-f]{64}$/) as string,
     });
+  });
+});
+
+describe('withPaymentTimeout', () => {
+  const orderRequest: CreateOrderRequest = {
+    operationKey: 'SAMPLE-INTENT-TIMEOUT',
+    receiptRef: 'SAMPLE-INTENT-TIMEOUT',
+    merchantRef: 'SAMPLE-MERCHANT-0001',
+    amountMinor: 1n,
+    currency: 'INR',
+    purpose: 'installment',
+    expiresAt: null,
+  };
+  const hang = (): Promise<never> => new Promise(() => undefined);
+
+  it('turns an elapsed timeout into the explicit unknown outcome for every call, never an empty or success result', async () => {
+    const slow: PaymentProviderPort = {
+      ...createUnconfiguredPaymentProvider(),
+      createOrder: hang,
+      getOrderStatus: hang,
+      fetchSettlements: hang,
+    };
+    const bounded = withPaymentTimeout(slow, 20);
+    const unknown = { outcome: 'unknown', reason: 'timeout' };
+    expect(await bounded.createOrder(ctx, orderRequest)).toEqual(unknown);
+    expect(await bounded.getOrderStatus(ctx, { orderRef: null, operationKey: 'k' })).toEqual(
+      unknown,
+    );
+    expect(await bounded.fetchSettlements(ctx, '2026-10-14')).toEqual(unknown);
+  });
+
+  it('turns a throw or a rejection into unknown / network, even a synchronous throw, and leaks nothing', async () => {
+    const SENTINEL = 'SENTINEL-PROVIDER-SECRET-4242';
+    const broken: PaymentProviderPort = {
+      ...createUnconfiguredPaymentProvider(),
+      createOrder: () => Promise.reject(new Error(SENTINEL)),
+      getOrderStatus: () => {
+        throw new Error(SENTINEL);
+      },
+    };
+    const bounded = withPaymentTimeout(broken, 1000);
+    const created = await bounded.createOrder(ctx, orderRequest);
+    expect(created).toEqual({ outcome: 'unknown', reason: 'network' });
+    const looked = await bounded.getOrderStatus(ctx, { orderRef: null, operationKey: 'k' });
+    expect(looked).toEqual({ outcome: 'unknown', reason: 'network' });
+    expect(JSON.stringify([created, looked])).not.toContain(SENTINEL);
+  });
+
+  it('passes answers through unchanged, including a definite refusal and the unknown the provider itself reports', async () => {
+    const mock = createMockPaymentProvider('test', { scenario: 'success' });
+    const bounded = withPaymentTimeout(mock, 1000);
+    expect(bounded.descriptor).toBe(mock.descriptor);
+    expect(bounded.capabilities).toBe(mock.capabilities);
+    expect(bounded.webhookVerifier).toBe(mock.webhookVerifier);
+    const created = await bounded.createOrder(ctx, orderRequest);
+    expect(created.outcome).toBe('ok');
+    expect(mock.created).toHaveLength(1);
+    const refused = await bounded.createOrder(ctx, { ...orderRequest, amountMinor: 2n });
+    expect(refused).toEqual({ outcome: 'rejected', reason: 'invalid_request' });
+    const unknownScenario = withPaymentTimeout(
+      createMockPaymentProvider('test', { scenario: 'unknown_outcome' }),
+      1000,
+    );
+    expect(await unknownScenario.createOrder(ctx, orderRequest)).toEqual({
+      outcome: 'unknown',
+      reason: 'timeout',
+    });
+    // The wrapped provider still found the order: unknown means "look it up", and the lookup works.
+    const found = await unknownScenario.getOrderStatus(ctx, {
+      orderRef: null,
+      operationKey: orderRequest.operationKey,
+    });
+    expect(found.outcome).toBe('ok');
+  });
+
+  it('does not let a late answer overturn the unknown, and keeps not_configured as not_configured', async () => {
+    const late: PaymentProviderPort = {
+      ...createUnconfiguredPaymentProvider(),
+      getOrderStatus: () =>
+        new Promise((resolve) => setTimeout(() => resolve({ outcome: 'not_found' as const }), 60)),
+    };
+    const bounded = withPaymentTimeout(late, 10);
+    expect(await bounded.getOrderStatus(ctx, { orderRef: null, operationKey: 'k' })).toEqual({
+      outcome: 'unknown',
+      reason: 'timeout',
+    });
+    expect(
+      await withPaymentTimeout(createUnconfiguredPaymentProvider(), 10).fetchSettlements(
+        ctx,
+        '2026-10-14',
+      ),
+    ).toEqual({ outcome: 'not_configured' });
+  });
+
+  it('refuses a limit that is not a positive finite number of milliseconds', () => {
+    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => withPaymentTimeout(createUnconfiguredPaymentProvider(), bad)).toThrow(
+        RangeError,
+      );
+    }
   });
 });

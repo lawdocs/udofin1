@@ -395,11 +395,18 @@ describe.skipIf(!enabled)(
         expect(items.every((r) => r.approvalStatus === 'draft' && r.reviewerRef === null)).toBe(
           true,
         );
+        // Two Phase 07 document rules and three Phase 08a servicing-deadline rules, all seeded as drafts for the
+        // ICC and D categories only. Servicing deadlines are platform settings or unreviewed text, never approved by seed.
+        expect(items.map((r) => r.ruleKey).sort()).toEqual([
+          'agreement.nbfc.kfs_summary_box',
+          'kfs.nbfc.retail_msme_term',
+          'servicing.noc_sla_days_default',
+          'servicing.security_release_sla_days',
+          'servicing.statement_sla_days_default',
+        ]);
         expect(items.flatMap((r) => r.lenderCategoryKeys).sort()).toEqual([
-          'nbfc_d',
-          'nbfc_d',
-          'nbfc_icc',
-          'nbfc_icc',
+          ...Array<string>(5).fill('nbfc_d'),
+          ...Array<string>(5).fill('nbfc_icc'),
         ]);
         expect(code(await get('/v1/platform/document-rules', ids.aPrep))).toBe('forbidden');
       });
@@ -847,7 +854,15 @@ describe.skipIf(!enabled)(
           [ids.offerA],
         );
         expect(rows[0]).toEqual({ offer_status: 'accepted', app_status: 'offer_accepted', n: '1' });
-        expect((await q('select 1 from servicing.loan_accounts')).length).toBe(0);
+        // Scoped to this offer's application: other integration files share the database and may hold loan accounts of their own.
+        expect(
+          (
+            await q(
+              `select 1 from servicing.loan_accounts where application_id = (select application_id from lending.offers where id = $1)`,
+              [ids.offerA],
+            )
+          ).length,
+        ).toBe(0);
       });
     });
 

@@ -10,6 +10,7 @@ import {
   normaliseLmsLoan,
   normaliseTimestamp,
   parseLmsImportFile,
+  summariseImportFailure,
   withLmsTimeout,
   type LmsImportError,
   type LmsImportFormatSpec,
@@ -905,5 +906,120 @@ describe('LMS document content hash', () => {
       ...doc
     } = statement.value;
     expect(contentSha256).toBe(lmsDocumentContentHash(doc));
+  });
+});
+
+describe('summariseImportFailure (value-free audit summary of a rejected import)', () => {
+  const SENTINEL_KEY = 'SENTINEL-KEY-ABCDE1234F';
+  const SENTINEL_VALUE = 'SENTINEL-VALUE-9876543210';
+  const SENTINEL_REF = 'SENTINEL-LOAN-REF-7777';
+
+  it('keeps only hash, size, count and per-row codes and field names: no cell value, no key text', () => {
+    const rejected = parseLmsImportFile(
+      toCsv([
+        { ...LOAN_ROW, lms_loan_ref: SENTINEL_REF, sanctioned_amount: `${SENTINEL_VALUE}.5x` },
+        { ...LOAN_ROW, source_record_id: 'SAMPLE-REC-0008', status: SENTINEL_VALUE },
+        { ...LOAN_ROW, source_record_id: 'SAMPLE-REC-0009' },
+      ]),
+      loanSpec(),
+    );
+    expect(rejected.importable).toBe(false);
+    const summary = summariseImportFailure(rejected);
+    expect(Object.keys(summary).sort()).toEqual(['byteSize', 'errors', 'fileSha256', 'rowCount']);
+    expect(summary.fileSha256).toBe(rejected.fileSha256);
+    expect(summary.byteSize).toBe(rejected.byteSize);
+    expect(summary.rowCount).toBe(3);
+    expect(summary.errors).toEqual([
+      { row: 1, codes: ['invalid_amount'], fields: ['sanctioned_amount'] },
+      { row: 2, codes: ['invalid_status'], fields: ['status'] },
+    ]);
+    const text = JSON.stringify(summary);
+    for (const secret of [SENTINEL_VALUE, SENTINEL_REF, 'SAMPLE-LOAN-0001', 'SAMPLE-APP-0001']) {
+      expect(text).not.toContain(secret);
+    }
+  });
+
+  it('never carries a caller-supplied key name (JSON unknown keys, whatever their text)', () => {
+    const text = JSON.stringify([
+      { ...LOAN_ROW, [SENTINEL_KEY]: SENTINEL_VALUE, '9876543210': 'y', __proto__x: 'z' },
+    ]);
+    const rejected = parseLmsImportFile(text, {
+      format: 'json',
+      kind: 'loan',
+      sourceSystem: 'manual_import',
+      now: NOW,
+    });
+    const summary = summariseImportFailure(rejected);
+    expect(summary.errors).toEqual([{ row: 1, codes: ['unknown_field'], fields: [] }]);
+    const rendered = JSON.stringify(summary);
+    for (const secret of [SENTINEL_KEY, SENTINEL_VALUE, '9876543210', '__proto__x']) {
+      expect(rendered).not.toContain(secret);
+    }
+  });
+
+  it('summarises a CSV with an unknown header as a file-level class only', () => {
+    const rejected = parseLmsImportFile(
+      `${Object.keys(LOAN_ROW).join(',')},${SENTINEL_KEY}\n${Object.values(LOAN_ROW).join(',')},${SENTINEL_VALUE}\n`,
+      loanSpec(),
+    );
+    const summary = summariseImportFailure(rejected);
+    expect(summary.errors).toEqual([{ row: 0, codes: ['unknown_column'], fields: [] }]);
+    expect(summary.rowCount).toBe(0);
+    expect(JSON.stringify(summary)).not.toContain(SENTINEL_KEY);
+    expect(JSON.stringify(summary)).not.toContain(SENTINEL_VALUE);
+  });
+
+  it('groups several errors on one row, sorted, with distinct codes and fields', () => {
+    const rejected = parseLoans([
+      { ...LOAN_ROW, sanctioned_amount: 'abc', disbursed_amount: '', next_due_date: 'x' },
+    ]);
+    const summary = summariseImportFailure(rejected);
+    expect(summary.errors).toHaveLength(1);
+    expect(summary.errors[0]?.row).toBe(1);
+    expect(summary.errors[0]?.fields).toEqual([...(summary.errors[0]?.fields ?? [])].sort());
+    expect(summary.errors[0]?.codes).toEqual([...(summary.errors[0]?.codes ?? [])].sort());
+  });
+
+  it('is built from a closed vocabulary: a hostile error object cannot smuggle text into the summary', () => {
+    const hostile = {
+      fileSha256: SENTINEL_VALUE,
+      byteSize: 12.5,
+      recordCount: Number.NaN,
+      errors: [
+        { rowNumber: 3, field: SENTINEL_KEY, code: SENTINEL_VALUE },
+        { rowNumber: 3, field: 'status', code: 'invalid_status' },
+        { rowNumber: -4, field: null, code: 'duplicate_column' },
+        { rowNumber: 2, field: 'constructor', code: 'toString' },
+      ],
+    } as unknown as Parameters<typeof summariseImportFailure>[0];
+    const summary = summariseImportFailure(hostile);
+    expect(summary).toEqual({
+      fileSha256: '',
+      byteSize: 0,
+      rowCount: 0,
+      errors: [
+        { row: 0, codes: ['duplicate_column'], fields: [] },
+        { row: 2, codes: [], fields: [] },
+        { row: 3, codes: ['invalid_status'], fields: ['status'] },
+      ],
+    });
+    expect(JSON.stringify(summary)).not.toContain('SENTINEL');
+  });
+
+  it('is empty for a clean file and ignores non-blocking warnings', () => {
+    const clean = parseLoans([LOAN_ROW, LOAN_ROW]);
+    expect(clean.importable).toBe(true);
+    expect(clean.warnings).toHaveLength(1);
+    const summary = summariseImportFailure(clean);
+    expect(summary.errors).toEqual([]);
+    expect(summary.rowCount).toBe(2);
+    expect(summary.byteSize).toBeGreaterThan(0);
+  });
+
+  it('reports the size of an oversized file without reading it into the summary', () => {
+    const rejected = parseLmsImportFile(toCsv([LOAN_ROW]), loanSpec({ maxBytes: 10 }));
+    const summary = summariseImportFailure(rejected);
+    expect(summary.errors).toEqual([{ row: 0, codes: ['file_too_large'], fields: [] }]);
+    expect(summary.byteSize).toBe(Buffer.byteLength(toCsv([LOAN_ROW]), 'utf8'));
   });
 });

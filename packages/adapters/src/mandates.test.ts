@@ -6,6 +6,8 @@ import {
   createUnconfiguredMandateProvider,
   defaultEventRank,
   MOCK_MANDATE_RETURN_CODE,
+  withMandateTimeout,
+  type MandateProviderPort,
   type MandateRequest,
   type MockMandateScenario,
   type NormalisedProviderEvent,
@@ -297,5 +299,107 @@ describe('unconfigured mandate provider', () => {
         to: '2026-11-02',
       }),
     ).toEqual(nc);
+  });
+});
+
+describe('withMandateTimeout', () => {
+  const hang = (): Promise<never> => new Promise(() => undefined);
+  const query = { providerMandateRef: null, operationKey: 'SAMPLE-MANDATE-0001' };
+
+  it('turns an elapsed timeout into the explicit unknown outcome for every call, never a hand-off, a cancellation or an empty list', async () => {
+    const slow: MandateProviderPort = {
+      ...createUnconfiguredMandateProvider(),
+      createMandateRequest: hang,
+      getMandateStatus: hang,
+      cancelMandate: hang,
+      listDebitStatus: hang,
+    };
+    const bounded = withMandateTimeout(slow, 20);
+    const unknown = { outcome: 'unknown', reason: 'timeout' };
+    expect(await bounded.createMandateRequest(ctx, request)).toEqual(unknown);
+    expect(await bounded.getMandateStatus(ctx, query)).toEqual(unknown);
+    expect(
+      await bounded.cancelMandate(ctx, { providerMandateRef: 'm', operationKey: 'k' }),
+    ).toEqual(unknown);
+    expect(
+      await bounded.listDebitStatus(ctx, {
+        providerMandateRef: 'm',
+        from: '2026-11-01',
+        to: '2026-11-02',
+      }),
+    ).toEqual(unknown);
+  });
+
+  it('turns a throw or a rejection into unknown / network, even a synchronous throw, and leaks nothing', async () => {
+    const SENTINEL = 'SENTINEL-PROVIDER-SECRET-5252';
+    const broken: MandateProviderPort = {
+      ...createUnconfiguredMandateProvider(),
+      createMandateRequest: () => Promise.reject(new Error(SENTINEL)),
+      cancelMandate: () => {
+        throw new Error(SENTINEL);
+      },
+    };
+    const bounded = withMandateTimeout(broken, 1000);
+    const created = await bounded.createMandateRequest(ctx, request);
+    const cancelled = await bounded.cancelMandate(ctx, {
+      providerMandateRef: 'm',
+      operationKey: 'k',
+    });
+    expect(created).toEqual({ outcome: 'unknown', reason: 'network' });
+    expect(cancelled).toEqual({ outcome: 'unknown', reason: 'network' });
+    expect(JSON.stringify([created, cancelled])).not.toContain(SENTINEL);
+  });
+
+  it('passes answers through unchanged: a hand-off stays not activated and a mock unknown stays findable by lookup', async () => {
+    const mock = createMockMandateProvider('test', 'registered');
+    const bounded = withMandateTimeout(mock, 1000);
+    expect(bounded.descriptor).toBe(mock.descriptor);
+    expect(bounded.capabilities).toBe(mock.capabilities);
+    const created = await bounded.createMandateRequest(ctx, request);
+    expect(created.outcome).toBe('ok');
+    if (created.outcome === 'ok') expect(created.value.activated).toBe(false);
+    const refused = await bounded.createMandateRequest(ctx, {
+      ...request,
+      maskedAccountRef: '123456789012',
+    });
+    expect(refused).toEqual({ outcome: 'rejected', reason: 'invalid_request' });
+    const unknownScenario = withMandateTimeout(
+      createMockMandateProvider('test', 'unknown_outcome'),
+      1000,
+    );
+    expect((await unknownScenario.createMandateRequest(ctx, request)).outcome).toBe('unknown');
+    const looked = await unknownScenario.getMandateStatus(ctx, {
+      providerMandateRef: null,
+      operationKey: request.operationKey,
+    });
+    expect(looked.outcome).toBe('ok');
+  });
+
+  it('does not let a late answer overturn the unknown, and keeps not_configured as not_configured', async () => {
+    const late: MandateProviderPort = {
+      ...createUnconfiguredMandateProvider(),
+      getMandateStatus: () =>
+        new Promise((resolve) => setTimeout(() => resolve({ outcome: 'not_found' as const }), 60)),
+    };
+    expect(await withMandateTimeout(late, 10).getMandateStatus(ctx, query)).toEqual({
+      outcome: 'unknown',
+      reason: 'timeout',
+    });
+    expect(
+      await withMandateTimeout(createUnconfiguredMandateProvider(), 10).getMandateStatus(
+        ctx,
+        query,
+      ),
+    ).toEqual({
+      outcome: 'not_configured',
+    });
+  });
+
+  it('refuses a limit that is not a positive finite number of milliseconds', () => {
+    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => withMandateTimeout(createUnconfiguredMandateProvider(), bad)).toThrow(
+        RangeError,
+      );
+    }
   });
 });

@@ -1039,6 +1039,8 @@ export interface LmsImportResult<K extends LmsImportKind> {
   readonly formatVersion: typeof LMS_IMPORT_FORMAT;
   /** SHA-256 (hex) of the file bytes: the import batch's identity. */
   readonly fileSha256: string;
+  /** Size of the file in bytes (UTF-8), for the audit record of a rejected import. */
+  readonly byteSize: number;
   /** Records in the file (rows for CSV, records for JSON; schedule CSV counts installment rows). */
   readonly recordCount: number;
   /** Empty unless `importable`: a file with any error yields no rows at all. */
@@ -1267,6 +1269,7 @@ export function parseLmsImportFile<K extends LmsImportKind>(
     kind: spec.kind,
     formatVersion: LMS_IMPORT_FORMAT,
     fileSha256,
+    byteSize: bytes.length,
     recordCount,
     rows: [],
     errors,
@@ -1349,6 +1352,7 @@ export function parseLmsImportFile<K extends LmsImportKind>(
     kind: spec.kind,
     formatVersion: LMS_IMPORT_FORMAT,
     fileSha256,
+    byteSize: bytes.length,
     recordCount: parsed.recordCount,
     // All or nothing. The reports were produced by the normaliser that matches spec.kind, so the union narrows to
     // LmsImportReportMap[K].
@@ -1356,6 +1360,111 @@ export function parseLmsImportFile<K extends LmsImportKind>(
     errors: blocking,
     warnings,
     importable,
+  };
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Value-free summary of a rejected import (audit record)
+// ---------------------------------------------------------------------------------------------------------
+
+/** One row of a rejected import: its position, the error classes and the format's own field names. No values. */
+export interface LmsImportFailureRow {
+  /** 1-based data row or record; 0 for a file-level problem. */
+  readonly row: number;
+  /** Distinct error codes for the row, sorted. */
+  readonly codes: readonly LmsImportErrorCode[];
+  /** Distinct field NAMES from the format's closed vocabulary, sorted. Never a caller-supplied key or a value. */
+  readonly fields: readonly string[];
+}
+
+/** What may be kept about a rejected import: row positions and error codes (owner decision of 14 Oct 2026). */
+export interface LmsImportFailureSummary {
+  readonly fileSha256: string;
+  readonly byteSize: number;
+  readonly rowCount: number;
+  readonly errors: readonly LmsImportFailureRow[];
+}
+
+/** Every error code, as a record so that adding a code to the union fails to compile until it is listed here. */
+const IMPORT_ERROR_CODES: Readonly<Record<LmsImportErrorCode, true>> = {
+  file_too_large: true,
+  too_many_rows: true,
+  empty_file: true,
+  malformed_file: true,
+  unknown_column: true,
+  missing_column: true,
+  duplicate_column: true,
+  column_count_mismatch: true,
+  unknown_field: true,
+  missing_required: true,
+  invalid_reference: true,
+  borrower_ref_looks_personal: true,
+  invalid_amount: true,
+  amount_not_positive: true,
+  invalid_date: true,
+  invalid_timestamp: true,
+  timestamp_in_future: true,
+  invalid_integer: true,
+  invalid_status: true,
+  invalid_receipt_kind: true,
+  incomplete_disbursement: true,
+  incomplete_next_due: true,
+  disbursed_exceeds_sanctioned: true,
+  reversal_reference_invalid: true,
+  invalid_items: true,
+  inconsistent_report_head: true,
+  invalid_validity: true,
+  duplicate_row: true,
+  conflicting_duplicate: true,
+};
+
+/** The only field names a summary may carry: the formats' own, never text from the file. */
+const IMPORT_FIELD_NAMES: ReadonlySet<string> = new Set<string>([
+  ...LMS_LOAN_FIELDS,
+  ...LMS_RECEIPT_FIELDS,
+  ...LMS_SCHEDULE_HEAD_FIELDS,
+  ...LMS_SCHEDULE_INSTALLMENT_FIELDS,
+  ...QUOTE_FIELDS,
+  'installments',
+  'format_version',
+]);
+
+/**
+ * Reduces a rejected import to what the audit record may keep: the file's hash and size, the record count, and per
+ * row the error codes and field names. The result is built from scratch from a closed vocabulary: a code or field
+ * that is not in it is dropped (a field) or the row keeps only the codes that are, so nothing the file contained can
+ * reach the summary even if an upstream error were ever to carry caller text. Only blocking errors are summarised
+ * (warnings are not failures). A file that imported cleanly has no errors and yields an empty list.
+ */
+export function summariseImportFailure(
+  result: Pick<
+    LmsImportResult<LmsImportKind>,
+    'fileSha256' | 'byteSize' | 'recordCount' | 'errors'
+  >,
+): LmsImportFailureSummary {
+  const byRow = new Map<number, { codes: Set<LmsImportErrorCode>; fields: Set<string> }>();
+  for (const error of result.errors) {
+    const row = Number.isSafeInteger(error.rowNumber) && error.rowNumber >= 0 ? error.rowNumber : 0;
+    const entry = byRow.get(row) ?? { codes: new Set(), fields: new Set() };
+    if (typeof error.code === 'string' && Object.hasOwn(IMPORT_ERROR_CODES, error.code)) {
+      entry.codes.add(error.code);
+    }
+    if (typeof error.field === 'string' && IMPORT_FIELD_NAMES.has(error.field)) {
+      entry.fields.add(error.field);
+    }
+    byRow.set(row, entry);
+  }
+  return {
+    fileSha256: /^[0-9a-f]{64}$/.test(result.fileSha256) ? result.fileSha256 : '',
+    byteSize: Number.isSafeInteger(result.byteSize) ? result.byteSize : 0,
+    rowCount: Number.isSafeInteger(result.recordCount) ? result.recordCount : 0,
+    errors: [...byRow.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([row, entry]) => ({
+        row,
+        codes: [...entry.codes].sort(),
+        fields: [...entry.fields].sort(),
+      })),
   };
 }
 

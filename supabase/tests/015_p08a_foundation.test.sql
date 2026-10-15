@@ -54,6 +54,56 @@ end
 $fn$;
 create function pg_temp.keep(k text, v text) returns text language sql as $fn$ select set_config('t.' || k, v, true) $fn$;
 create function pg_temp.got(k text) returns text language sql as $fn$ select current_setting('t.' || k) $fn$;
+-- Phase 08a: a SAMPLE payment configuration (synthetic provider, merchant, verified registry entry, settlement account and an
+-- active mock-mode configuration) so that fixtures can create payment intents, which now require one. Call as the owner.
+-- In mock mode the helper switches the mock-provider guard on for this transaction. Identical in 002, 003, 004, 009, 013 and 015; keep in sync.
+create function pg_temp.sample_collection_config(
+  p_lender uuid, p_settlement uuid default gen_random_uuid(), p_label text default 'SAMPLE collections', p_masked text default 'XXXXXX0000',
+  p_provider text default 'mock_gateway', p_mode text default 'mock'
+) returns uuid language plpgsql as $fn$
+declare
+  v_tag text := left(md5(p_lender::text), 12);
+  u1 uuid := md5(p_lender::text || 'sample-maker')::uuid;
+  u2 uuid := md5(p_lender::text || 'sample-checker')::uuid;
+  u3 uuid := md5(p_lender::text || 'sample-submitter')::uuid;
+  v_rule uuid; v_reg uuid; v_mer uuid; v_cfg uuid;
+begin
+  if p_mode = 'mock' then
+    perform set_config('udofin.allow_mock_providers', 'on', true);
+  end if;
+  insert into auth.users (id, raw_app_meta_data) values (u1, '{"actor_type":"staff"}'), (u2, '{"actor_type":"staff"}'), (u3, '{"actor_type":"staff"}')
+    on conflict (id) do nothing;
+  insert into onboarding.lender_gates (lender_org_id, stage) values (p_lender, 'activated')
+    on conflict (lender_org_id) do update set stage = 'activated';
+  insert into payments.account_format_rules (country, account_type, version, min_digits, max_digits, ifsc_required, status, evidence_label, source_note,
+                                             effective_from, drafted_by, submitted_by, submitted_at, approved_by, approved_at)
+    values ('IN', 'sample_fixture', 1, 9, 18, true, 'approved', 'unverified', 'SAMPLE fixture rule, not a real source', date '2026-01-01', u1, u1, now(), u2, now())
+    on conflict (country, account_type, version) do nothing;
+  select id into v_rule from payments.account_format_rules where country = 'IN' and account_type = 'sample_fixture' and version = 1;
+  insert into payments.account_registry (fingerprint, key_version, masked_ref, country, account_type, format_rule_id, format_validated, owner_kind, owner_org_id,
+                                         legal_owner_name, permitted_purposes, verification_status, evidence_ref, effective_from, registered_by,
+                                         idempotency_key, verified_by, verified_at)
+    values (encode(sha256(convert_to('SAMPLE-FIXTURE-' || p_lender::text, 'UTF8')), 'hex'), 1, p_masked, 'IN', 'sample_fixture', v_rule, true, 'lender', p_lender,
+            'SAMPLE Lender Ltd (fixture)', array['repayment_settlement'], 'verified', 'SAMPLE-EVIDENCE-1', current_date - 30, u1,
+            'sample-fixture-registry-' || v_tag, u2, now())
+    returning id into v_reg;
+  insert into tenancy.lender_settlement_accounts (id, lender_org_id, label, bank_name, masked_account_ref, status, registry_id, verified_by, verified_at)
+    values (p_settlement, p_lender, p_label, 'Test Bank', p_masked, 'verified', v_reg, u1, now());
+  insert into payments.provider_register (provider, display_name, kind, status, authorisation_evidence_ref) values (p_provider, 'SAMPLE provider (fixture)', 'payment', 'approved', 'SAMPLE-AUTH-EVIDENCE-1')
+    on conflict (provider) do nothing;
+  insert into payments.merchant_registry (provider, merchant_ref, owner_kind, owner_org_id, purpose, claimed_by)
+    values (p_provider, 'SAMPLE-MERCHANT-' || v_tag, 'lender', p_lender, 'repayment', u1) returning id into v_mer;
+  insert into payments.lender_payment_configs (lender_org_id, provider, provider_mode, merchant_registry_id, settlement_account_id, secret_ref, webhook_secret_ref,
+                                               endpoint_token_hash, evidence_ref, contract_section_ref, idempotency_key, drafted_by)
+    values (p_lender, p_provider, p_mode, v_mer, p_settlement, 'SAMPLE_SECRET', 'SAMPLE_WEBHOOK_SECRET',
+            encode(sha256(convert_to('SAMPLE-TOKEN-' || p_lender::text, 'UTF8')), 'hex'), 'SAMPLE-EVIDENCE-2', 'SAMPLE-CONTRACT-1',
+            'sample-fixture-config-' || v_tag, u1) returning id into v_cfg;
+  update payments.lender_payment_configs set status = 'pending_approval', submitted_by = u3, submitted_at = now(), status_changed_by = u3 where id = v_cfg;
+  update payments.lender_payment_configs set status = 'active', approved_by = u2, approved_at = now(), status_changed_by = u2 where id = v_cfg;
+  return v_cfg;
+end
+$fn$;
+
 grant execute on all functions in schema pg_temp to public;
 
 -- Fixture -------------------------------------------------------------------------------------------------------------
@@ -101,6 +151,12 @@ select m.mid::uuid, r.id from (values
 join tenancy.roles r on r.org_id is null and r.applies_to = m.kind::tenancy.organization_kind and r.key = m.rkey;
 
 select pg_temp.keep('borrower', (select id::text from auth.users where phone = '910000000098'));
+
+-- The `payments` switch now also needs an ACTIVE PRODUCTION payment configuration (migration 20261018000910; tested in 016):
+-- lenders X and Z get a SAMPLE one (production mode, so no mock guard is switched on here). Lender Y is left without.
+select pg_temp.as_owner();
+select pg_temp.sample_collection_config('f8b00000-0000-4000-8000-000000000001', gen_random_uuid(), 'SAMPLE collections', 'XXXXXX0001', 'sample_provider', 'production');
+select pg_temp.sample_collection_config('f8b00000-0000-4000-8000-000000000003', gen_random_uuid(), 'SAMPLE collections', 'XXXXXX0003', 'sample_provider', 'production');
 
 -- ============================================================================================================================
 -- 1. Structure, catalogue, grants
@@ -243,7 +299,8 @@ select is((select count(*) from servicing.lender_features), 0::bigint, 'none of 
 -- ============================================================================================================================
 select pg_temp.as_system();
 select is(private.feature_prerequisites_unmet('f8b00000-0000-4000-8000-000000000002', 'payments'),
-  array['evidence_missing', 'lender_organisation_not_active', 'onboarding_gate_not_activated'], 'an onboarding lender short of its gate and without evidence has three unmet reasons');
+  array['evidence_missing', 'lender_organisation_not_active', 'onboarding_gate_not_activated', 'payment_config_missing'],
+  'an onboarding lender short of its gate and without evidence or a payment configuration has four unmet reasons');
 select is(private.feature_prerequisites_unmet('f8b00000-0000-4000-8000-000000000001', 'payments'), array['evidence_missing'], 'an active, activated lender lacks only evidence until a request carries it');
 select ok('feature_not_enableable' = any (private.feature_prerequisites_unmet('f8b00000-0000-4000-8000-000000000001', 'collections')), 'collections reports feature_not_enableable');
 select ok('feature_unknown' = any (private.feature_prerequisites_unmet('f8b00000-0000-4000-8000-000000000001', 'nope')), 'an unknown feature reports feature_unknown');
@@ -251,7 +308,7 @@ select pg_temp.as_user('f8000000-0000-4000-8000-000000000001');
 select is(pg_temp.err($$select servicing.request_feature_change('f8b00000-0000-4000-8000-000000000002', 'payments', true, '{"contract_ref":"SAMPLE-MSA-2"}', 'req-key-0000000020')$$), '55000|prerequisites_unmet',
   'a lender that is not active and not past its gate cannot be switched on');
 select is(pg_temp.msg($$select servicing.request_feature_change('f8b00000-0000-4000-8000-000000000002', 'payments', true, '{"contract_ref":"SAMPLE-MSA-2"}', 'req-key-0000000020')$$),
-  'prerequisites not met: lender_organisation_not_active, onboarding_gate_not_activated', 'the message lists generic reasons only');
+  'prerequisites not met: lender_organisation_not_active, onboarding_gate_not_activated, payment_config_missing', 'the message lists the unmet reasons (generic ones and the payments configuration), never a value');
 select pg_temp.as_owner();
 select is((select count(*) from servicing.feature_change_requests where lender_org_id = 'f8b00000-0000-4000-8000-000000000002'), 0::bigint, 'the refused request left nothing behind');
 
