@@ -1,0 +1,7 @@
+# Findings in commit 3ec10fc (wave 2 of Phase 08a) that are synthetic test strings, not credentials:
+#  - a variable name containing "KEY" next to a fixed placeholder that a test feeds to a "must never be echoed" check;
+#  - a Stripe-shaped fake that a pgTAP test feeds to the "refuse a secret-looking reference" check.
+# Both strings were replaced with neutral ones in the next commit; the history still contains them, so the two
+# fingerprints are listed here. A fingerprint pins the exact commit, file, rule and line: nothing else is allowed.
+3ec10fc1334ee2a89dbd2e551159ceb56b49ff34:packages/adapters/src/lms.test.ts:generic-api-key:913
+3ec10fc1334ee2a89dbd2e551159ceb56b49ff34:supabase/tests/016_p08a_accounts_config.test.sql:stripe-access-token:773

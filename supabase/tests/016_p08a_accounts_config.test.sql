@@ -853,7 +853,7 @@ select is(pg_temp.err(format($$select pg_temp.draft('f6b00000-0000-4000-8000-000
   'a MOCK configuration is refused where the session does not allow mocks');
 select is(pg_temp.err(format($$select pg_temp.draft('f6b00000-0000-4000-8000-000000000001', 'cfg-key-0000000006', mode => 'sandbox', merchant => %L::uuid, settle => %L::uuid)$$, pg_temp.got('mx1'), pg_temp.sa(1))), '42501|sandbox_provider_blocked',
   'and so is a SANDBOX configuration');
-select is(pg_temp.err(format($$select pg_temp.draft('f6b00000-0000-4000-8000-000000000001', 'cfg-key-0000000007', secret => 'sk_live_abcdef0123456789', merchant => %L::uuid, settle => %L::uuid)$$, pg_temp.got('mx1'), pg_temp.sa(1))), '22023|secret_ref_invalid',
+select is(pg_temp.err(format($$select pg_temp.draft('f6b00000-0000-4000-8000-000000000001', 'cfg-key-0000000007', secret => 'not_a_secret_reference_value', merchant => %L::uuid, settle => %L::uuid)$$, pg_temp.got('mx1'), pg_temp.sa(1))), '22023|secret_ref_invalid',
   'a secret VALUE (not an UPPER_CASE name) is refused as a secret reference');
 select is(pg_temp.err(format($$select pg_temp.draft('f6b00000-0000-4000-8000-000000000001', 'cfg-key-0000000008', secret => 'SAME_REF', hook => 'SAME_REF', merchant => %L::uuid, settle => %L::uuid)$$, pg_temp.got('mx1'), pg_temp.sa(1))), '22023|secret_ref_invalid',
   'the provider secret and the webhook secret must be different names');

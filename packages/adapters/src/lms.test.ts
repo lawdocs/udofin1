@@ -910,7 +910,7 @@ describe('LMS document content hash', () => {
 });
 
 describe('summariseImportFailure (value-free audit summary of a rejected import)', () => {
-  const SENTINEL_KEY = 'SENTINEL-KEY-ABCDE1234F';
+  const SENTINEL_FIELD = 'SENTINEL-FIELD-ABCDE1234F';
   const SENTINEL_VALUE = 'SENTINEL-VALUE-9876543210';
   const SENTINEL_REF = 'SENTINEL-LOAN-REF-7777';
 
@@ -941,7 +941,7 @@ describe('summariseImportFailure (value-free audit summary of a rejected import)
 
   it('never carries a caller-supplied key name (JSON unknown keys, whatever their text)', () => {
     const text = JSON.stringify([
-      { ...LOAN_ROW, [SENTINEL_KEY]: SENTINEL_VALUE, '9876543210': 'y', __proto__x: 'z' },
+      { ...LOAN_ROW, [SENTINEL_FIELD]: SENTINEL_VALUE, '9876543210': 'y', __proto__x: 'z' },
     ]);
     const rejected = parseLmsImportFile(text, {
       format: 'json',
@@ -952,20 +952,20 @@ describe('summariseImportFailure (value-free audit summary of a rejected import)
     const summary = summariseImportFailure(rejected);
     expect(summary.errors).toEqual([{ row: 1, codes: ['unknown_field'], fields: [] }]);
     const rendered = JSON.stringify(summary);
-    for (const secret of [SENTINEL_KEY, SENTINEL_VALUE, '9876543210', '__proto__x']) {
+    for (const secret of [SENTINEL_FIELD, SENTINEL_VALUE, '9876543210', '__proto__x']) {
       expect(rendered).not.toContain(secret);
     }
   });
 
   it('summarises a CSV with an unknown header as a file-level class only', () => {
     const rejected = parseLmsImportFile(
-      `${Object.keys(LOAN_ROW).join(',')},${SENTINEL_KEY}\n${Object.values(LOAN_ROW).join(',')},${SENTINEL_VALUE}\n`,
+      `${Object.keys(LOAN_ROW).join(',')},${SENTINEL_FIELD}\n${Object.values(LOAN_ROW).join(',')},${SENTINEL_VALUE}\n`,
       loanSpec(),
     );
     const summary = summariseImportFailure(rejected);
     expect(summary.errors).toEqual([{ row: 0, codes: ['unknown_column'], fields: [] }]);
     expect(summary.rowCount).toBe(0);
-    expect(JSON.stringify(summary)).not.toContain(SENTINEL_KEY);
+    expect(JSON.stringify(summary)).not.toContain(SENTINEL_FIELD);
     expect(JSON.stringify(summary)).not.toContain(SENTINEL_VALUE);
   });
 
@@ -986,7 +986,7 @@ describe('summariseImportFailure (value-free audit summary of a rejected import)
       byteSize: 12.5,
       recordCount: Number.NaN,
       errors: [
-        { rowNumber: 3, field: SENTINEL_KEY, code: SENTINEL_VALUE },
+        { rowNumber: 3, field: SENTINEL_FIELD, code: SENTINEL_VALUE },
         { rowNumber: 3, field: 'status', code: 'invalid_status' },
         { rowNumber: -4, field: null, code: 'duplicate_column' },
         { rowNumber: 2, field: 'constructor', code: 'toString' },
