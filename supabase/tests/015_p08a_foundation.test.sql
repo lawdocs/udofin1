@@ -462,7 +462,7 @@ select is((select (status, decided_by, applied_at is null)::text from servicing.
 
 -- A request whose requester lost the permission before the decision is not applied
 select pg_temp.as_user('f8000000-0000-4000-8000-000000000001');
-select pg_temp.keep('req_lost', servicing.request_feature_change('f8b00000-0000-4000-8000-000000000001', 'mandates', true, '{"rail_ref":"SAMPLE-RAIL-1"}', 'req-key-0000000201')::text);
+select pg_temp.keep('req_lost', servicing.request_feature_change('f8b00000-0000-4000-8000-000000000001', 'reminders', true, '{"rail_ref":"SAMPLE-RAIL-1"}', 'req-key-0000000201')::text);
 select pg_temp.as_owner();
 delete from tenancy.membership_roles where membership_id = 'f8c10000-0000-4000-8000-000000000001';
 select pg_temp.as_user('f8000000-0000-4000-8000-000000000002');
