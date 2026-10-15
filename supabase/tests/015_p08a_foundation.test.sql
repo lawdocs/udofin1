@@ -3,7 +3,7 @@
 -- Synthetic data only. Error codes are reported as SQLSTATE|hint.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(214);
+select plan(221);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -80,6 +80,8 @@ begin
     values ('IN', 'sample_fixture', 1, 9, 18, true, 'approved', 'unverified', 'SAMPLE fixture rule, not a real source', date '2026-01-01', u1, u1, now(), u2, now())
     on conflict (country, account_type, version) do nothing;
   select id into v_rule from payments.account_format_rules where country = 'IN' and account_type = 'sample_fixture' and version = 1;
+  insert into payments.fingerprint_key_versions (key_version, proposed_by) values (1, u1) on conflict (key_version) do nothing;
+  update payments.fingerprint_key_versions set status = 'active', approved_by = u2, approved_at = now() where key_version = 1 and status = 'proposed';
   insert into payments.account_registry (fingerprint, key_version, masked_ref, country, account_type, format_rule_id, format_validated, owner_kind, owner_org_id,
                                          legal_owner_name, permitted_purposes, verification_status, evidence_ref, effective_from, registered_by,
                                          idempotency_key, verified_by, verified_at)
@@ -91,8 +93,9 @@ begin
     values (p_settlement, p_lender, p_label, 'Test Bank', p_masked, 'verified', v_reg, u1, now());
   insert into payments.provider_register (provider, display_name, kind, status, authorisation_evidence_ref) values (p_provider, 'SAMPLE provider (fixture)', 'payment', 'approved', 'SAMPLE-AUTH-EVIDENCE-1')
     on conflict (provider) do nothing;
-  insert into payments.merchant_registry (provider, merchant_ref, owner_kind, owner_org_id, purpose, claimed_by)
-    values (p_provider, 'SAMPLE-MERCHANT-' || v_tag, 'lender', p_lender, 'repayment', u1) returning id into v_mer;
+  insert into payments.merchant_registry (provider, merchant_ref, owner_kind, owner_org_id, purpose, claimed_by, verification_status, verification_evidence_ref,
+                                          verified_by, verified_at)
+    values (p_provider, 'SAMPLE-MERCHANT-' || v_tag, 'lender', p_lender, 'repayment', u1, 'verified', 'SAMPLE-EVIDENCE-3', u2, now()) returning id into v_mer;
   insert into payments.lender_payment_configs (lender_org_id, provider, provider_mode, merchant_registry_id, settlement_account_id, secret_ref, webhook_secret_ref,
                                                endpoint_token_hash, evidence_ref, contract_section_ref, idempotency_key, drafted_by)
     values (p_lender, p_provider, p_mode, v_mer, p_settlement, 'SAMPLE_SECRET', 'SAMPLE_WEBHOOK_SECRET',
@@ -643,6 +646,39 @@ select is(pg_temp.err($$insert into tenancy.membership_roles (membership_id, rol
 select is(pg_temp.err($$insert into tenancy.membership_roles (membership_id, role_id)
   select 'f8c10000-0000-4000-8000-000000000010', r.id from tenancy.roles r where r.org_id is null and r.applies_to = 'platform' and r.key = 'dlg_finance'$$), '23514|',
   'and the collections.work vs dlg.manage rule still holds');
+
+-- Review finding FC-4: the pair triggers above fire on role grants; a membership can also change under roles it already holds.
+insert into auth.users (id, raw_app_meta_data) values
+  ('f8000000-0000-4000-8000-000000000031', '{"actor_type":"staff"}'), ('f8000000-0000-4000-8000-000000000032', '{"actor_type":"staff"}'),
+  ('f8000000-0000-4000-8000-000000000033', '{"actor_type":"staff"}'), ('f8000000-0000-4000-8000-000000000034', '{"actor_type":"staff"}'),
+  ('f8000000-0000-4000-8000-000000000035', '{"actor_type":"staff"}');
+insert into tenancy.memberships (id, org_id, user_id, status) values
+  ('f8c10000-0000-4000-8000-000000000031', 'f8b00000-0000-4000-8000-000000000001', 'f8000000-0000-4000-8000-000000000031', 'active'),
+  ('f8c10000-0000-4000-8000-000000000032', 'f8b00000-0000-4000-8000-000000000002', 'f8000000-0000-4000-8000-000000000032', 'active'),
+  ('f8c10000-0000-4000-8000-000000000033', 'f8b00000-0000-4000-8000-000000000001', 'f8000000-0000-4000-8000-000000000033', 'active'),
+  ('f8c10000-0000-4000-8000-000000000034', 'f8a00000-0000-4000-8000-000000000000', 'f8000000-0000-4000-8000-000000000034', 'active');
+insert into tenancy.membership_roles (membership_id, role_id)
+select m.mid::uuid, r.id from (values
+  ('f8c10000-0000-4000-8000-000000000031', 'lender', 'payments_admin'), ('f8c10000-0000-4000-8000-000000000032', 'lender', 'payments_approver'),
+  ('f8c10000-0000-4000-8000-000000000033', 'lender', 'payments_admin'), ('f8c10000-0000-4000-8000-000000000034', 'platform', 'collections_agent')) as m (mid, kind, rkey)
+join tenancy.roles r on r.org_id is null and r.applies_to = m.kind::tenancy.organization_kind and r.key = m.rkey;
+select is(pg_temp.err($$update tenancy.memberships set user_id = 'f8000000-0000-4000-8000-000000000031' where id = 'f8c10000-0000-4000-8000-000000000032'$$), '23514|segregation_of_duties',
+  'a membership cannot be moved to a login that already holds the other half (payment.configure and payment.config.approve)');
+select is((select user_id from tenancy.memberships where id = 'f8c10000-0000-4000-8000-000000000032'), 'f8000000-0000-4000-8000-000000000032'::uuid, 'and the move did not happen');
+-- A revoked membership holding the other half is brought back: built with the role trigger off, as a historic state.
+alter table tenancy.membership_roles disable trigger membership_roles_segregation_payments;
+insert into tenancy.memberships (id, org_id, user_id, status) values
+  ('f8c10000-0000-4000-8000-000000000035', 'f8b00000-0000-4000-8000-000000000002', 'f8000000-0000-4000-8000-000000000033', 'revoked');
+insert into tenancy.membership_roles (membership_id, role_id)
+select 'f8c10000-0000-4000-8000-000000000035', r.id from tenancy.roles r where r.org_id is null and r.applies_to = 'lender' and r.key = 'payments_approver';
+alter table tenancy.membership_roles enable trigger membership_roles_segregation_payments;
+select is(pg_temp.err($$update tenancy.memberships set status = 'active' where id = 'f8c10000-0000-4000-8000-000000000035'$$), '23514|segregation_of_duties',
+  'a revoked membership holding the other half cannot be reactivated');
+select is(pg_temp.err($$update tenancy.memberships set status = 'invited' where id = 'f8c10000-0000-4000-8000-000000000035'$$), '23514|segregation_of_duties', 'nor invited again');
+select is((select status::text from tenancy.memberships where id = 'f8c10000-0000-4000-8000-000000000035'), 'revoked', 'it stays revoked');
+select is(pg_temp.err($$update tenancy.memberships set valid_until = now() + interval '30 days' where id = 'f8c10000-0000-4000-8000-000000000035'$$), 'ok', 'changing anything else on a revoked membership is not a segregation question');
+select is(pg_temp.err($$insert into tenancy.memberships (org_id, user_id, status) values ('f8b00000-0000-4000-8000-000000000003', 'f8000000-0000-4000-8000-000000000031', 'active')$$), 'ok',
+  'a new membership without roles is fine (control: only a real conflict is refused)');
 
 -- ============================================================================================================================
 -- 10. Function privileges

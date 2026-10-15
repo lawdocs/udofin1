@@ -91,6 +91,8 @@ begin
     values ('IN', 'sample_fixture', 1, 9, 18, true, 'approved', 'unverified', 'SAMPLE fixture rule, not a real source', date '2026-01-01', u1, u1, now(), u2, now())
     on conflict (country, account_type, version) do nothing;
   select id into v_rule from payments.account_format_rules where country = 'IN' and account_type = 'sample_fixture' and version = 1;
+  insert into payments.fingerprint_key_versions (key_version, proposed_by) values (1, u1) on conflict (key_version) do nothing;
+  update payments.fingerprint_key_versions set status = 'active', approved_by = u2, approved_at = now() where key_version = 1 and status = 'proposed';
   insert into payments.account_registry (fingerprint, key_version, masked_ref, country, account_type, format_rule_id, format_validated, owner_kind, owner_org_id,
                                          legal_owner_name, permitted_purposes, verification_status, evidence_ref, effective_from, registered_by,
                                          idempotency_key, verified_by, verified_at)
@@ -102,8 +104,9 @@ begin
     values (p_settlement, p_lender, p_label, 'Test Bank', p_masked, 'verified', v_reg, u1, now());
   insert into payments.provider_register (provider, display_name, kind, status, authorisation_evidence_ref) values (p_provider, 'SAMPLE provider (fixture)', 'payment', 'approved', 'SAMPLE-AUTH-EVIDENCE-1')
     on conflict (provider) do nothing;
-  insert into payments.merchant_registry (provider, merchant_ref, owner_kind, owner_org_id, purpose, claimed_by)
-    values (p_provider, 'SAMPLE-MERCHANT-' || v_tag, 'lender', p_lender, 'repayment', u1) returning id into v_mer;
+  insert into payments.merchant_registry (provider, merchant_ref, owner_kind, owner_org_id, purpose, claimed_by, verification_status, verification_evidence_ref,
+                                          verified_by, verified_at)
+    values (p_provider, 'SAMPLE-MERCHANT-' || v_tag, 'lender', p_lender, 'repayment', u1, 'verified', 'SAMPLE-EVIDENCE-3', u2, now()) returning id into v_mer;
   insert into payments.lender_payment_configs (lender_org_id, provider, provider_mode, merchant_registry_id, settlement_account_id, secret_ref, webhook_secret_ref,
                                                endpoint_token_hash, evidence_ref, contract_section_ref, idempotency_key, drafted_by)
     values (p_lender, p_provider, p_mode, v_mer, p_settlement, 'SAMPLE_SECRET', 'SAMPLE_WEBHOOK_SECRET',
@@ -338,11 +341,13 @@ select is((select count(*) from pg_indexes where schemaname = 'tenancy' and inde
 -- 3. R-01: a payment intent succeeds only on a matching, verified, successful provider event; R-05: loan-account history
 -- ============================================================================================================================
 select pg_temp.as_system();
+select pg_temp.as_owner();
 insert into servicing.loan_accounts (id, lender_org_id, application_id, borrower_id, source_system, lms_loan_ref, status, sanctioned_amount_minor)
 values ('a4000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000000', 'a2000000-0000-4000-8000-000000000001',
         (select id from identity.borrowers where user_id = '11111111-1111-4111-8111-111111111111'), 'lender_lms', 'ALPHA-LN-1', 'active', 2000000),
        ('b4000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000000', 'a2000000-0000-4000-8000-000000000002',
         (select id from identity.borrowers where user_id = '11111111-1111-4111-8111-111111111111'), 'lender_lms', 'BETA-LN-1', 'active', 8000000);
+select pg_temp.as_system();
 -- Intents need an active payment configuration (Phase 08a); the SAMPLE helper builds one per lender.
 select pg_temp.as_owner();
 select pg_temp.sample_collection_config('a1000000-0000-4000-8000-000000000000', gen_random_uuid(), 'SAMPLE collections', 'XXXXXX1234');
@@ -422,19 +427,29 @@ select pg_temp.as_system();
 -- R-05: loan-account history (written by a trigger; the system role writes the loan account, never the history)
 select is((select (event_type, new_status::text, actor)::text from servicing.loan_account_events where loan_account_id = 'a4000000-0000-4000-8000-000000000001'), '(created,active,system)',
   'creating a loan account leaves a created event with the actor');
+select pg_temp.as_owner();
 update servicing.loan_accounts set last_synced_at = now() + interval '1 minute' where id = 'a4000000-0000-4000-8000-000000000001';
+select pg_temp.as_system();
 select is((select count(*) from servicing.loan_account_events where loan_account_id = 'a4000000-0000-4000-8000-000000000001'), 1::bigint, 'a sync that changes nothing tracked leaves no event');
+select pg_temp.as_owner();
 update servicing.loan_accounts set status = 'closed' where id = 'a4000000-0000-4000-8000-000000000001';
+select pg_temp.as_system();
 select is((select (event_type, old_status::text, new_status::text)::text from servicing.loan_account_events where loan_account_id = 'a4000000-0000-4000-8000-000000000001' and event_type = 'status_changed'),
   '(status_changed,active,closed)', 'a status change records the old and the new status');
+select pg_temp.as_owner();
 update servicing.loan_accounts set disbursed_amount_minor = 5000000, disbursed_at = now(), disbursement_reference = 'UTR-REM-0001' where id = 'b4000000-0000-4000-8000-000000000001';
+select pg_temp.as_system();
 select is((select (event_type, old_disbursed_amount_minor is null, new_disbursed_amount_minor, new_disbursement_reference)::text from servicing.loan_account_events
            where loan_account_id = 'b4000000-0000-4000-8000-000000000001' and event_type = 'disbursement_recorded'),
   '(disbursement_recorded,t,5000000,UTR-REM-0001)', 'recording the disbursement evidence leaves an event with old (empty) and new values');
+select pg_temp.as_owner();
 update servicing.loan_accounts set sanctioned_amount_minor = 9000000 where id = 'b4000000-0000-4000-8000-000000000001';
+select pg_temp.as_system();
 select is((select (event_type, old_sanctioned_amount_minor, new_sanctioned_amount_minor)::text from servicing.loan_account_events
            where loan_account_id = 'b4000000-0000-4000-8000-000000000001' and event_type = 'amount_changed'), '(amount_changed,8000000,9000000)', 'a sanctioned-amount correction is recorded too');
+select pg_temp.as_owner();
 select throws_ok($$update servicing.loan_accounts set disbursed_amount_minor = 1 where id = 'b4000000-0000-4000-8000-000000000001'$$, 'P0001', null, 'a refused change (disbursement evidence is permanent) leaves no event');
+select pg_temp.as_system();
 select is((select count(*) from servicing.loan_account_events where loan_account_id = 'b4000000-0000-4000-8000-000000000001'), 3::bigint, 'so the Beta account has exactly its three events');
 select throws_ok(
   $$insert into servicing.loan_account_events (lender_org_id, loan_account_id, event_type, new_status, new_sanctioned_amount_minor, source_system, actor)

@@ -735,7 +735,8 @@ create table servicing.import_rows (
     'invalid_receipt_kind', 'incomplete_disbursement', 'incomplete_next_due', 'disbursed_exceeds_sanctioned',
     'reversal_reference_invalid', 'invalid_items', 'conflicting_duplicate', 'content_hash_mismatch',
     'application_not_found', 'application_ambiguous', 'application_not_ready', 'application_already_linked',
-    'disbursement_evidence_incomplete', 'disbursement_date_in_future', 'unknown_loan', 'reversal_target_unknown', 'borrower_ref_mismatch']),
+    'disbursement_evidence_incomplete', 'disbursement_date_in_future', 'disbursement_reference_in_use', 'unknown_loan', 'reversal_target_unknown',
+    'borrower_ref_mismatch']),
   field_names text[] not null default '{}' check (field_names <@ private.servicing_known_fields()),
   -- Non-blocking observations: overdue_total_mismatch, duplicate_row, ignored_older_report, ignored_older_sequence.
   flags text[] not null default '{}' check (flags <@ array['overdue_total_mismatch', 'duplicate_row', 'ignored_older_report', 'ignored_older_sequence']),
@@ -1028,7 +1029,8 @@ create table servicing.sync_quarantine (
   lender_org_id uuid not null references tenancy.organizations (id) on delete restrict,
   record_type text not null check (record_type in ('loan', 'receipt', 'schedule')),
   reason_code text not null check (reason_code in ('application_not_found', 'application_ambiguous', 'application_not_ready', 'application_already_linked',
-    'disbursement_evidence_incomplete', 'disbursement_date_in_future', 'unknown_loan', 'reversal_target_unknown', 'borrower_ref_mismatch')),
+    'disbursement_evidence_incomplete', 'disbursement_date_in_future', 'disbursement_reference_in_use', 'unknown_loan', 'reversal_target_unknown',
+    'borrower_ref_mismatch')),
   lms_loan_ref text not null check (length(lms_loan_ref) between 1 and 100),
   source_system servicing.source_system not null,
   import_batch_id uuid,
@@ -1075,6 +1077,21 @@ begin
   end loop;
 end
 $$;
+
+-- The three tables the sync functions write (created in earlier migrations) keep their reads, but service_role loses
+-- INSERT, UPDATE, DELETE and TRUNCATE: the SECURITY DEFINER sync functions (owned by the migration owner) are their only writers, so the
+-- provenance columns and the forward-only rules cannot be bypassed by a direct write from the backend role (review finding F2).
+-- anon and authenticated never held write privileges here. The view loan_sync_status is read-only by construction.
+revoke insert, update, delete, truncate, references, trigger on servicing.loan_accounts from service_role;
+revoke insert, update, delete, truncate, references, trigger on servicing.schedule_snapshots from service_role;
+revoke insert, update, delete, truncate, references, trigger on servicing.schedule_installments from service_role;
+
+-- Borrowers read their own schedule rows (policy snapshots_borrower_read, Phase 05), but the provenance this migration adds
+-- (who recorded it, which import batch, the lender's record id and sequence, the content hash, the source) is lender-side data and
+-- includes a lender user's id. Column privileges replace the table-wide SELECT, so no role holding the table policy can read
+-- those columns directly (review finding F3). The old columns stay readable; the API reads id, loan_account_id and version only.
+revoke select on servicing.schedule_snapshots from authenticated;
+grant select (id, lender_org_id, loan_account_id, version, source_reference, received_at, reported_as_of) on servicing.schedule_snapshots to authenticated;
 
 -- ---------------------------------------------------------------------------------------------
 -- E. The single implementation behind every source of reports (file, manual, mock, REST later)
@@ -1258,6 +1275,12 @@ begin
     v_disb_date := (p_canon ->> 'disbursement_date')::date;
     if v_disb_date > (now() at time zone 'Asia/Kolkata')::date then
       return private.servicing_quarantine(p_lender, 'loan', p_canon, p_hash, p_source, p_batch, 'disbursement_date_in_future', p_dry);
+    end if;
+    -- The unique index loan_accounts_disbursement_reference (lender, disbursement_reference) is simulated here, so a preview shows the
+    -- collision as a row error and the commit never meets it as a raw constraint failure. The reference is a lender-supplied
+    -- bank or UTR reference; one disbursement evidences one loan.
+    if exists (select 1 from servicing.loan_accounts la where la.lender_org_id = p_lender and la.disbursement_reference = p_canon ->> 'disbursement_ref') then
+      return private.servicing_quarantine(p_lender, 'loan', p_canon, p_hash, p_source, p_batch, 'disbursement_reference_in_use', p_dry);
     end if;
     if p_dry then
       return jsonb_build_object('outcome', 'new');
@@ -1912,6 +1935,22 @@ begin
     where r.id = c.id and c.lref <> f.first_lref;
   end if;
 
+  -- 3c. Two records of one file may not carry the same disbursement reference for different loans (unique index; the commit would
+  --     refuse the second). The first (lowest row) keeps it, the others are quarantined at preview.
+  if p_kind = 'loan' then
+    with c as (
+      select r.id, r.row_no, r.normalised ->> 'lms_loan_ref' as lref, r.normalised ->> 'disbursement_ref' as dref
+      from servicing.import_rows r
+      where r.batch_id = v_batch and r.outcome = 'new' and r.normalised ? 'disbursement_ref'
+        and not exists (select 1 from servicing.loan_accounts la where la.lender_org_id = p_lender and la.lms_loan_ref = r.normalised ->> 'lms_loan_ref')),
+    f as (
+      select c.dref, (array_agg(c.lref order by c.row_no))[1] as first_lref
+      from c group by c.dref having count(distinct c.lref) > 1)
+    update servicing.import_rows r set outcome = 'quarantined', error_codes = array['disbursement_reference_in_use']
+    from c join f on f.dref = c.dref
+    where r.id = c.id and c.lref <> f.first_lref;
+  end if;
+
   -- 4. Counts and status. Any error or quarantined record makes the whole batch invalid.
   select count(*) filter (where r.outcome = 'new') as n_new, count(*) filter (where r.outcome = 'unchanged') as n_unchanged,
          count(*) filter (where r.outcome = 'duplicate') as n_duplicate, count(*) filter (where r.outcome = 'changed') as n_changed,
@@ -2346,6 +2385,7 @@ $$;
 -- ---------------------------------------------------------------------------------------------
 -- H. Grants and comments
 -- ---------------------------------------------------------------------------------------------
+revoke all on servicing.loan_sync_status from service_role;
 grant select on servicing.loan_sync_status to authenticated, service_role;
 
 revoke all on function servicing.set_lms_connection(uuid, text, text, jsonb, integer, text) from public;

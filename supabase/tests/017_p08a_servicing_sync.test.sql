@@ -4,7 +4,7 @@
 -- Error codes are reported as SQLSTATE|hint.
 begin;
 create extension if not exists pgtap with schema extensions;
-select * from no_plan();
+select plan(553);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -648,6 +648,26 @@ select is(pg_temp.errs(pg_temp.stage('e9b00000-0000-4000-8000-000000000001', 'lo
 select is(pg_temp.errs(pg_temp.stage('e9b00000-0000-4000-8000-000000000001', 'loan', 'q-claimtwice', jsonb_build_array(
   pg_temp.loan('LQ8', 'e9200000-0000-4000-8000-000000000007', 'SRC-Q8A', 5), pg_temp.loan('LQ9', 'e9200000-0000-4000-8000-000000000007', 'SRC-Q8B', 5)))),
   '2:application_already_linked@', 'two loans of one file cannot claim the same application: the second is quarantined at preview, not at commit');
+-- Review finding F1: the unique index (lender, disbursement_reference) is simulated at preview, so the collision is a row error, not a commit failure.
+select is(pg_temp.errs(pg_temp.stage('e9b00000-0000-4000-8000-000000000001', 'loan', 'q-dref-stored', jsonb_build_array(
+  pg_temp.loan('LQ11', 'e9200000-0000-4000-8000-000000000007', 'SRC-Q11', 5, '{"disbursement_ref":"SAMPLE-DISB-LX1"}')))),
+  '1:disbursement_reference_in_use@', 'a new loan that carries the bank reference of a stored loan is refused at preview');
+select pg_temp.as_owner();
+insert into lending.loan_requests (id, borrower_id, category_key, requested_amount_minor, requested_tenure_days, purpose_code, status)
+select ('e9700000-0000-4000-8000-0000000000' || lpad(n::text, 2, '0'))::uuid, (select id from identity.borrowers where user_id = 'e9000000-0000-4000-8000-000000000006'),
+       'personal', 5000000, 365, 'education', 'submitted'
+from generate_series(14, 15) n;
+insert into lending.applications (id, lender_org_id, loan_request_id, borrower_id, product_version_id, status, requested_amount_minor, requested_tenure_days, lender_reference)
+select ('e9200000-0000-4000-8000-0000000000' || lpad(n::text, 2, '0'))::uuid, 'e9b00000-0000-4000-8000-000000000001',
+       ('e9700000-0000-4000-8000-0000000000' || lpad(n::text, 2, '0'))::uuid, (select id from identity.borrowers where user_id = 'e9000000-0000-4000-8000-000000000006'),
+       'e9910000-0000-4000-8000-000000000001', 'disbursement_pending', 5000000, 365, 'SAMPLE-APP-X' || n
+from generate_series(14, 15) n;
+select pg_temp.as_user('e9000000-0000-4000-8000-000000000003');
+select is(pg_temp.errs(pg_temp.stage('e9b00000-0000-4000-8000-000000000001', 'loan', 'q-dref-infile', jsonb_build_array(
+  pg_temp.loan('LQ12', 'SAMPLE-APP-X14', 'SRC-Q12A', 5, '{"disbursement_ref":"SAMPLE-DISB-DUP"}'),
+  pg_temp.loan('LQ13', 'SAMPLE-APP-X15', 'SRC-Q12B', 5, '{"disbursement_ref":"SAMPLE-DISB-DUP"}')))),
+  '2:disbursement_reference_in_use@', 'two loans of one file with the same bank reference: the second is refused at preview, the first keeps it');
+select is((select count(*) from servicing.loan_accounts where lms_loan_ref in ('LQ11', 'LQ12', 'LQ13')), 0::bigint, 'and nothing was created');
 select is(pg_temp.errs(pg_temp.stage('e9b00000-0000-4000-8000-000000000001', 'loan', 'q-mismatch', jsonb_build_array(pg_temp.loan('LX1', 'SAMPLE-APP-X2', 'SRC-LX1-M', 1)))),
   '1:borrower_ref_mismatch@', 'a report that names another borrower''s application for an existing loan is quarantined, not stored against the loan');
 select is(pg_temp.errs(pg_temp.stage('e9b00000-0000-4000-8000-000000000001', 'receipt', 'q-rc-unknown', jsonb_build_array(pg_temp.receipt('NOPE', 'RQ1', '1.00', 1)))),
@@ -906,15 +926,23 @@ select pg_temp.as_user('e9000000-0000-4000-8000-000000000003');
 select pg_temp.keep('sc1', pg_temp.sched('LX1', 'SRC-SCH-1', 4)::text);
 select pg_temp.keep('sf1', pg_temp.stage('e9b00000-0000-4000-8000-000000000001', 'schedule', 'sched-1', jsonb_build_array(pg_temp.got('sc1')::jsonb))::text);
 select is((pg_temp.got('sf1')::jsonb) -> 'counts' ->> 'new', '1', 'a first schedule is previewed as new');
+select pg_temp.as_owner();
 select is((select count(*) from servicing.schedule_snapshots where content_sha256 is not null), 0::bigint, 'the preview stored nothing');
+select pg_temp.as_user('e9000000-0000-4000-8000-000000000003');
 select pg_temp.as_user('e9000000-0000-4000-8000-000000000011');
 select is((servicing.commit_import(((pg_temp.got('sf1')::jsonb) ->> 'batch_id')::uuid)) ->> 'status', 'committed', 'committed');
+select pg_temp.as_owner();
 select is((select (version, source::text, reported_as_of is not null, content_sha256 ~ '^[0-9a-f]{64}$', source_record_id, lender_org_id = 'e9b00000-0000-4000-8000-000000000001', recorded_by)::text
            from servicing.schedule_snapshots where loan_account_id = pg_temp.lid('LX1') and content_sha256 is not null),
   '(1,file_import,t,t,SRC-SCH-1,t,e9000000-0000-4000-8000-000000000011)', 'the schedule snapshot carries its provenance (source, reported_as_of, hash, record id, the person)');
+select pg_temp.as_user('e9000000-0000-4000-8000-000000000011');
+select pg_temp.as_owner();
 select is((select import_batch_id from servicing.schedule_snapshots where loan_account_id = pg_temp.lid('LX1') and content_sha256 is not null), ((pg_temp.got('sf1')::jsonb) ->> 'batch_id')::uuid, 'and the batch');
+select pg_temp.as_user('e9000000-0000-4000-8000-000000000011');
+select pg_temp.as_owner();
 select is((select (seq, due_date > current_date, principal_minor, interest_minor, fees_minor, total_minor)::text from servicing.schedule_installments i join servicing.schedule_snapshots s on s.id = i.snapshot_id
            where s.loan_account_id = pg_temp.lid('LX1') and s.content_sha256 is not null and i.seq = 1), '(1,t,416667,33333,0,450000)', 'installments are stored in integer paise');
+select pg_temp.as_user('e9000000-0000-4000-8000-000000000011');
 select pg_temp.as_user('e9000000-0000-4000-8000-000000000003');
 select is((pg_temp.stage('e9b00000-0000-4000-8000-000000000001', 'schedule', 'sched-1b', jsonb_build_array(pg_temp.got('sc1')::jsonb))::jsonb) -> 'counts' ->> 'unchanged', '1', 'the same schedule again is unchanged');
 select pg_temp.keep('sc2', pg_temp.sched('LX1', 'SRC-SCH-2', 2, jsonb_build_object('installments', jsonb_build_array(
@@ -923,7 +951,9 @@ select pg_temp.keep('sf2', pg_temp.stage('e9b00000-0000-4000-8000-000000000001',
 select is((pg_temp.got('sf2')::jsonb) -> 'counts' ->> 'changed', '1', 'a newer schedule is a change');
 select pg_temp.as_user('e9000000-0000-4000-8000-000000000011');
 select is((servicing.commit_import(((pg_temp.got('sf2')::jsonb) ->> 'batch_id')::uuid)) ->> 'status', 'committed', 'committed');
+select pg_temp.as_owner();
 select is((select array_agg(version order by version) from servicing.schedule_snapshots where loan_account_id = pg_temp.lid('LX1') and content_sha256 is not null), array[1, 2], 'a new version supersedes the old one, which stays');
+select pg_temp.as_user('e9000000-0000-4000-8000-000000000011');
 select is((select count(*) from servicing.schedule_installments i join servicing.schedule_snapshots s on s.id = i.snapshot_id where s.loan_account_id = pg_temp.lid('LX1') and s.version = 1), 2::bigint, 'the first version still has its two installments');
 select is((select count(*) from servicing.schedule_installments i join servicing.schedule_snapshots s on s.id = i.snapshot_id where s.loan_account_id = pg_temp.lid('LX1') and s.version = 2), 1::bigint, 'and the second its one');
 select pg_temp.as_user('e9000000-0000-4000-8000-000000000003');
@@ -1292,6 +1322,35 @@ select is((select count(*) from servicing.balance_snapshots) > 0, true, 'the len
 select pg_temp.as_user('e9000000-0000-4000-8000-000000000005');
 select is(pg_temp.err(format($$select servicing.stage_import('e9b00000-0000-4000-8000-000000000002', 'loan', 'manual', %L, 1000, 'udofin-lms-import-v1', %L::jsonb, 'idem-y-after-kill-01')$$, repeat('8', 64),
   jsonb_build_array(pg_temp.loan('LY4', 'SAMPLE-APP-Y11', 'SRC-LY4-1', 1)))), 'ok', 'lender Y, whose switch is still on, carries on');
+
+-- ============================================================================================================================
+-- 17. Review fixes: the system role cannot write the sync tables; provenance columns are not readable by borrowers or lenders directly
+-- ============================================================================================================================
+select pg_temp.as_owner();
+select ok((select bool_and(not has_table_privilege('service_role', t, 'insert') and not has_table_privilege('service_role', t, 'update')
+                           and not has_table_privilege('service_role', t, 'delete') and not has_table_privilege('service_role', t, 'truncate')
+                           and has_table_privilege('service_role', t, 'select'))
+           from unnest(array['servicing.loan_accounts', 'servicing.schedule_snapshots', 'servicing.schedule_installments', 'servicing.loan_sync_status']) t),
+  'the system role reads the loan, schedule and status tables but holds no write privilege on them: the definer sync functions are the only writers');
+select pg_temp.as_system();
+select is(pg_temp.err($$update servicing.loan_accounts set status = 'closed' where false$$), '42501|', 'an update by the system role is refused before any row is looked at');
+select is(pg_temp.err($$delete from servicing.schedule_snapshots where false$$), '42501|', 'so is a delete');
+select is(pg_temp.err($$insert into servicing.schedule_installments (snapshot_id, lender_org_id, seq, due_date, principal_minor, interest_minor) select gen_random_uuid(), gen_random_uuid(), 1, current_date, 1, 1 where false$$), '42501|', 'and an insert');
+select pg_temp.as_owner();
+select ok((select bool_and(not has_column_privilege('authenticated', 'servicing.schedule_snapshots', c, 'select'))
+           from unnest(array['recorded_by', 'import_batch_id', 'source_record_id', 'lender_sequence', 'content_sha256', 'source']) c),
+  'no signed-in role can read the provenance columns of a schedule snapshot directly (they name a lender user and an import)');
+select ok((select bool_and(has_column_privilege('authenticated', 'servicing.schedule_snapshots', c, 'select'))
+           from unnest(array['id', 'lender_org_id', 'loan_account_id', 'version', 'source_reference', 'received_at', 'reported_as_of']) c),
+  'while the columns the policies and the API need stay readable');
+select pg_temp.as_user('e9000000-0000-4000-8000-000000000006');
+select is(pg_temp.err($$select recorded_by from servicing.schedule_snapshots$$), '42501|', 'a borrower cannot read who recorded a schedule');
+select is(pg_temp.err($$select count(*) from servicing.schedule_snapshots where import_batch_id is not null$$), '42501|', 'nor filter on the import batch');
+select ok((select count(*) from servicing.schedule_snapshots) >= 0, 'but still reads the rows of their own loans (the policy and the readable columns are intact)');
+select pg_temp.as_user('e9000000-0000-4000-8000-000000000003');
+select is(pg_temp.err($$select content_sha256 from servicing.schedule_snapshots$$), '42501|', 'a lender user cannot read the content hash column either: import provenance is read through the import tables');
+select ok((select count(*) from servicing.schedule_snapshots) > 0, 'but reads the schedule versions of its own loans');
+select is((select count(*) from servicing.schedule_installments), (select count(*) from servicing.schedule_installments where lender_org_id = 'e9b00000-0000-4000-8000-000000000001'), 'and the installments under them, of its own lender only');
 
 select * from finish();
 rollback;

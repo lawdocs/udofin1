@@ -128,6 +128,40 @@ $$;
 revoke all on function private.enforce_payment_duty_segregation() from public;
 create trigger membership_roles_segregation_payments before insert or update on tenancy.membership_roles
   for each row execute function private.enforce_payment_duty_segregation();
+
+-- The pair triggers above fire when a role is granted or a permission is added to a role. A membership can also change under
+-- roles it already has: a revoked membership brought back, or a membership moved to another login (user_id). Those paths are
+-- checked here, after the row has changed, against everything the login holds across all its non-revoked memberships.
+create or replace function private.enforce_payment_duty_segregation_membership()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  -- The Phase 08a pairs and the Phase 02 pair (collections.work / dlg.manage), whose own trigger has the same gap.
+  v_pairs text[] := array['payment.configure', 'payment.config.approve', 'platform.accounts.registry.manage', 'platform.accounts.registry.verify',
+                          'collections.work', 'dlg.manage'];
+  v_keys text[];
+  i integer;
+begin
+  select coalesce(array_agg(distinct rp.permission_key), '{}') into v_keys
+  from tenancy.memberships m
+  join tenancy.membership_roles mr on mr.membership_id = m.id
+  join tenancy.role_permissions rp on rp.role_id = mr.role_id
+  where m.user_id = new.user_id and m.status <> 'revoked';
+  for i in 1 .. cardinality(v_pairs) / 2 loop
+    if v_pairs[2 * i - 1] = any (v_keys) and v_pairs[2 * i] = any (v_keys) then
+      raise exception 'segregation of duties: one login cannot hold both % and %', v_pairs[2 * i - 1], v_pairs[2 * i]
+        using errcode = '23514', hint = 'segregation_of_duties';
+    end if;
+  end loop;
+  return new;
+end
+$$;
+revoke all on function private.enforce_payment_duty_segregation_membership() from public;
+create trigger memberships_segregation_payments after insert or update of user_id, status on tenancy.memberships
+  for each row when (new.status <> 'revoked') execute function private.enforce_payment_duty_segregation_membership();
 create trigger role_permissions_segregation_payments before insert or update on tenancy.role_permissions
   for each row execute function private.enforce_payment_duty_segregation();
 

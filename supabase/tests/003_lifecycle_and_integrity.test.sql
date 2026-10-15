@@ -59,6 +59,8 @@ begin
     values ('IN', 'sample_fixture', 1, 9, 18, true, 'approved', 'unverified', 'SAMPLE fixture rule, not a real source', date '2026-01-01', u1, u1, now(), u2, now())
     on conflict (country, account_type, version) do nothing;
   select id into v_rule from payments.account_format_rules where country = 'IN' and account_type = 'sample_fixture' and version = 1;
+  insert into payments.fingerprint_key_versions (key_version, proposed_by) values (1, u1) on conflict (key_version) do nothing;
+  update payments.fingerprint_key_versions set status = 'active', approved_by = u2, approved_at = now() where key_version = 1 and status = 'proposed';
   insert into payments.account_registry (fingerprint, key_version, masked_ref, country, account_type, format_rule_id, format_validated, owner_kind, owner_org_id,
                                          legal_owner_name, permitted_purposes, verification_status, evidence_ref, effective_from, registered_by,
                                          idempotency_key, verified_by, verified_at)
@@ -70,8 +72,9 @@ begin
     values (p_settlement, p_lender, p_label, 'Test Bank', p_masked, 'verified', v_reg, u1, now());
   insert into payments.provider_register (provider, display_name, kind, status, authorisation_evidence_ref) values (p_provider, 'SAMPLE provider (fixture)', 'payment', 'approved', 'SAMPLE-AUTH-EVIDENCE-1')
     on conflict (provider) do nothing;
-  insert into payments.merchant_registry (provider, merchant_ref, owner_kind, owner_org_id, purpose, claimed_by)
-    values (p_provider, 'SAMPLE-MERCHANT-' || v_tag, 'lender', p_lender, 'repayment', u1) returning id into v_mer;
+  insert into payments.merchant_registry (provider, merchant_ref, owner_kind, owner_org_id, purpose, claimed_by, verification_status, verification_evidence_ref,
+                                          verified_by, verified_at)
+    values (p_provider, 'SAMPLE-MERCHANT-' || v_tag, 'lender', p_lender, 'repayment', u1, 'verified', 'SAMPLE-EVIDENCE-3', u2, now()) returning id into v_mer;
   insert into payments.lender_payment_configs (lender_org_id, provider, provider_mode, merchant_registry_id, settlement_account_id, secret_ref, webhook_secret_ref,
                                                endpoint_token_hash, evidence_ref, contract_section_ref, idempotency_key, drafted_by)
     values (p_lender, p_provider, p_mode, v_mer, p_settlement, 'SAMPLE_SECRET', 'SAMPLE_WEBHOOK_SECRET',
@@ -163,19 +166,25 @@ insert into lending.offers (id, lender_org_id, application_id, principal_minor, 
   ('b3000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000000', 'b2000000-0000-4000-8000-000000000001',
    20000000, 720, 'monthly', 24, 1010000, 1900, 2150, 250000, 24240000, '2% p.a. on overdue instalment amount', now() + interval '7 days');
 
+select pg_temp.as_owner();
 insert into servicing.loan_accounts (id, lender_org_id, application_id, borrower_id, source_system, lms_loan_ref, sanctioned_amount_minor,
   disbursed_amount_minor, disbursed_at, disbursement_reference) values
   ('a4000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000000', 'a2000000-0000-4000-8000-000000000003',
    (select id from identity.borrowers where user_id = '11111111-1111-4111-8111-111111111111'), 'finbyx', 'ALPHA-LN-0001', 5000000, 5000000, now(), 'UTR-TEST-0001'),
   ('b4000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000000', 'b2000000-0000-4000-8000-000000000002',
    (select id from identity.borrowers where user_id = '22222222-2222-4222-8222-222222222222'), 'lender_lms', 'BETA-LN-0001', 10000000, 10000000, now(), 'UTR-TEST-0002');
+select pg_temp.as_system();
 
+select pg_temp.as_owner();
 insert into servicing.schedule_snapshots (id, lender_org_id, loan_account_id, version) values
   ('a5000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000000', 'a4000000-0000-4000-8000-000000000001', 1),
   ('b5000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000000', 'b4000000-0000-4000-8000-000000000001', 1);
+select pg_temp.as_system();
+select pg_temp.as_owner();
 insert into servicing.schedule_installments (snapshot_id, lender_org_id, seq, due_date, principal_minor, interest_minor) values
   ('a5000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000000', 1, current_date + 30, 400000, 75000),
   ('b5000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000000', 1, current_date + 30, 800000, 160000);
+select pg_temp.as_system();
 
 -- Intents need an active payment configuration (Phase 08a); the SAMPLE helper builds one per lender.
 select pg_temp.as_owner();
@@ -292,31 +301,41 @@ update lending.applications set status = 'disbursement_pending' where id = 'a200
 select throws_ok($$update lending.applications set status = 'disbursed' where id = 'a2000000-0000-4000-8000-000000000001'$$,
   'P0001', 'cannot mark application disbursed without recorded disbursement evidence',
   'approval and agreement alone never make an application disbursed');
+select pg_temp.as_owner();
 select throws_ok(
   $$insert into servicing.loan_accounts (lender_org_id, application_id, borrower_id, source_system, lms_loan_ref, sanctioned_amount_minor, disbursed_at)
     values ('a1000000-0000-4000-8000-000000000000', 'a2000000-0000-4000-8000-000000000001',
       (select id from identity.borrowers where user_id = '11111111-1111-4111-8111-111111111111'), 'finbyx', 'ALPHA-LN-0002', 20000000, now())$$,
   '23514', null, 'disbursement evidence must be complete (date, amount and bank reference together)');
+select pg_temp.as_system();
+select pg_temp.as_owner();
 select throws_ok(
   $$insert into servicing.loan_accounts (lender_org_id, application_id, borrower_id, source_system, lms_loan_ref, sanctioned_amount_minor,
       disbursed_amount_minor, disbursed_at, disbursement_reference)
     values ('a1000000-0000-4000-8000-000000000000', 'a2000000-0000-4000-8000-000000000001',
       (select id from identity.borrowers where user_id = '22222222-2222-4222-8222-222222222222'), 'finbyx', 'ALPHA-LN-0002', 20000000, 20000000, now(), 'UTR-TEST-0003')$$,
   '23503', null, 'a loan account cannot name a different borrower than its application');
+select pg_temp.as_system();
+select pg_temp.as_owner();
 select throws_ok(
   $$insert into servicing.loan_accounts (lender_org_id, application_id, borrower_id, source_system, lms_loan_ref, sanctioned_amount_minor,
       disbursed_amount_minor, disbursed_at, disbursement_reference)
     values ('a1000000-0000-4000-8000-000000000000', 'a2000000-0000-4000-8000-000000000001',
       (select id from identity.borrowers where user_id = '11111111-1111-4111-8111-111111111111'), 'finbyx', 'ALPHA-LN-0002', 20000000, 20000000, now(), 'UTR-TEST-0001')$$,
   '23505', null, 'a bank reference already used as disbursement evidence cannot be reused');
+select pg_temp.as_system();
+select pg_temp.as_owner();
 insert into servicing.loan_accounts (lender_org_id, application_id, borrower_id, source_system, lms_loan_ref, sanctioned_amount_minor,
   disbursed_amount_minor, disbursed_at, disbursement_reference)
 values ('a1000000-0000-4000-8000-000000000000', 'a2000000-0000-4000-8000-000000000001',
   (select id from identity.borrowers where user_id = '11111111-1111-4111-8111-111111111111'), 'finbyx', 'ALPHA-LN-0002', 20000000, 20000000, now(), 'UTR-TEST-0003');
+select pg_temp.as_system();
 select lives_ok($$update lending.applications set status = 'disbursed' where id = 'a2000000-0000-4000-8000-000000000001'$$,
   'with the lender''s disbursement evidence recorded, the system marks it disbursed');
+select pg_temp.as_owner();
 select throws_ok($$update servicing.loan_accounts set disbursement_reference = 'UTR-OTHER' where lms_loan_ref = 'ALPHA-LN-0002'$$,
   'P0001', null, 'recorded disbursement evidence cannot be rewritten');
+select pg_temp.as_system();
 select throws_ok($$update lending.applications set status = 'cancelled' where id = 'a2000000-0000-4000-8000-000000000001'$$,
   'P0001', null, 'disbursed is terminal');
 select is((select count(*) from lending.application_events where application_id = 'a2000000-0000-4000-8000-000000000001'), 7::bigint,

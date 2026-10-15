@@ -326,6 +326,64 @@ create trigger no_truncate before truncate on payments.provider_register
   for each statement execute function private.forbid_truncate();
 
 -- ---------------------------------------------------------------------------------------------
+-- 2b. Fingerprint key versions. The registry's core guarantee is one entry per REAL account. A fingerprint is a keyed hash, so the
+--     same account has a different fingerprint under every key: without control over which key is in force, an Udofin or group
+--     account registered under an old key could be registered again, as a lender account, under a new one (review finding FC-1).
+--     Exactly one version is ACTIVE; nothing can be registered, and nothing classifies as permitted, until one has been
+--     proposed (registry.manage) and approved by a different login (registry.verify). A new version is activated only when every
+--     live entry under the old one has a re-keyed successor (rekeyed_from_id), and the old version is retired in the same step.
+-- ---------------------------------------------------------------------------------------------
+create table payments.fingerprint_key_versions (
+  key_version integer primary key check (key_version >= 1),
+  status text not null default 'proposed' check (status in ('proposed', 'active', 'retired')),
+  proposed_by uuid not null references auth.users (id),
+  proposed_at timestamptz not null default clock_timestamp(),
+  approved_by uuid references auth.users (id),
+  approved_at timestamptz,
+  retired_by uuid references auth.users (id),
+  retired_at timestamptz,
+  note text check (note is null or length(note) <= 1000),
+  constraint approver_is_not_proposer check (approved_by is null or approved_by <> proposed_by),
+  constraint active_has_approval check (status = 'proposed' or (approved_by is not null and approved_at is not null)),
+  constraint retired_has_actor check ((status = 'retired') = (retired_by is not null and retired_at is not null))
+);
+create unique index fingerprint_key_versions_one_active on payments.fingerprint_key_versions ((true)) where status = 'active';
+create unique index fingerprint_key_versions_one_proposed on payments.fingerprint_key_versions ((true)) where status = 'proposed';
+comment on table payments.fingerprint_key_versions is
+  'Which fingerprint key (by version number) is in force. One active version at most, one proposal at most. A version is proposed by a registry manager and approved by a DIFFERENT registry verifier; activating a version retires the previous one and is refused (rotation_incomplete) while any unverified or verified registry entry under the old version has no re-keyed successor. A retired version is never reused and classifies nothing as permitted. Nothing is seeded: until a first version is active the registry accepts no entry. Written only by payments.propose_fingerprint_key_version / approve_fingerprint_key_version. Owner: payments module.';
+create trigger unsafe_text before insert or update on payments.fingerprint_key_versions
+  for each row execute function onboarding.reject_unsafe_text('note');
+create trigger no_delete before delete on payments.fingerprint_key_versions
+  for each row execute function private.forbid_mutation();
+create trigger no_truncate before truncate on payments.fingerprint_key_versions
+  for each statement execute function private.forbid_truncate();
+
+create or replace function private.protect_fingerprint_key_version()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if tg_op = 'INSERT' then
+    if new.status <> 'proposed' then
+      raise exception 'a key version starts as a proposal' using errcode = 'P0001';
+    end if;
+    return new;
+  end if;
+  if (new.key_version, new.proposed_by, new.proposed_at) is distinct from (old.key_version, old.proposed_by, old.proposed_at) then
+    raise exception 'a key version record cannot be edited' using errcode = 'P0001';
+  end if;
+  if not ((old.status = 'proposed' and new.status = 'active') or (old.status = 'active' and new.status = 'retired')) then
+    raise exception 'key version transition % -> % is not allowed', old.status, new.status using errcode = 'P0001';
+  end if;
+  return new;
+end
+$$;
+revoke all on function private.protect_fingerprint_key_version() from public;
+create trigger protect before insert or update on payments.fingerprint_key_versions
+  for each row execute function private.protect_fingerprint_key_version();
+
+-- ---------------------------------------------------------------------------------------------
 -- 3. Account registry (fingerprint + ownership) and its history
 -- ---------------------------------------------------------------------------------------------
 create table payments.account_registry (
@@ -333,7 +391,9 @@ create table payments.account_registry (
   -- Keyed HMAC computed by the BACKEND (packages/adapters account-fingerprint.ts). A new key_version means RE-REGISTRATION:
   -- the same real account then has a different fingerprint, and classification looks up by (fingerprint, key_version).
   fingerprint text not null check (fingerprint ~ '^[0-9a-f]{64}$'),
-  key_version integer not null check (key_version >= 1),
+  key_version integer not null references payments.fingerprint_key_versions (key_version) on delete restrict,
+  -- Set when this entry re-registers the SAME real account under a newer key version (a key rotation); the predecessor stays as it was.
+  rekeyed_from_id uuid references payments.account_registry (id) on delete restrict,
   -- Last four digits only.
   masked_ref text not null check (masked_ref ~ '^[X*]{2,}[0-9]{4}$'),
   country char(2) not null,
@@ -385,6 +445,10 @@ create table payments.account_registry (
 );
 create index account_registry_format_rule on payments.account_registry (format_rule_id);
 create index account_registry_owner_org on payments.account_registry (owner_org_id);
+create index account_registry_key_version on payments.account_registry (key_version);
+-- One successor per entry, and never itself.
+create unique index account_registry_rekeyed_from on payments.account_registry (rekeyed_from_id) where rekeyed_from_id is not null;
+alter table payments.account_registry add constraint rekey_is_not_self check (rekeyed_from_id is null or rekeyed_from_id <> id);
 comment on table payments.account_registry is
   'Fail-closed registry of account fingerprints and who owns them (owner decision 3, 14 Oct 2026). Starts EMPTY: nothing is seeded, no account is assumed to belong to a lender because details were supplied. unique (fingerprint, key_version) means one entry per real account, so the same account cannot sit under two owners; a new key_version means re-registration. owner_kind <> lender can never carry the repayment_settlement purpose. A verified entry needs a DIFFERENT person than the registrant and an evidence reference. Rows are never deleted; the only changes are unverified -> verified | rejected | revoked and verified -> revoked, each through payments.verify_account / reject_account / revoke_account. Readable only by platform users holding the registry permissions and by the validation functions; lenders see masked reference and status only through payments.my_settlement_account_registry_status. Owner: payments module.';
 comment on column payments.account_registry.legal_owner_name is
@@ -497,6 +561,12 @@ create table payments.merchant_registry (
   status text not null default 'active' check (status in ('active', 'revoked')),
   claimed_by uuid not null references auth.users (id),
   claimed_at timestamptz not null default now(),
+  -- A lender CLAIMS a merchant id (first come, first served); only a platform user who has seen evidence VERIFIES it (review finding FC-2).
+  -- A configuration needs a verified merchant. Udofin's own fee merchant is registered verified by the platform.
+  verification_status text not null default 'unverified' check (verification_status in ('unverified', 'verified')),
+  verification_evidence_ref text check (verification_evidence_ref is null or verification_evidence_ref ~ '^[A-Za-z0-9][A-Za-z0-9 ._:/#,()-]{2,199}$'),
+  verified_by uuid references auth.users (id),
+  verified_at timestamptz,
   revoked_by uuid references auth.users (id),
   revoked_at timestamptz,
   revoked_reason text check (revoked_reason is null or length(revoked_reason) between 10 and 1000),
@@ -508,7 +578,9 @@ create table payments.merchant_registry (
   foreign key (owner_org_id, owner_org_kind) references tenancy.organizations (id, kind) on delete restrict,
   constraint owner_org_iff_lender check ((owner_kind = 'lender') = (owner_org_id is not null)),
   constraint purpose_matches_owner check ((owner_kind = 'lender' and purpose = 'repayment') or (owner_kind = 'udofin_fees' and purpose = 'fee_collection')),
-  constraint revoked_has_reason check (status <> 'revoked' or (revoked_by is not null and revoked_at is not null and revoked_reason is not null))
+  constraint revoked_has_reason check (status <> 'revoked' or (revoked_by is not null and revoked_at is not null and revoked_reason is not null)),
+  constraint verified_has_proof check ((verification_status = 'verified') = (verified_by is not null and verified_at is not null and verification_evidence_ref is not null)),
+  constraint verifier_is_not_claimant check (owner_kind <> 'lender' or verified_by is null or verified_by <> claimed_by)
 );
 create index merchant_registry_owner_org on payments.merchant_registry (owner_org_id);
 comment on table payments.merchant_registry is
@@ -528,12 +600,18 @@ language plpgsql
 set search_path = ''
 as $$
 declare
-  v_moving text[] := array['status', 'revoked_by', 'revoked_at', 'revoked_reason', 'updated_at', 'owner_org_kind'];
+  v_moving text[] := array['status', 'revoked_by', 'revoked_at', 'revoked_reason', 'updated_at', 'owner_org_kind', 'verification_status',
+                           'verification_evidence_ref', 'verified_by', 'verified_at'];
   v_derived text[] := array['owner_org_kind', 'updated_at'];
 begin
   -- owner_org_kind is generated (computed after before-row triggers), so it is left out of every comparison.
   if (to_jsonb(new) - v_moving) is distinct from (to_jsonb(old) - v_moving) then
     raise exception 'a merchant registration cannot be edited' using errcode = 'P0001';
+  end if;
+  -- Verification happens once and is never taken back (a wrong claim is revoked, not un-verified).
+  if old.verification_status = 'verified' and (new.verification_status, new.verified_by, new.verified_at, new.verification_evidence_ref)
+     is distinct from (old.verification_status, old.verified_by, old.verified_at, old.verification_evidence_ref) then
+    raise exception 'merchant verification cannot be changed' using errcode = 'P0001';
   end if;
   if old.status = 'revoked' and (to_jsonb(new) - v_derived) is distinct from (to_jsonb(old) - v_derived) then
     raise exception 'a revoked merchant registration is final' using errcode = 'P0001';
@@ -585,6 +663,11 @@ begin
   elsif p_entry.verification_status = 'unverified' then
     v_hold := true;
     v_reasons := v_reasons || 'account_unverified'::text;
+  end if;
+  -- Only an entry under the ACTIVE fingerprint key can be relied on: after a rotation the old key's entries are replaced by
+  -- their re-keyed successors (the rotation cannot complete otherwise), and an entry under an unapproved key proves nothing.
+  if not exists (select 1 from payments.fingerprint_key_versions k where k.key_version = p_entry.key_version and k.status = 'active') then
+    v_reasons := v_reasons || 'key_version_not_active'::text;
   end if;
   if p_purpose = 'repayment_settlement' and p_entry.owner_kind <> 'lender' then
     v_reasons := v_reasons || 'owner_prohibited'::text;
@@ -956,6 +1039,9 @@ begin
     if v_mer.status <> 'active' then
       v_reasons := v_reasons || 'merchant_not_active'::text;
     end if;
+    if v_mer.verification_status <> 'verified' then
+      v_reasons := v_reasons || 'merchant_not_verified'::text;
+    end if;
     if v_mer.owner_kind <> 'lender' or v_mer.purpose <> 'repayment' then
       v_reasons := v_reasons || 'merchant_not_repayment'::text;
     end if;
@@ -974,6 +1060,11 @@ begin
   else
     if v_prov.status <> 'approved' then
       v_reasons := v_reasons || 'provider_not_approved'::text;
+    end if;
+    -- A collection configuration needs a provider registered (and its authorisation evidenced) for PAYMENTS. A mandate-only provider
+    -- carries evidence for mandates, not for taking money.
+    if v_prov.kind not in ('payment', 'payment_and_mandate') then
+      v_reasons := v_reasons || 'provider_kind_not_payment'::text;
     end if;
     if private.provider_mode_satisfies_production_gate(v_cfg.provider_mode) and v_prov.authorisation_evidence_ref is null then
       v_reasons := v_reasons || 'provider_evidence_missing'::text;
@@ -1013,7 +1104,7 @@ begin
 end
 $$;
 comment on function payments.validate_collection_target(uuid) is
-  'System only. {ok boolean, reasons text[]} (reasons in check order). Spec 7.1: (1) organisation is an active lender with the onboarding gate activated; (2) the settlement account is this lender''s, verified, linked to a registry entry that classify_destination permits for repayment_settlement for THIS lender (read live: a revoked entry, an unverified one, an account owned by Udofin, a group company or anyone else, a different owner, an expired entry all fail), masked reference equal; (3) the merchant is this lender''s own active repayment merchant at this provider (Udofin''s fee merchant, another organisation''s merchant, a revoked claim fail); (4) the provider is registered and approved, production mode needs authorisation evidence, mock or sandbox mode only where the session allows it; evidence and contract references present. Run on approval, on every payment intent and nightly. Any non-ok result blocks (and the nightly run suspends). Step 5 of the spec (provider response bound back to the configuration) is runtime: payments.system_suspend_payment_config.';
+  'System only. {ok boolean, reasons text[]} (reasons in check order). Spec 7.1: (1) organisation is an active lender with the onboarding gate activated; (2) the settlement account is this lender''s, verified, linked to a registry entry that classify_destination permits for repayment_settlement for THIS lender (read live: a revoked entry, an unverified one, an account owned by Udofin, a group company or anyone else, a different owner, an expired entry all fail), masked reference equal; (3) the merchant is this lender''s own active, platform-VERIFIED repayment merchant at this provider (Udofin''s fee merchant, another organisation''s merchant, a revoked claim fail); (4) the provider is registered and approved for payments (kind payment or payment_and_mandate), production mode needs authorisation evidence, mock or sandbox mode only where the session allows it; evidence and contract references present. Run on approval, on every payment intent and nightly. Any non-ok result blocks (and the nightly run suspends). Step 5 of the spec (provider response bound back to the configuration) is runtime: payments.system_suspend_payment_config.';
 revoke all on function payments.validate_collection_target(uuid) from public;
 grant execute on function payments.validate_collection_target(uuid) to service_role;
 
@@ -1068,6 +1159,8 @@ alter table payments.account_format_rule_events enable row level security;
 alter table payments.account_format_rule_events force row level security;
 alter table payments.provider_register enable row level security;
 alter table payments.provider_register force row level security;
+alter table payments.fingerprint_key_versions enable row level security;
+alter table payments.fingerprint_key_versions force row level security;
 alter table payments.account_registry enable row level security;
 alter table payments.account_registry force row level security;
 alter table payments.account_registry_events enable row level security;
@@ -1084,6 +1177,9 @@ create policy account_format_rules_read on payments.account_format_rules for sel
   using ((select private.has_platform_permission('platform.accounts.registry.manage'))
          or (select private.has_platform_permission('platform.accounts.registry.verify')));
 create policy account_format_rule_events_read on payments.account_format_rule_events for select to authenticated
+  using ((select private.has_platform_permission('platform.accounts.registry.manage'))
+         or (select private.has_platform_permission('platform.accounts.registry.verify')));
+create policy fingerprint_key_versions_read on payments.fingerprint_key_versions for select to authenticated
   using ((select private.has_platform_permission('platform.accounts.registry.manage'))
          or (select private.has_platform_permission('platform.accounts.registry.verify')));
 create policy account_registry_read on payments.account_registry for select to authenticated
@@ -1124,14 +1220,14 @@ create policy settlement_accounts_registry_read on tenancy.lender_settlement_acc
 -- service_role gets only what system code needs. The default privilege gives it ALL on new domain tables: revoke it.
 revoke all on payments.account_format_rules, payments.account_format_rule_events, payments.account_registry,
   payments.account_registry_events, payments.provider_register, payments.merchant_registry, payments.lender_payment_configs,
-  payments.lender_payment_config_events from service_role;
+  payments.lender_payment_config_events, payments.fingerprint_key_versions from service_role;
 -- The system reads the provider vocabulary, the merchant a configuration points at and the configuration itself (to call the
 -- provider and route callbacks). It can read nothing of the registry or the rules (the validation functions do), and it can
 -- write none of these tables: state changes go through the definer functions below.
 grant select on payments.provider_register, payments.merchant_registry, payments.lender_payment_configs to service_role;
 grant select on payments.account_format_rules, payments.account_format_rule_events, payments.account_registry,
   payments.account_registry_events, payments.provider_register, payments.merchant_registry, payments.lender_payment_configs,
-  payments.lender_payment_config_events to authenticated;
+  payments.lender_payment_config_events, payments.fingerprint_key_versions to authenticated;
 
 -- Settlement accounts: the system may create unverified rows (as before) but can no longer edit or delete them; the proof
 -- of ownership arrives only through payments.link_settlement_account and the revocation cascade.
@@ -1289,7 +1385,8 @@ $$;
 create or replace function payments.register_account(
   p_fingerprint text, p_key_version integer, p_masked_ref text, p_country text, p_account_type text, p_format_rule_id uuid,
   p_format_validated boolean, p_owner_kind text, p_owner_org_id uuid, p_legal_owner_name text, p_permitted_purposes text[],
-  p_effective_from date, p_effective_to date, p_idempotency_key text
+  p_effective_from date, p_effective_to date, p_idempotency_key text,
+  p_other_fingerprints jsonb default '{}'::jsonb, p_rekeys uuid default null
 )
 returns uuid
 language plpgsql
@@ -1301,6 +1398,11 @@ declare
   v_from date := coalesce(p_effective_from, private.today_ist());
   v_existing payments.account_registry;
   v_rule payments.account_format_rules;
+  v_ks payments.fingerprint_key_versions;
+  v_other jsonb := coalesce(p_other_fingerprints, '{}'::jsonb);
+  v_pred payments.account_registry;
+  v_hit payments.account_registry;
+  v_ver record;
   v_id uuid;
   v_constraint text;
 begin
@@ -1345,6 +1447,56 @@ begin
     return v_existing.id;
   end if;
 
+  -- Key version. Fail closed: only the ACTIVE version takes a new registration, and the PROPOSED one takes only a re-keyed entry of an
+  -- account already registered under the active version (the rotation path). The backend computes the fingerprint of the same account
+  -- under every other live version and passes them in p_other_fingerprints ({"<version>": "<fingerprint>"}); an account already
+  -- registered under another live key is refused unless this call is its re-key. The database never sees the account number.
+  select * into v_ks from payments.fingerprint_key_versions k where k.key_version = p_key_version;
+  if not found or v_ks.status = 'retired' then
+    raise exception 'this fingerprint key version is not in force' using errcode = '55000', hint = 'key_version_not_allowed';
+  end if;
+  if v_ks.status = 'proposed' and p_rekeys is null then
+    raise exception 'a proposed key version takes only the re-key of an existing entry' using errcode = '55000', hint = 'key_version_not_active';
+  end if;
+  if v_ks.status = 'active' and p_rekeys is not null then
+    raise exception 're-keying targets the proposed key version' using errcode = '22023', hint = 'rekey_invalid';
+  end if;
+  if jsonb_typeof(v_other) <> 'object' then
+    raise exception 'other fingerprints must be an object of version to fingerprint' using errcode = '22023', hint = 'other_fingerprints_invalid';
+  end if;
+  for v_ver in select k.key_version from payments.fingerprint_key_versions k where k.status <> 'retired' and k.key_version <> p_key_version loop
+    if jsonb_typeof(v_other -> v_ver.key_version::text) is distinct from 'string' or (v_other ->> v_ver.key_version::text) !~ '^[0-9a-f]{64}$' then
+      raise exception 'the fingerprint of the same account under every other live key version is required' using errcode = '22023', hint = 'other_fingerprints_incomplete';
+    end if;
+  end loop;
+  if exists (select 1 from jsonb_object_keys(v_other) k
+              where not exists (select 1 from payments.fingerprint_key_versions kv
+                                 where kv.key_version::text = k and kv.status <> 'retired' and kv.key_version <> p_key_version)) then
+    raise exception 'other fingerprints name a key version that is retired, unknown or the same as the one registered' using errcode = '22023', hint = 'other_fingerprints_invalid';
+  end if;
+  for v_ver in select e.key as version, e.value #>> '{}' as fp from jsonb_each(v_other) e loop
+    select * into v_hit from payments.account_registry r where r.fingerprint = v_ver.fp and r.key_version = v_ver.version::integer;
+    if found then
+      if p_rekeys is not null and v_hit.id = p_rekeys then
+        v_pred := v_hit;
+      else
+        raise exception 'this account is already registered under another key version' using errcode = '23505', hint = 'account_registered_under_other_key';
+      end if;
+    end if;
+  end loop;
+  if p_rekeys is not null then
+    if v_pred.id is null then
+      raise exception 'the entry to re-key does not match this account' using errcode = '22023', hint = 'rekey_invalid';
+    end if;
+    if v_pred.verification_status not in ('unverified', 'verified') then
+      raise exception 'only a live entry can be re-keyed' using errcode = '22023', hint = 'rekey_invalid';
+    end if;
+    if (v_pred.owner_kind, v_pred.owner_org_id, v_pred.country, v_pred.account_type)
+       is distinct from (p_owner_kind, p_owner_org_id, p_country, p_account_type) then
+      raise exception 'a re-keyed entry keeps the owner, country and account type of the original' using errcode = '22023', hint = 'rekey_owner_mismatch';
+    end if;
+  end if;
+
   -- The number was validated against an APPROVED, effective rule before it was fingerprinted: the API attests that, the
   -- database cannot check digits it never sees. Fail closed: no rule, a rule that is not approved or not effective, a rule
   -- for another country or account type, or no attestation: refused.
@@ -1357,22 +1509,100 @@ begin
   end if;
 
   begin
-    insert into payments.account_registry (fingerprint, key_version, masked_ref, country, account_type, format_rule_id, format_validated,
+    insert into payments.account_registry (fingerprint, key_version, rekeyed_from_id, masked_ref, country, account_type, format_rule_id, format_validated,
                                            owner_kind, owner_org_id, legal_owner_name, permitted_purposes, effective_from, effective_to,
                                            registered_by, idempotency_key)
-    values (p_fingerprint, p_key_version, p_masked_ref, p_country, p_account_type, p_format_rule_id, true,
+    values (p_fingerprint, p_key_version, v_pred.id, p_masked_ref, p_country, p_account_type, p_format_rule_id, true,
             p_owner_kind, p_owner_org_id, trim(p_legal_owner_name), p_permitted_purposes, v_from, p_effective_to, v_uid, p_idempotency_key)
     returning id into v_id;
   exception when unique_violation then
     get stacked diagnostics v_constraint = constraint_name;
     if v_constraint = 'account_registry_fingerprint_key_version_key' then
       raise exception 'this account is already registered' using errcode = '23505', hint = 'account_already_registered';
+    elsif v_constraint = 'account_registry_rekeyed_from' then
+      raise exception 'this entry was already re-keyed' using errcode = '23505', hint = 'already_rekeyed';
     end if;
     raise exception 'idempotency key was already used for a different registration' using errcode = '23505', hint = 'idempotency_conflict';
   end;
   perform private.write_payments_audit(p_owner_org_id, 'payments.account_registry.registered', 'account_registry', v_id::text,
-    jsonb_build_object('owner_kind', p_owner_kind, 'key_version', p_key_version, 'purposes', to_jsonb(p_permitted_purposes), 'format_rule_id', p_format_rule_id));
+    jsonb_build_object('owner_kind', p_owner_kind, 'key_version', p_key_version, 'purposes', to_jsonb(p_permitted_purposes), 'format_rule_id', p_format_rule_id,
+                       'rekeys', p_rekeys));
   return v_id;
+end
+$$;
+
+-- Key rotation workflow. The first version is proposed and approved like any later one (by two different logins); until then
+-- the registry is closed.
+create or replace function payments.propose_fingerprint_key_version(p_version integer, p_note text default null)
+returns integer
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid uuid := private.accounts_require_platform(array['platform.accounts.registry.manage']);
+begin
+  if p_version is null or p_version <> coalesce((select max(k.key_version) from payments.fingerprint_key_versions k), 0) + 1 then
+    raise exception 'the next key version must follow the highest one in the register by exactly one' using errcode = '22023', hint = 'key_version_invalid';
+  end if;
+  if p_note is not null and length(p_note) > 1000 then
+    raise exception 'a note is at most 1000 characters' using errcode = '22023', hint = 'reason_invalid';
+  end if;
+  if exists (select 1 from payments.fingerprint_key_versions k where k.status = 'proposed') then
+    raise exception 'another key version is already proposed' using errcode = '55000', hint = 'proposal_open';
+  end if;
+  insert into payments.fingerprint_key_versions (key_version, proposed_by, note) values (p_version, v_uid, p_note);
+  perform private.write_payments_audit(null, 'payments.fingerprint_key.proposed', 'fingerprint_key_version', p_version::text, '{}'::jsonb);
+  return p_version;
+end
+$$;
+
+create or replace function payments.approve_fingerprint_key_version(p_version integer, p_note text default null)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid uuid := private.accounts_require_platform(array['platform.accounts.registry.verify']);
+  v_k payments.fingerprint_key_versions;
+  v_old payments.fingerprint_key_versions;
+  v_uncovered bigint;
+begin
+  if p_note is not null and length(p_note) > 1000 then
+    raise exception 'a note is at most 1000 characters' using errcode = '22023', hint = 'reason_invalid';
+  end if;
+  select * into v_k from payments.fingerprint_key_versions k where k.key_version = p_version for update;
+  if not found then
+    raise exception 'key version not found' using errcode = 'P0002';
+  end if;
+  if v_k.status <> 'proposed' then
+    raise exception 'only a proposed key version can be approved' using errcode = '55000', hint = 'not_proposed';
+  end if;
+  if v_k.proposed_by = v_uid then
+    raise exception 'a different login must approve the key version' using errcode = '42501', hint = 'segregation_of_duties';
+  end if;
+  select * into v_old from payments.fingerprint_key_versions k where k.status = 'active' for update;
+  if found then
+    -- Every entry that still counts (unverified or verified) must have been re-registered under the new key, by its successor, and a
+    -- successor of a VERIFIED entry must itself be verified (by a different person, on evidence) so the rotation never weakens a
+    -- verified account into a held one without anyone noticing. Revoked and rejected entries stay refused and need no successor.
+    select count(*) into v_uncovered from payments.account_registry r
+     where r.key_version = v_old.key_version and r.verification_status in ('unverified', 'verified')
+       and not exists (select 1 from payments.account_registry s
+                        where s.rekeyed_from_id = r.id and s.key_version = v_k.key_version
+                          and s.verification_status = case r.verification_status when 'verified' then 'verified' else s.verification_status end
+                          and s.verification_status in ('unverified', 'verified'));
+    if v_uncovered > 0 then
+      raise exception 'registry entries under the current key have not been re-keyed' using errcode = '55000', hint = 'rotation_incomplete';
+    end if;
+    update payments.fingerprint_key_versions set status = 'retired', retired_by = v_uid, retired_at = clock_timestamp() where key_version = v_old.key_version;
+  end if;
+  update payments.fingerprint_key_versions set status = 'active', approved_by = v_uid, approved_at = clock_timestamp(),
+         note = coalesce(p_note, note) where key_version = p_version;
+  perform private.write_payments_audit(null, 'payments.fingerprint_key.activated', 'fingerprint_key_version', p_version::text,
+    jsonb_build_object('retired', v_old.key_version));
+  return 'active';
 end
 $$;
 
@@ -1674,11 +1904,48 @@ begin
     end if;
     raise exception 'this merchant is already claimed' using errcode = '23505', hint = 'merchant_already_claimed';
   end if;
-  insert into payments.merchant_registry (provider, merchant_ref, owner_kind, owner_org_id, purpose, claimed_by)
-  values (p_provider, p_merchant_ref, 'udofin_fees', null, 'fee_collection', v_uid)
+  insert into payments.merchant_registry (provider, merchant_ref, owner_kind, owner_org_id, purpose, claimed_by, verification_status,
+                                          verification_evidence_ref, verified_by, verified_at)
+  values (p_provider, p_merchant_ref, 'udofin_fees', null, 'fee_collection', v_uid, 'verified', 'platform-registered', v_uid, clock_timestamp())
   returning id into v_id;
   perform private.write_payments_audit(null, 'payments.merchant.registered_fees', 'merchant', v_id::text, jsonb_build_object('provider', p_provider));
   return v_id;
+end
+$$;
+
+create or replace function payments.verify_merchant(p_merchant uuid, p_evidence_ref text)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid uuid := private.accounts_require_platform(array['platform.payments.providers.manage']);
+  v_m payments.merchant_registry;
+begin
+  if p_evidence_ref is null or p_evidence_ref !~ '^[A-Za-z0-9][A-Za-z0-9 ._:/#,()-]{2,199}$' then
+    raise exception 'an evidence reference label is required (3 to 200 plain characters)' using errcode = '22023', hint = 'evidence_ref_invalid';
+  end if;
+  select * into v_m from payments.merchant_registry m where m.id = p_merchant for update;
+  if not found then
+    raise exception 'merchant not found' using errcode = 'P0002';
+  end if;
+  if v_m.status <> 'active' then
+    raise exception 'a revoked merchant cannot be verified' using errcode = '55000', hint = 'merchant_not_active';
+  end if;
+  if v_m.verification_status = 'verified' then
+    if v_m.verified_by = v_uid and v_m.verification_evidence_ref = p_evidence_ref then
+      return 'verified';
+    end if;
+    raise exception 'the merchant is already verified' using errcode = '55000', hint = 'already_verified';
+  end if;
+  if v_m.owner_kind <> 'lender' or v_m.claimed_by = v_uid then
+    raise exception 'only a lender''s claim, by someone other than the claimant, is verified here' using errcode = '42501', hint = 'self_approval';
+  end if;
+  update payments.merchant_registry set verification_status = 'verified', verified_by = v_uid, verified_at = clock_timestamp(),
+         verification_evidence_ref = p_evidence_ref where id = p_merchant;
+  perform private.write_payments_audit(v_m.owner_org_id, 'payments.merchant.verified', 'merchant', p_merchant::text, jsonb_build_object('provider', v_m.provider));
+  return 'verified';
 end
 $$;
 
@@ -1746,8 +2013,8 @@ begin
   if not private.rail_limits_ok(v_limits) or (v_limits <> '{}'::jsonb and (p_rail_limits_source is null or length(trim(p_rail_limits_source)) < 10)) then
     raise exception 'rail limits must be an object of objects with a source note' using errcode = '22023', hint = 'rail_limits_invalid';
   end if;
-  if not exists (select 1 from payments.provider_register r where r.provider = p_provider) then
-    raise exception 'unknown provider' using errcode = '22023', hint = 'provider_invalid';
+  if not exists (select 1 from payments.provider_register r where r.provider = p_provider and r.kind in ('payment', 'payment_and_mandate')) then
+    raise exception 'unknown provider, or one that is not registered for payments' using errcode = '22023', hint = 'provider_invalid';
   end if;
   if not exists (select 1 from payments.merchant_registry m where m.id = p_merchant_registry_id and m.owner_org_id = p_lender) then
     raise exception 'the merchant is not registered to this lender' using errcode = '22023', hint = 'merchant_invalid';
@@ -2147,8 +2414,11 @@ revoke all on function payments.draft_account_format_rule(text, text, integer, i
 revoke all on function payments.submit_account_format_rule(uuid) from public;
 revoke all on function payments.approve_account_format_rule(uuid, text) from public;
 revoke all on function payments.retire_account_format_rule(uuid, text) from public;
-revoke all on function payments.register_account(text, integer, text, text, text, uuid, boolean, text, uuid, text, text[], date, date, text) from public;
+revoke all on function payments.register_account(text, integer, text, text, text, uuid, boolean, text, uuid, text, text[], date, date, text, jsonb, uuid) from public;
 revoke all on function payments.verify_account(uuid, text, text) from public;
+revoke all on function payments.propose_fingerprint_key_version(integer, text) from public;
+revoke all on function payments.approve_fingerprint_key_version(integer, text) from public;
+revoke all on function payments.verify_merchant(uuid, text) from public;
 revoke all on function payments.reject_account(uuid, text) from public;
 revoke all on function payments.revoke_account(uuid, text) from public;
 revoke all on function payments.link_settlement_account(uuid, uuid) from public;
@@ -2170,8 +2440,11 @@ grant execute on function payments.draft_account_format_rule(text, text, integer
 grant execute on function payments.submit_account_format_rule(uuid) to authenticated;
 grant execute on function payments.approve_account_format_rule(uuid, text) to authenticated;
 grant execute on function payments.retire_account_format_rule(uuid, text) to authenticated;
-grant execute on function payments.register_account(text, integer, text, text, text, uuid, boolean, text, uuid, text, text[], date, date, text) to authenticated;
+grant execute on function payments.register_account(text, integer, text, text, text, uuid, boolean, text, uuid, text, text[], date, date, text, jsonb, uuid) to authenticated;
 grant execute on function payments.verify_account(uuid, text, text) to authenticated;
+grant execute on function payments.propose_fingerprint_key_version(integer, text) to authenticated;
+grant execute on function payments.approve_fingerprint_key_version(integer, text) to authenticated;
+grant execute on function payments.verify_merchant(uuid, text) to authenticated;
 grant execute on function payments.reject_account(uuid, text) to authenticated;
 grant execute on function payments.revoke_account(uuid, text) to authenticated;
 grant execute on function payments.link_settlement_account(uuid, uuid) to authenticated;
@@ -2189,8 +2462,14 @@ grant execute on function payments.retire_payment_config(uuid, text) to authenti
 grant execute on function payments.system_suspend_payment_config(uuid, text) to service_role;
 grant execute on function payments.revalidate_payment_configs(uuid) to service_role;
 
-comment on function payments.register_account(text, integer, text, text, text, uuid, boolean, text, uuid, text, text[], date, date, text) is
-  'Platform user with platform.accounts.registry.manage (aal2). Registers the keyed-HMAC fingerprint computed by the BACKEND (the database never sees an account number) under an owner and permitted purposes. Refused (55000 account_format_unvalidated) unless the format rule is non-null, APPROVED, effective, for the same country and account type, and format_validated is true. The same (fingerprint, key_version) cannot be registered twice (23505 account_already_registered): one entry per real account. Idempotent on (user, key). A new key_version means re-registration. The entry stays unverified until a DIFFERENT person calls payments.verify_account.';
+comment on function payments.register_account(text, integer, text, text, text, uuid, boolean, text, uuid, text, text[], date, date, text, jsonb, uuid) is
+  'Platform user with platform.accounts.registry.manage (aal2). Registers the keyed-HMAC fingerprint computed by the BACKEND (the database never sees an account number) under an owner and permitted purposes. Refused (55000 account_format_unvalidated) unless the format rule is non-null, APPROVED, effective, for the same country and account type, and format_validated is true. The same (fingerprint, key_version) cannot be registered twice (23505 account_already_registered): one entry per real account. Idempotent on (user, key). Only the ACTIVE fingerprint key version takes a registration (55000 key_version_not_allowed / key_version_not_active); p_other_fingerprints carries the same account''s fingerprint under every other live version, and an account already registered under another live key is refused (23505 account_registered_under_other_key) unless this call re-keys it (p_rekeys, rotation only). The entry stays unverified until a DIFFERENT person calls payments.verify_account.';
+comment on function payments.propose_fingerprint_key_version(integer, text) is
+  'Platform user with platform.accounts.registry.manage (aal2). Proposes the next fingerprint key version (exactly the highest + 1; one open proposal at most). Nothing is registered under it until a DIFFERENT registry verifier approves it. While proposed it takes only re-keyed entries (payments.register_account with p_rekeys).';
+comment on function payments.approve_fingerprint_key_version(integer, text) is
+  'Platform user with platform.accounts.registry.verify (aal2), a DIFFERENT login than the proposer (42501 segregation_of_duties). Refused (55000 rotation_incomplete) while any unverified or verified entry under the current active version has no re-keyed successor under the proposed one (and a successor of a verified entry must itself be verified). On success the proposed version becomes active and the previous one is retired in the same transaction. The first version has nothing to cover. Until a version is active the registry accepts no entry and nothing classifies as permitted.';
+comment on function payments.verify_merchant(uuid, text) is
+  'Platform user with platform.payments.providers.manage (aal2). Confirms, against evidence (a reference label, no file bytes), that the merchant identifier a lender CLAIMED really belongs to that lender at that provider. unverified -> verified, once. A payment configuration is valid only while its merchant is verified and active (reason merchant_not_verified). Udofin''s own fee merchant is registered verified by the platform and can never take repayments.';
 comment on function payments.verify_account(uuid, text, text) is
   'Platform user with platform.accounts.registry.verify (aal2), a DIFFERENT person than the registrant (42501 self_approval); the registrant must still hold platform.accounts.registry.manage. Needs an evidence reference label. unverified -> verified. Idempotent for the same verifier and evidence.';
 comment on function payments.revoke_account(uuid, text) is

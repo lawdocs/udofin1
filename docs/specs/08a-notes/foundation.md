@@ -185,3 +185,7 @@ Shared vectors. The TypeScript parser (`packages/adapters/src/money.ts`) must ac
 - Whether `reminder.policy.manage` and `reminder.template.approve` should also be segregated per login (only the pairs named in the task were).
 - Kill switch audit: written to `audit.events` (actor type `platform`); an alert on `servicing.feature_change.emergency_disabled` is an observability item, not built.
 - Operations-portal screens and API routes for requests and decisions belong to the API stream: they call the four `servicing.*` functions under the signed-in user's JWT (aal2 required).
+
+## Review fix: segregation of duties across memberships (FC-4)
+
+The pair triggers (`payment.configure` / `payment.config.approve`, `platform.accounts.registry.manage` / `.verify`) fired only when a role was granted or a permission was added to a role. A membership could also change under roles it already held: a revoked membership brought back, or a membership moved to another login. `private.enforce_payment_duty_segregation_membership` (after insert or update of `user_id`, `status` on `tenancy.memberships`, for non-revoked rows) now recomputes what the login holds across all non-revoked memberships and refuses a pair with 23514 `segregation_of_duties`. The Phase 02 pair (`collections.work` / `dlg.manage`), whose trigger had the same gap, is covered by the same function.

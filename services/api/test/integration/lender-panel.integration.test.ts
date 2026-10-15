@@ -86,6 +86,14 @@ describe.skipIf(!enabled)('product configuration and lender panel over HTTP', ()
            on conflict (country, account_type, version) do nothing`,
         [maker, checker],
       );
+      await client.query(
+        `insert into payments.fingerprint_key_versions (key_version, proposed_by) values (1, $1) on conflict (key_version) do nothing`,
+        [maker],
+      );
+      await client.query(
+        `update payments.fingerprint_key_versions set status = 'active', approved_by = $1, approved_at = now() where key_version = 1 and status = 'proposed'`,
+        [checker],
+      );
       const rule = (
         await client.query<{ id: string }>(
           `select id from payments.account_format_rules where country = 'IN' and account_type = 'sample_fixture' and version = 1`,
@@ -116,9 +124,10 @@ describe.skipIf(!enabled)('product configuration and lender panel over HTTP', ()
       );
       const merchant = (
         await client.query<{ id: string }>(
-          `insert into payments.merchant_registry (provider, merchant_ref, owner_kind, owner_org_id, purpose, claimed_by)
-             values ('mock_gateway', $2, 'lender', $1, 'repayment', $3) returning id`,
-          [lender, `SAMPLE-MERCHANT-${tag}`, maker],
+          `insert into payments.merchant_registry (provider, merchant_ref, owner_kind, owner_org_id, purpose, claimed_by, verification_status,
+                                                    verification_evidence_ref, verified_by, verified_at)
+             values ('mock_gateway', $2, 'lender', $1, 'repayment', $3, 'verified', 'SAMPLE-EVIDENCE-3', $4, now()) returning id`,
+          [lender, `SAMPLE-MERCHANT-${tag}`, maker, checker],
         )
       ).rows[0]?.id;
       const config = (
@@ -316,6 +325,7 @@ describe.skipIf(!enabled)('product configuration and lender panel over HTTP', ()
           [lender, application, borrower, `LN-${code}`],
         )
       ).rows[0]?.id;
+      if (!loan || !borrower) throw new Error('fixture: loan account or borrower missing');
       await insertSampleIntent(lender, loan, borrower, code);
       const snap = (
         await admin.query<{ id: string }>(

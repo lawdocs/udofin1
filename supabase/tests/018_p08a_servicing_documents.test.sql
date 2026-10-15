@@ -4,7 +4,7 @@
 -- Synthetic data only (SAMPLE). Error codes are reported as SQLSTATE|hint.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(294);
+select plan(302);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -272,7 +272,9 @@ select ok(has_function_privilege('service_role', 'servicing.expire_document_requ
 -- 2. The statements_noc switch is OFF for lender Z: everything refuses or hides (the closure fact is still recorded)
 -- ============================================================================================================================
 select pg_temp.as_system();
+select pg_temp.as_owner();
 update servicing.loan_accounts set status = 'closed' where lms_loan_ref = 'SAMPLE-LN-6';
+select pg_temp.as_system();
 select pg_temp.as_owner();
 select is((select count(*) from servicing.closure_records where loan_account_id = pg_temp.lid('SAMPLE-LN-6')), 1::bigint,
   'a closure record opens even when the lender''s statements_noc switch is off (reminders and mandates must stop regardless)');
@@ -485,15 +487,43 @@ select is(pg_temp.err(format($$select pg_temp.reg(%L, 'statement', 'stmt-1c', cu
 select is(pg_temp.err(format($$select pg_temp.reg(%L, 'noc', 'noc-wrong-super', null, null, %L)$$, pg_temp.lid('SAMPLE-LN-1'), pg_temp.got('d2'))), '22023|supersedes_invalid', 'it can only supersede a document of the same kind');
 select is(pg_temp.err(format($$select pg_temp.reg(%L, 'statement', 'stmt-other-super', current_date - 90, current_date - 30, %L)$$, pg_temp.lid('SAMPLE-LN-2'), pg_temp.got('d2'))), '22023|supersedes_invalid', 'nor one of another loan');
 select pg_temp.as_system();
+-- Review finding F4: the system role registers a lender-issued record only for an ACTIVE machine feed with the capability.
+select is(pg_temp.err(format($$select pg_temp.reg(%L, 'noc', 'mock-doc', null, null, null, null, 'mock')$$, pg_temp.lid('SAMPLE-LN-1'))), '55000|feed_not_active',
+  'the system role cannot register a document while the lender has no active machine feed (not even a mock one)');
+select is(pg_temp.err(format($$select pg_temp.reg(%L, 'closure_letter', 'lms-doc', null, null, null, null, 'lms')$$, pg_temp.lid('SAMPLE-LN-1'))), '55000|feed_not_active',
+  'nor an lms document: no real LMS connector exists, so none can be active');
+select is(pg_temp.err(format($$select pg_temp.quote(%L, 'SAMPLE-Q-SYS', 24, '1.00', '0', '0', '0', '1.00', null, 'mock')$$, pg_temp.lid('SAMPLE-LN-1'))), '55000|feed_not_active', 'nor a quotation');
+select pg_temp.as_owner();
+select set_config('udofin.allow_mock_providers', 'on', true);
+insert into servicing.lms_connections (lender_org_id, kind, status, provider_mode, capabilities)
+values ('eab00000-0000-4000-8000-000000000001', 'mock', 'active', 'mock', '{"statement":true,"closure_documents":true,"foreclosure_quote":true}');
+select set_config('udofin.allow_mock_providers', 'off', true);
+select pg_temp.as_system();
 select is(pg_temp.err(format($$select pg_temp.reg(%L, 'noc', 'mock-doc', null, null, null, null, 'mock')$$, pg_temp.lid('SAMPLE-LN-1'))), '42501|mock_provider_blocked', 'a mock document is refused unless the session allows mock providers');
 select pg_temp.keep('mockon', set_config('udofin.allow_mock_providers', 'on', true));
 select pg_temp.keep('d_mock', pg_temp.reg(pg_temp.lid('SAMPLE-LN-1'), 'noc', 'mock-doc', null, null, null, null, 'mock')::text);
-select is((select source from servicing.loan_documents where id = pg_temp.got('d_mock')::uuid), 'mock', 'with mocks allowed the system registers one, labelled mock');
+select is((select source from servicing.loan_documents where id = pg_temp.got('d_mock')::uuid), 'mock', 'with mocks allowed and an active mock feed the system registers one, labelled mock');
 select pg_temp.keep('mockoff', set_config('udofin.allow_mock_providers', 'off', true));
-select pg_temp.keep('d_lms', pg_temp.reg(pg_temp.lid('SAMPLE-LN-1'), 'closure_letter', 'lms-doc', null, null, null, null, 'lms')::text);
-select is((select source || ':' || coalesce(uploaded_by::text, 'none') from servicing.loan_documents where id = pg_temp.got('d_lms')::uuid), 'lms:none', 'the system registers an lms document with no uploader');
+select is(pg_temp.err(format($$select pg_temp.reg(%L, 'closure_letter', 'lms-doc', null, null, null, null, 'lms')$$, pg_temp.lid('SAMPLE-LN-1'))), '55000|feed_not_active',
+  'a mock feed does not stand in for an lms feed: an lms document is still refused');
 select pg_temp.as_owner();
-select is((select count(*) from servicing.loan_documents where lender_reference = 'SAMPLE-REF-lms-doc' and issuer = 'lender'), 1::bigint, 'every stored document has the lender as issuer');
+select set_config('udofin.allow_mock_providers', 'on', true);
+update servicing.lms_connections set capabilities = '{"statement":true}' where lender_org_id = 'eab00000-0000-4000-8000-000000000001';
+select set_config('udofin.allow_mock_providers', 'off', true);
+select pg_temp.as_system();
+select is(pg_temp.err(format($$select pg_temp.reg(%L, 'noc', 'mock-doc-2', null, null, null, null, 'mock')$$, pg_temp.lid('SAMPLE-LN-1'))), '55000|feed_not_active', 'the feed must declare the capability for the kind of record (closure_documents for a NOC)');
+select pg_temp.as_owner();
+select set_config('udofin.allow_mock_providers', 'on', true);
+update servicing.lms_connections set capabilities = '{"statement":true,"closure_documents":true,"foreclosure_quote":true}', status = 'paused' where lender_org_id = 'eab00000-0000-4000-8000-000000000001';
+select set_config('udofin.allow_mock_providers', 'off', true);
+select pg_temp.as_system();
+select is(pg_temp.err(format($$select pg_temp.reg(%L, 'noc', 'mock-doc-3', null, null, null, null, 'mock')$$, pg_temp.lid('SAMPLE-LN-1'))), '55000|feed_not_active', 'a paused feed registers nothing');
+select pg_temp.as_owner();
+select set_config('udofin.allow_mock_providers', 'on', true);
+update servicing.lms_connections set status = 'active' where lender_org_id = 'eab00000-0000-4000-8000-000000000001';
+select set_config('udofin.allow_mock_providers', 'off', true);
+select pg_temp.as_owner();
+select is((select count(*) from servicing.loan_documents where lender_reference = 'SAMPLE-REF-mock-doc' and issuer = 'lender'), 1::bigint, 'every stored document has the lender as issuer');
 select is(pg_temp.err(format($$update servicing.loan_documents set sha256 = %L where id = %L$$, pg_temp.sha('tamper'), pg_temp.got('d1'))), 'P0001|Record a compensating entry instead.', 'a registered document cannot be edited');
 select is(pg_temp.err(format($$delete from servicing.loan_documents where id = %L$$, pg_temp.got('d1'))), 'P0001|Record a compensating entry instead.', 'nor deleted');
 select is((select count(*) from audit.events where action = 'servicing.loan_document.registered' and (metadata::text like '%SAMPLE-REF%' or metadata::text like '%servicing/test%' or metadata::text ~ '[0-9a-f]{64}')), 0::bigint,
@@ -501,7 +531,7 @@ select is((select count(*) from audit.events where action = 'servicing.loan_docu
 
 -- Reads: the borrower sees own documents only, the content path writes the access log.
 select pg_temp.as_user('ea000000-0000-4000-8000-000000000005');
-select is((select string_agg(kind, ',' order by kind) from servicing.my_loan_documents(pg_temp.lid('SAMPLE-LN-1'))), 'closure_letter,statement,statement', 'the borrower lists the lender-issued documents of their loan; the mock one is hidden while mocks are off');
+select is((select string_agg(kind, ',' order by kind) from servicing.my_loan_documents(pg_temp.lid('SAMPLE-LN-1'))), 'statement,statement', 'the borrower lists the lender-issued documents of their loan; the mock one is hidden while mocks are off');
 select is(pg_temp.err(format($$select servicing.my_loan_documents(%L)$$, pg_temp.lid('SAMPLE-LN-2'))), 'P0002|', 'the document list of another borrower''s loan is not found');
 select is((servicing.open_loan_document(pg_temp.got('d1')::uuid) ->> 'sha256'), pg_temp.sha('stmt-1'), 'opening returns the recorded hash for the API to verify the bytes against');
 select is((servicing.open_loan_document(pg_temp.got('d1')::uuid, 'view') ->> 'storage_key'), pg_temp.sk('stmt-1'), 'and the opaque storage key');
@@ -647,7 +677,9 @@ select pg_temp.as_owner();
 select is((select count(*) from servicing.closure_records where loan_account_id = pg_temp.lid('SAMPLE-LN-4')), 0::bigint, 'an active loan has no closure record');
 select is((select count(*) from ops.outbox_events where event_type = 'servicing.loan_closed' and payload ->> 'loan_account_id' = pg_temp.lid('SAMPLE-LN-4')::text), 0::bigint, 'and no closure event');
 select pg_temp.as_system();
+select pg_temp.as_owner();
 update servicing.loan_accounts set status = 'closed' where lms_loan_ref = 'SAMPLE-LN-4';
+select pg_temp.as_system();
 select pg_temp.as_owner();
 select is((select count(*) from servicing.closure_records where loan_account_id = pg_temp.lid('SAMPLE-LN-4')), 1::bigint, 'the lender''s report of closure opens exactly one closure record');
 select is((select closure_kind || ':' || (noc_due_by is null and noc_due_rule_id is null)::text from servicing.closure_records where loan_account_id = pg_temp.lid('SAMPLE-LN-4')), 'closed:false',
@@ -658,18 +690,28 @@ select is((select array_agg(k order by k) from ops.outbox_events e, jsonb_object
 select is((select dedupe_key from ops.outbox_events where event_type = 'servicing.loan_closed' and payload ->> 'loan_account_id' = pg_temp.lid('SAMPLE-LN-4')::text), 'servicing.loan_closed:' || pg_temp.lid('SAMPLE-LN-4')::text, 'with a per-loan dedupe key');
 select is((select count(*) from audit.events where action = 'servicing.closure.opened' and metadata ->> 'loan_account_id' = pg_temp.lid('SAMPLE-LN-4')::text), 1::bigint, 'and an audit event');
 select pg_temp.as_system();
+select pg_temp.as_owner();
 update servicing.loan_accounts set status = 'foreclosed' where lms_loan_ref = 'SAMPLE-LN-4';
+select pg_temp.as_system();
+select pg_temp.as_owner();
 update servicing.loan_accounts set status = 'active' where lms_loan_ref = 'SAMPLE-LN-4';
+select pg_temp.as_system();
+select pg_temp.as_owner();
 update servicing.loan_accounts set status = 'closed' where lms_loan_ref = 'SAMPLE-LN-4';
+select pg_temp.as_system();
 select pg_temp.as_owner();
 select is((select count(*) from servicing.closure_records where loan_account_id = pg_temp.lid('SAMPLE-LN-4')), 1::bigint, 'further status changes (foreclosed, a reversal, closed again) never open a second record');
 select is((select count(*) from ops.outbox_events where event_type = 'servicing.loan_closed' and payload ->> 'loan_account_id' = pg_temp.lid('SAMPLE-LN-4')::text), 1::bigint, 'nor a second event');
 select pg_temp.as_system();
+select pg_temp.as_owner();
 update servicing.loan_accounts set status = 'written_off' where lms_loan_ref = 'SAMPLE-LN-7';
+select pg_temp.as_system();
 select pg_temp.as_owner();
 select is((select count(*) from servicing.closure_records where loan_account_id = pg_temp.lid('SAMPLE-LN-7')), 0::bigint, 'a write-off is not a closure');
 select pg_temp.as_system();
+select pg_temp.as_owner();
 update servicing.loan_accounts set status = 'active' where lms_loan_ref = 'SAMPLE-LN-7';
+select pg_temp.as_system();
 select pg_temp.as_owner();
 
 -- Due dates from the rules. The security-release rule is still a draft: tasks get no due date yet.
@@ -711,6 +753,20 @@ select a.lender_org_id, a.id, a.borrower_id, 'lender_lms', 'SAMPLE-LN-5', 'close
 select is((select count(*) from servicing.closure_records where loan_account_id = pg_temp.lid('SAMPLE-LN-5')), 1::bigint, 'a loan inserted already closed also opens exactly one record');
 select is((select count(*) from ops.outbox_events where event_type = 'servicing.loan_closed' and payload ->> 'loan_account_id' = pg_temp.lid('SAMPLE-LN-5')::text), 1::bigint, 'with one event');
 
+-- Review finding F5: a NOC registered BEFORE the closure was reported is linked when the closure record opens.
+insert into servicing.loan_accounts (lender_org_id, application_id, borrower_id, source_system, lms_loan_ref, status, sanctioned_amount_minor)
+select a.lender_org_id, a.id, a.borrower_id, 'lender_lms', 'SAMPLE-LN-8', 'active', 5000000 from lending.applications a where right(a.id::text, 2)::int = 8;
+select pg_temp.as_user('ea000000-0000-4000-8000-000000000002');
+select pg_temp.keep('d_early', pg_temp.reg(pg_temp.lid('SAMPLE-LN-8'), 'noc', 'noc-early')::text);
+select pg_temp.as_owner();
+select is((select count(*) from servicing.closure_records where loan_account_id = pg_temp.lid('SAMPLE-LN-8')), 0::bigint, 'the loan is still active: no closure record yet');
+update servicing.loan_accounts set status = 'closed' where lms_loan_ref = 'SAMPLE-LN-8';
+select is((select (noc_document_id = pg_temp.got('d_early')::uuid and noc_issued_at is not null)::text from servicing.closure_records where loan_account_id = pg_temp.lid('SAMPLE-LN-8')), 'true',
+  'the NOC the lender registered earlier is linked to the closure record when it opens');
+select pg_temp.as_user('ea000000-0000-4000-8000-000000000005');
+select is((servicing.my_closure(pg_temp.lid('SAMPLE-LN-8')) ->> 'noc_status'), 'issued', 'and the borrower sees the NOC as issued by the lender');
+select pg_temp.as_owner();
+
 -- Fail closed: an approved newest version that is malformed resolves nothing (no fallback to the older version).
 insert into documents.applicability_rules (rule_key, version, lender_category_keys, regulator, direction_ref, paragraph_refs, product_category_keys, exclusions, document_type,
   required_template_key, required_fields_version, validity_rule, effective_from, approval_status, evidence_status, reviewer_ref, proposed_by, approved_by, approved_at)
@@ -718,7 +774,9 @@ values ('servicing.noc_sla_days_default', 2, array['nbfc_icc'], 'Udofin platform
   'none.lender_issued', 'none', '{"kind":"calendar_days","days":"abc"}'::jsonb, date '2026-10-01', 'approved', 'unverified', 'SAMPLE reviewer', 'ea000000-0000-4000-8000-000000000009',
   'ea000000-0000-4000-8000-000000000010', now());
 select pg_temp.as_system();
+select pg_temp.as_owner();
 update servicing.loan_accounts set status = 'closed' where lms_loan_ref = 'SAMPLE-LN-7';
+select pg_temp.as_system();
 select pg_temp.as_owner();
 select is((select (noc_due_by is null and noc_due_rule_id is null)::text from servicing.closure_records where loan_account_id = pg_temp.lid('SAMPLE-LN-7')), 'true',
   'a malformed newest approved rule resolves nothing: the due date is empty rather than taken from an older version');

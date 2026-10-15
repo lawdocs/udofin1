@@ -165,6 +165,28 @@ end
 $$;
 revoke all on function private.servicing_docs_borrower_loan(uuid) from public;
 
+-- The system role may register a document, quotation or release task only on behalf of a machine feed that is ACTIVE and
+-- declares the capability: a mock feed (kind mock, local and test sessions only, by the foundation guard) or, once a connector has been
+-- specified and verified, a finbyx / generic_rest feed. Neither of the last two can be active today (a check on lms_connections), so
+-- in practice the system cannot create a lender-issued record at all in Phase 08a; people and lender files are the only real sources.
+-- p_source null = any machine feed (release tasks carry no source).
+create or replace function private.servicing_machine_feed_ok(p_lender uuid, p_source text, p_capability text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1 from servicing.lms_connections c
+    where c.lender_org_id = p_lender and c.status = 'active'
+      and case p_source when 'mock' then c.kind = 'mock'
+                        when 'lms' then c.kind in ('finbyx', 'generic_rest')
+                        else c.kind in ('mock', 'finbyx', 'generic_rest') end
+      and c.capabilities -> p_capability = 'true'::jsonb);
+$$;
+revoke all on function private.servicing_machine_feed_ok(uuid, text, text) from public;
+
 -- Product category of the loan (from the borrower's loan request that the application came from).
 create or replace function private.servicing_loan_category(p_loan uuid)
 returns text
@@ -595,6 +617,8 @@ declare
   v_rule uuid;
   v_days integer;
   v_due timestamptz;
+  v_noc uuid;
+  v_noc_at timestamptz;
   v_now timestamptz := clock_timestamp();
 begin
   if new.status not in ('closed', 'foreclosed') then return new; end if;
@@ -606,8 +630,15 @@ begin
   else
     v_rule := null;
   end if;
-  insert into servicing.closure_records (lender_org_id, loan_account_id, closure_kind, closed_at, noc_due_by, noc_due_rule_id)
-  values (new.lender_org_id, new.id, new.status::text, v_now, v_due, v_rule)
+  -- A NOC or closure letter the lender registered BEFORE the report of closure reached us is linked now (the newest one that no later
+  -- document supersedes); register_loan_document links the ones registered afterwards.
+  select d.id, d.issued_at into v_noc, v_noc_at
+    from servicing.loan_documents d
+   where d.loan_account_id = new.id and d.kind in ('noc', 'closure_letter')
+     and not exists (select 1 from servicing.loan_documents x where x.supersedes_id = d.id)
+   order by d.issued_at desc, d.id desc limit 1;
+  insert into servicing.closure_records (lender_org_id, loan_account_id, closure_kind, closed_at, noc_due_by, noc_due_rule_id, noc_document_id, noc_issued_at)
+  values (new.lender_org_id, new.id, new.status::text, v_now, v_due, v_rule, v_noc, v_noc_at)
   on conflict (loan_account_id) do nothing
   returning id into v_closure;
   if v_closure is not null then
@@ -657,7 +688,9 @@ create policy security_release_tasks_lender_read on servicing.security_release_t
   using (lender_org_id in (select private.orgs_with_permission('loan.read')));
 
 -- The default privilege gives service_role ALL on new domain tables. It gets read only here (never the storage key): system code
--- must never be able to forge a document, a quote, a request outcome or a release confirmation.
+-- cannot write these tables. It can call the register / record / open functions only for an ACTIVE machine feed that declares the
+-- capability (private.servicing_machine_feed_ok: a mock feed today, never a real LMS until a connector is verified), and it can
+-- never confirm a release or decide a request.
 revoke all on servicing.loan_documents, servicing.loan_document_access, servicing.foreclosure_quotes, servicing.document_requests,
   servicing.closure_records, servicing.security_release_tasks from service_role;
 grant select on servicing.loan_document_access, servicing.foreclosure_quotes, servicing.document_requests,
@@ -965,6 +998,10 @@ begin
   if p_kind is null or p_kind not in ('statement', 'foreclosure_quote', 'noc', 'closure_letter') then
     raise exception 'unknown document kind' using errcode = '22023', hint = 'kind_invalid';
   end if;
+  if v_uid is null and not private.servicing_machine_feed_ok(l.lender_org_id, p_source,
+       case p_kind when 'statement' then 'statement' when 'foreclosure_quote' then 'foreclosure_quote' else 'closure_documents' end) then
+    raise exception 'no active machine feed of this kind reports documents for this lender' using errcode = '55000', hint = 'feed_not_active';
+  end if;
   if p_mime_type is distinct from 'application/pdf' then
     raise exception 'only application/pdf is accepted' using errcode = '22023', hint = 'mime_not_allowed';
   end if;
@@ -1078,6 +1115,8 @@ begin
     end if;
   elsif p_source is null or p_source not in ('lms', 'mock') then
     raise exception 'the system records lms (or mock) quotations only' using errcode = '22023', hint = 'source_invalid';
+  elsif not private.servicing_machine_feed_ok(l.lender_org_id, p_source, 'foreclosure_quote') then
+    raise exception 'no active machine feed of this kind reports quotations for this lender' using errcode = '55000', hint = 'feed_not_active';
   end if;
   if p_lender_quote_ref is null or p_lender_quote_ref !~ '^[A-Za-z0-9._/-]{1,100}$' then
     raise exception 'invalid quotation reference' using errcode = '22023', hint = 'reference_invalid';
@@ -1243,6 +1282,9 @@ begin
   end if;
   v_uid := private.servicing_docs_actor(l.lender_org_id, 'servicing.document.issue', true);
   perform private.require_feature(l.lender_org_id, 'statements_noc');
+  if v_uid is null and not private.servicing_machine_feed_ok(l.lender_org_id, null, 'closure_documents') then
+    raise exception 'no active machine feed reports closure documents for this lender' using errcode = '55000', hint = 'feed_not_active';
+  end if;
   if p_collateral_types is null or cardinality(p_collateral_types) not between 1 and 5
      or exists (select 1 from unnest(p_collateral_types) t where t is null or t not in ('mutual_fund_lien', 'demat_pledge', 'property_documents', 'vehicle_hypothecation', 'other'))
      or (select count(distinct t) from unnest(p_collateral_types) t) <> cardinality(p_collateral_types) then

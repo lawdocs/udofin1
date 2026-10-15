@@ -98,3 +98,10 @@ Differences from the TypeScript rules (all stricter, never looser): zone offsets
 ## 8. Not done here
 
 REST connectors (`finbyx`, `generic_rest`: no specification), `servicing.sync_runs`, `servicing.lms_inbound` (push/pull only), foreclosure quotes, loan documents, closure records (other streams), receipt allocation as reported (format v1 has none), expiry of stale previews, per-field borrower wording for withheld figures, API routes and screens.
+
+## Review fixes after the independent review of this wave (15 October 2026)
+
+- **Disbursement reference at preview (F1).** `servicing_apply_loan` now simulates the unique index `loan_accounts_disbursement_reference` (lender, reference): a new loan whose `disbursement_ref` is already on a stored loan is quarantined with the new reason `disbursement_reference_in_use`, and `stage_import` quarantines the later of two loans of one file that carry the same reference. A collision is therefore a row error at preview, never a constraint failure at commit.
+- **No direct writes (F2).** `service_role` keeps SELECT only on `servicing.loan_accounts`, `schedule_snapshots`, `schedule_installments` and the view `loan_sync_status`; the SECURITY DEFINER sync functions are the only writers. Test fixtures that used to insert these rows as the system role now insert them as the table owner.
+- **Provenance columns (F3).** `authenticated` no longer has table-wide SELECT on `servicing.schedule_snapshots`: it reads `id, lender_org_id, loan_account_id, version, source_reference, received_at, reported_as_of` only. The provenance columns (`recorded_by`, `import_batch_id`, `source_record_id`, `lender_sequence`, `content_sha256`, `source`) name a lender user and an import and are no longer readable by borrowers or by lenders directly; lenders see import provenance through the import tables.
+- 017 now has a fixed plan (it was `no_plan()`).
