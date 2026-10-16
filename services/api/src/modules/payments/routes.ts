@@ -722,7 +722,7 @@ export function paymentsRoutes(deps: { handoff?: HandoffKeyring }): RouteDefinit
       rateLimit: READ_LIMIT,
       handler: async ({ tx, params }) => {
         const r = await tx.query<DebitRow>(
-          `select ${DEBIT_COLUMNS} from payments.my_mandate_debits($1::uuid) order by scheduled_on desc, debit_id desc`,
+          `select ${DEBIT_COLUMNS} from payments.my_mandate_debits($1::uuid)`,
           [params.id],
         );
         return { status: 200, body: { items: r.rows.map(mapDebit) } };

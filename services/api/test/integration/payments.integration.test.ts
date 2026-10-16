@@ -509,6 +509,7 @@ describe.skipIf(!enabled)('borrower payments and mandates over HTTP', () => {
       ).rows[0]?.id;
       if (!borrowerId) throw new Error('no borrower');
       const loans: Record<string, string> = {};
+      const closed: string[] = [];
       for (const [n, spec] of specs.entries()) {
         const request = randomUUID();
         const application = randomUUID();
@@ -540,9 +541,11 @@ describe.skipIf(!enabled)('borrower payments and mandates over HTTP', () => {
             application,
             borrowerId,
             `SAMPLE-LN-${lender.tag}-${label}-${String(n)}`,
-            spec.status ?? 'active',
+            // A loan is closed afterwards with triggers off, so that no closure record or closure event is created.
+            'active',
           ],
         );
+        if (spec.status === 'closed') closed.push(loan);
         const nextDue = spec.nextDue === undefined ? 475_000 : spec.nextDue;
         await c.query(
           `insert into servicing.balance_snapshots (lender_org_id, loan_account_id, version, status, outstanding_principal_minor, total_overdue_minor, next_due_on, next_due_minor,
@@ -580,6 +583,13 @@ describe.skipIf(!enabled)('borrower payments and mandates over HTTP', () => {
           [borrowerId],
         );
       await c.query('commit');
+      if (closed.length > 0)
+        await replica(async (r) => {
+          await r.query(
+            `update servicing.loan_accounts set status = 'closed' where id = any($1::uuid[])`,
+            [closed],
+          );
+        });
       const fixture = { user, id: borrowerId, phone: borrowerPhone, loans };
       for (const loan of Object.values(loans)) loanOwner.set(loan, fixture);
       return fixture;
@@ -813,10 +823,11 @@ describe.skipIf(!enabled)('borrower payments and mandates over HTTP', () => {
         await c.query(
           `update ops.outbox_events set status = 'completed', completed_at = now(), locked_by = null, locked_until = null
             where status in ('pending', 'processing')
-              and coalesce(payload ->> 'intent_id', payload ->> 'mandate_id') in
-                  (select id::text from payments.payment_intents where lender_org_id = any($1::uuid[])
-                   union select id::text from payments.mandates where lender_org_id = any($1::uuid[]))`,
-          [mine],
+              and (coalesce(payload ->> 'intent_id', payload ->> 'mandate_id') in
+                    (select id::text from payments.payment_intents where lender_org_id = any($1::uuid[])
+                     union select id::text from payments.mandates where lender_org_id = any($1::uuid[]))
+                   or payload ->> 'lender_org_id' = any($2::text[]))`,
+          [mine, mine],
         );
         for (const table of [
           'payments.reconciliation_exception_events',
