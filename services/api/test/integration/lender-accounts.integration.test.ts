@@ -2507,6 +2507,25 @@ describe.skipIf(!enabled)(
           await post(`/v1/lender/payment-configs/${drafted.id}/decide`, ids.l2, { approve: true }),
         );
         state.config3 = drafted.id;
+        // The platform kill switch is also reachable on the lender path; it is the same function, so a lender user is refused there.
+        const lenderPath = { reason: 'suspended through the lender path for this test' };
+        for (const user of [ids.l1, ids.l2, ids.b2]) {
+          expect(
+            (await post(`/v1/lender/payment-configs/${state.config3}/suspend`, user, lenderPath))
+              .statusCode,
+            user,
+          ).toBe(403);
+        }
+        const viaLenderPath = ok(
+          await post(`/v1/lender/payment-configs/${state.config3}/suspend`, ids.p1, lenderPath),
+        );
+        expect(viaLenderPath.json()).toEqual({ id: state.config3, status: 'suspended' });
+        ok(await post(`/v1/lender/payment-configs/${state.config3}/submit`, ids.l3));
+        ok(
+          await post(`/v1/lender/payment-configs/${state.config3}/decide`, ids.l2, {
+            approve: true,
+          }),
+        );
         expect(
           (
             await post(`/v1/platform/accounts/${state.regE}/revoke`, ids.l1, {

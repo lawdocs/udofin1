@@ -531,6 +531,34 @@ export function lenderAccountsRoutes(deps: LenderAccountsDeps = {}): RouteDefini
       },
     });
 
+  /** The platform kill switch. Also reachable under the lender path (same function, same permission: a lender user is refused). */
+  const suspendRoute = (path: string, operationId: string, tag: string): RouteDefinition =>
+    userRoute({
+      method: 'post',
+      path,
+      operationId,
+      summary:
+        'Platform kill switch: suspend an active configuration (platform.payments.providers.manage, aal2, one person)',
+      description:
+        'A suspended configuration needs a fresh two-person approval before it can be used again. Only a platform person with the provider permission can do this; a lender user is refused.',
+      tags: [tag],
+      auth: 'staff',
+      idempotent: true,
+      params: Id,
+      body: AccountsReasonInput,
+      responses: { 200: AccountsActionResult },
+      errors: [400, 401, 403, 404, 409, 422],
+      rateLimit: WRITE_LIMIT,
+      handler: async ({ tx, params, body }) => {
+        const status = await one<string>(
+          tx,
+          'select payments.suspend_payment_config($1::uuid, $2) as r',
+          [params.id, body.reason],
+        );
+        return { status: 200, body: out(AccountsActionResult, { id: params.id, status }) };
+      },
+    });
+
   return [
     // ---- payment providers and return-code classes (platform) -------------------------------------------------------
     userRoute({
@@ -1519,31 +1547,16 @@ export function lenderAccountsRoutes(deps: LenderAccountsDeps = {}): RouteDefini
         return { status: 200, body: out(AccountsActionResult, { id: params.id, status }) };
       },
     }),
-    userRoute({
-      method: 'post',
-      path: '/v1/platform/payment-configs/:id/suspend',
-      operationId: 'suspendPaymentConfig',
-      summary:
-        'Platform kill switch: suspend an active configuration (platform.payments.providers.manage, aal2, one person)',
-      description:
-        'A suspended configuration needs a fresh two-person approval before it can be used again.',
-      tags: ['Platform payments'],
-      auth: 'staff',
-      idempotent: true,
-      params: Id,
-      body: AccountsReasonInput,
-      responses: { 200: AccountsActionResult },
-      errors: [400, 401, 403, 404, 409, 422],
-      rateLimit: WRITE_LIMIT,
-      handler: async ({ tx, params, body }) => {
-        const status = await one<string>(
-          tx,
-          'select payments.suspend_payment_config($1::uuid, $2) as r',
-          [params.id, body.reason],
-        );
-        return { status: 200, body: out(AccountsActionResult, { id: params.id, status }) };
-      },
-    }),
+    suspendRoute(
+      '/v1/platform/payment-configs/:id/suspend',
+      'suspendPaymentConfig',
+      'Platform payments',
+    ),
+    suspendRoute(
+      '/v1/lender/payment-configs/:id/suspend',
+      'suspendPaymentConfigOnLenderPath',
+      'Lender payments',
+    ),
     userRoute({
       method: 'post',
       path: '/v1/platform/payment-configs/:id/retire',
