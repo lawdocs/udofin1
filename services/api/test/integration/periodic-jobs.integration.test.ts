@@ -1440,8 +1440,13 @@ describe.skipIf(!enabled)('scheduled jobs and servicing handlers against a real 
       ]) {
         expect(text).not.toContain(secret);
       }
-      expect(text).not.toMatch(/\b[6-9][0-9]{9}\b/);
-      expect(text).not.toMatch(/\b[0-9]{9,18}\b/);
+      // Ids are random UUIDs whose last group can be twelve digits by chance, so they are removed before the digit-run checks.
+      const withoutIds = text.replace(
+        /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
+        '',
+      );
+      expect(withoutIds).not.toMatch(/\b[6-9][0-9]{9}\b/);
+      expect(withoutIds).not.toMatch(/\b[0-9]{9,18}\b/);
       const tables = [
         'ops.outbox_events',
         'payments.reconciliation_exceptions',

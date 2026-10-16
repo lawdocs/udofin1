@@ -306,7 +306,11 @@ describe.skipIf(!enabled)(
       );
       expect(rows.length).toBeGreaterThan(0);
       expect(new Set(rows.map((r) => r.status))).toEqual(new Set(['unverified']));
-      expect(seen.join('\n')).not.toMatch(/[0-9]{9,}/);
+      // Ids are random UUIDs whose digit runs can be long, so they are removed before looking for an account-number-like run.
+      const withoutIds = seen
+        .join('\n')
+        .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '');
+      expect(withoutIds).not.toMatch(/[0-9]{9,}/);
     });
   },
 );
