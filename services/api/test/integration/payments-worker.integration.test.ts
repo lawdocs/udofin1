@@ -315,6 +315,14 @@ describe.skipIf(!enabled)('payments worker over a real database', () => {
       `select status, provider_mandate_ref, cancel_requested_at, cancel_sent_at from payments.mandates where id = $1`,
       [id],
     );
+  /** The mandate's history as "source:new status" in order (the first row is the borrower's request, which has no earlier status). */
+  const historySources = async (mandate: string) =>
+    (
+      await q<{ source: string; to_status: string }>(
+        `select source, to_status from payments.mandate_events where mandate_id = $1 order by created_at, id`,
+        [mandate],
+      )
+    ).map((r) => `${r.source}:${r.to_status}`);
   const linkRow = async (kind: string, subject: string) =>
     (
       await q<{
@@ -1293,6 +1301,8 @@ describe.skipIf(!enabled)('payments worker over a real database', () => {
       }
       expect(await mandateRow(id)).toMatchObject({ status: 'failed', provider_mandate_ref: null });
       expect(await linkRow('mandate', id)).toBeUndefined();
+      // A provider's own refusal is recorded with the source "handoff" (compare "no provider configured" below).
+      expect(await historySources(id)).toEqual(['request:draft', 'handoff:failed']);
     });
 
     it('an unknown outcome is parked for reconciliation with a platform exception: not retried, not rejected, no link', async () => {
@@ -1323,7 +1333,7 @@ describe.skipIf(!enabled)('payments worker over a real database', () => {
       expect(scripted.requests).toHaveLength(1);
     });
 
-    it('no provider configured: nothing was sent, so the draft is closed as failed (the database has no word for it)', async () => {
+    it('no provider configured: nothing was sent, so the draft is closed as failed with the system as the source (not a refusal)', async () => {
       const id = await requestMandate(A, 3);
       overrides.set(A.configId, { mandate: createUnconfiguredMandateProvider() });
       try {
@@ -1332,6 +1342,14 @@ describe.skipIf(!enabled)('payments worker over a real database', () => {
         overrides.delete(A.configId);
       }
       expect(await mandateRow(id)).toMatchObject({ status: 'failed', provider_mandate_ref: null });
+      expect(await historySources(id)).toEqual(['request:draft', 'system:failed']);
+      // Nothing is unresolved, so no exception was opened for it.
+      expect(
+        await q(
+          `select 1 from payments.reconciliation_exceptions where lender_org_id = $1 and subject ->> 'mandate_id' = $2`,
+          [A.id, id],
+        ),
+      ).toHaveLength(0);
     });
 
     it('the database guard still stops a mock mandate from moving in a session that does not allow mock providers; the retry then succeeds', async () => {

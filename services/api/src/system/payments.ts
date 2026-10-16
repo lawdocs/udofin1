@@ -16,7 +16,7 @@ export type OrderFailureClass =
   'provider_rejected' | 'provider_unavailable' | 'merchant_mismatch' | 'invalid_request';
 
 /** The closed list `payments.record_mandate_handoff` accepts. */
-export type MandateHandoffOutcome = 'handoff' | 'rejected' | 'unknown';
+export type MandateHandoffOutcome = 'handoff' | 'rejected' | 'unknown' | 'not_sent';
 
 export type MandateRailName = 'enach_api' | 'upi_autopay';
 

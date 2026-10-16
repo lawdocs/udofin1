@@ -4,7 +4,7 @@
 -- SAMPLE). Error codes are reported as SQLSTATE|hint.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(223);
+select plan(228);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -712,6 +712,24 @@ select is((select count(*) > 0 from audit.events where action like 'payments.man
 select is((select count(*) from audit.events where action like 'payments.mandate%' and (metadata::text ~ 'XXXXXX' or metadata::text ~ 'SAMPLE-PM' or metadata::text ~ 'SAMPLE-MERCHANT')), 0::bigint, 'and no audit event carries an account reference, a provider reference or the creditor reference');
 select is((select count(*) from payments.reconciliation_exceptions where subject::text ~ '[A-Za-z]{4,}' and not (subject::text ~ '^\{("[a-z_]+": "[0-9a-f-]+"(, )?)+\}$')), 0::bigint, 'exception subjects hold ids only');
 select is((select count(*) from ops.outbox_events where event_type = 'mandate.cancel' and payload::text !~ '^\{"mandate_id": "[0-9a-f-]{36}"\}$'), 0::bigint, 'the queued cancellation names the mandate by id and nothing else');
+
+-- A hand-off that never reached a provider (migration 918): failed with the system as the source, distinguishable from a refusal.
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+insert into payments.mandates (id, lender_org_id, config_id, borrower_id, loan_account_id, rail, status, provider, provider_mode, creditor_ref,
+                               max_amount_minor, start_date, end_date, masked_account_ref, needs_afa_each_debit, created_by)
+select pg_temp.mid(11), pg_temp.ly(), c.id, pg_temp.got('b1')::uuid, pg_temp.lid(4), 'enach_api', 'draft', c.provider, 'mock', 'SAMPLE-CREDITOR',
+       100000, current_date + 1, current_date + 100, 'XXXXXX1234', false, pg_temp.u(1)
+from payments.lender_payment_configs c where c.lender_org_id = pg_temp.ly();
+set local session_replication_role = origin;
+select pg_temp.as_system();
+select is(pg_temp.err(format($$select payments.record_mandate_handoff(%L, 'not_sent', 'SAMPLE-PM-11')$$, pg_temp.mid(11))), '22023|bad_request', 'a hand-off that was not sent cannot carry a provider reference');
+select is(payments.record_mandate_handoff(pg_temp.mid(11), 'not_sent'), 'failed', 'nothing reached a provider: the draft fails');
+select is(pg_temp.mstatus(pg_temp.mid(11)), 'failed', 'and is failed');
+select pg_temp.as_owner();
+select is(pg_temp.mhist(pg_temp.mid(11)), 'draft>failed/system', 'with the system as the source (a refusal by the provider is recorded with the source "handoff")');
+select pg_temp.as_system();
+select is(payments.record_mandate_handoff(pg_temp.mid(11), 'not_sent'), 'failed', 'a repeat answers the current status and changes nothing');
 
 select * from finish();
 rollback;

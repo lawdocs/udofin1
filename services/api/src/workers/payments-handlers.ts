@@ -418,9 +418,15 @@ export function createPaymentsHandlers(
         throw error;
       }
     };
-    /** A mandate no provider will ever see: nothing was sent, so nothing is unknown. The database has no separate word for it, see the notes. */
-    const refuse = async (why: string): Promise<void> => {
-      const status = await record('rejected', null, null);
+    /**
+     * A hand-off that did not happen. Nothing reached any provider ('not_sent': no configuration, an inactive one, no provider here, a
+     * rail the provider cannot carry), so nothing is unknown and nothing was refused; only a provider's own refusal is 'rejected'.
+     */
+    const refuse = async (
+      why: string,
+      outcome: 'not_sent' | 'rejected' = 'not_sent',
+    ): Promise<void> => {
+      const status = await record(outcome, null, null);
       log.warn({ ...fields, why, mandateStatus: status }, 'mandate hand-off not possible');
     };
 
@@ -492,7 +498,7 @@ export function createPaymentsHandlers(
         return;
       }
       case 'rejected':
-        return refuse(result.reason);
+        return refuse(result.reason, 'rejected');
       case 'unsupported':
       case 'not_configured':
         return refuse(result.outcome);

@@ -1106,7 +1106,7 @@ describe('mandate.handoff', () => {
     );
   });
 
-  it('no configuration, a configuration that is not active, or no resolvable provider: nothing sent, the draft is closed as rejected', async () => {
+  it('no configuration, a configuration that is not active, or no resolvable provider: nothing sent, the draft is closed as not sent', async () => {
     for (const [mandate, ports] of [
       [mandateRecord({ config: undefined }), { mandate: mandatePort() }],
       [mandateRecord({ config: config({ status: 'suspended' }) }), { mandate: mandatePort() }],
@@ -1119,7 +1119,7 @@ describe('mandate.handoff', () => {
       expect(processor.calls.at(-1)).toEqual([
         'recordMandateHandoff',
         MANDATE,
-        'rejected',
+        'not_sent',
         null,
         null,
       ]);
@@ -1186,7 +1186,7 @@ describe('mandate.handoff', () => {
     ]);
   });
 
-  it('no provider configured (the placeholder) is recorded as rejected: nothing was sent, so nothing is unknown', async () => {
+  it('no provider configured (the placeholder) is recorded as not sent: nothing reached a provider, so nothing is unknown and nothing was refused', async () => {
     const resolver = createProviderResolver({ environment: 'test', secret: () => undefined });
     const processor = fakeProcessor({
       mandate: mandateRecord({ config: config({ providerMode: 'sandbox' }) }),
@@ -1203,7 +1203,7 @@ describe('mandate.handoff', () => {
     expect(processor.calls.at(-1)).toEqual([
       'recordMandateHandoff',
       MANDATE,
-      'rejected',
+      'not_sent',
       null,
       null,
     ]);
