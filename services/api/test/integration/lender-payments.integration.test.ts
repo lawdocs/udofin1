@@ -1448,6 +1448,39 @@ describe.skipIf(!enabled)(
         ).toEqual(before);
       });
 
+      it('answers a lender that does not exist exactly like a lender the caller may not touch', async () => {
+        const other = await post('/v1/lender/payment-policy', ids.bPayer, policy);
+        const unknown = await post('/v1/lender/payment-policy', ids.bPayer, {
+          ...policy,
+          lenderId: randomUUID(),
+        });
+        expect([unknown.statusCode, code(unknown)]).toEqual([other.statusCode, code(other)]);
+        expect(unknown.statusCode).toBe(403);
+        const unknownRead = await get(
+          `/v1/lender/payment-policy?lenderId=${randomUUID()}`,
+          ids.bViewer,
+        );
+        const otherRead = await get(
+          `/v1/lender/payment-policy?lenderId=${ids.lenderA}`,
+          ids.bViewer,
+        );
+        expect([unknownRead.statusCode, code(unknownRead)]).toEqual([
+          otherRead.statusCode,
+          code(otherRead),
+        ]);
+        const unknownUpload = await call(
+          'POST',
+          '/v1/lender/reconciliation/bank-credits',
+          ids.bRecon,
+          {
+            lenderId: randomUUID(),
+            accountId: A.account,
+            rows: [{ valueDate: runDate, amountMinor: 1000, utr: 'UNKNOWNLENDER01' }],
+          },
+        );
+        expect(unknownUpload.statusCode).toBe(403);
+      });
+
       it('refuses values the database refuses, with its stable code', async () => {
         const noMinimum = await post('/v1/lender/payment-policy', ids.aPayer, {
           lenderId: ids.lenderA,
@@ -2649,6 +2682,9 @@ describe.skipIf(!enabled)(
         // Lender B's reconciler cannot even see lender A's exception.
         const hidden = await fresh('lender');
         expect((await act(hidden, 'acknowledge', ids.bRecon)).statusCode).toBe(404);
+        // An exception that does not exist answers exactly like one the caller may not see.
+        expect((await act(randomUUID(), 'acknowledge', ids.bRecon)).statusCode).toBe(404);
+        expect((await act(randomUUID(), 'resolve', ids.bRecon, lenderBody)).statusCode).toBe(404);
         expect((await act(hidden, 'acknowledge', ids.aRecon)).statusCode).toBe(200);
       });
 

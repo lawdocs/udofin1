@@ -1793,7 +1793,7 @@ export function lenderPaymentsRoutes(_deps: Record<string, never>): RouteDefinit
       operationId: 'listPlatformPaymentExceptions',
       summary: 'Open platform-owned payment exceptions across lenders, newest first',
       description:
-        'Needs platform.payments.providers.manage. Lists exceptions the platform owns (merchant mismatch, payload conflict, settlement account mismatch and the unresolved mandate outcomes) that are not resolved yet, for every lender. They are worked with the same acknowledge, assign, resolve and reopen routes.',
+        'Needs platform.payments.providers.manage. Lists exceptions the platform owns (for example merchant mismatch, payload conflict and settlement account mismatch) that are not resolved yet, for every lender. They are worked with the same acknowledge, assign, resolve and reopen routes.',
       tags: ['Exceptions (platform)'],
       auth: 'staff',
       query: LpPlatformExceptionListQuery,
