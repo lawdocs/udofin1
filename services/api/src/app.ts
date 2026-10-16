@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
-import { type DocumentStore } from '@udofin/adapters';
+import { type DocumentStore, type HandoffKeyring } from '@udofin/adapters';
 import { type BorrowerDeps } from './modules/borrower/deps.js';
 import { PROBLEM_CONTENT_TYPE, type ProblemDetails } from '@udofin/contracts';
 import { z } from 'zod';
@@ -32,6 +32,8 @@ export interface AppDependencies {
   borrower?: BorrowerDeps;
   /** Which signing provider mode the API asks the database to start. Absent: signing is unavailable. */
   signing?: { providerKey: string; mode: 'mock' | 'sandbox' | 'live' };
+  /** Opens the sealed provider hand-off links (payment checkout, mandate authorisation). Absent: those routes answer 503. */
+  handoff?: HandoffKeyring;
 }
 
 export const API_VERSION = '0.5.0';
@@ -197,6 +199,7 @@ export async function buildApp(
       ...(deps.documents ? { documents: deps.documents } : {}),
       ...(deps.borrower ? { borrower: deps.borrower } : {}),
       ...(deps.signing ? { signing: deps.signing } : {}),
+      ...(deps.handoff ? { handoff: deps.handoff } : {}),
     }),
   ];
   if (config.APP_ENV !== 'production') {

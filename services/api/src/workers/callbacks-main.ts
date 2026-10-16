@@ -3,6 +3,7 @@ import { assertSystemLoginPosture } from '../db/login-posture.js';
 import { createRoutingProcessor } from '../system/routing.js';
 import { createSystemPool } from '../system/pool.js';
 import { buildCallbackApp } from './lender-callbacks.js';
+import { registerProviderHooks } from './provider-callbacks.js';
 
 /** Entry point of the lender callback receiver: `pnpm --filter @udofin/api callbacks`. Uses the system login. */
 {
@@ -17,6 +18,12 @@ import { buildCallbackApp } from './lender-callbacks.js';
   const app = await buildCallbackApp(config, {
     routing: createRoutingProcessor(pool),
     // Secret references are names of environment variables set by the deployment; values are never read into config files.
+    secret: (name) => process.env[name],
+    environment: config.APP_ENV,
+  });
+  // Phase 08a: signed payment-provider and mandate events (verified here, applied by the database).
+  registerProviderHooks(app, {
+    pool,
     secret: (name) => process.env[name],
     environment: config.APP_ENV,
   });

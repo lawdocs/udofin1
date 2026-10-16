@@ -1,4 +1,4 @@
-import { loadConfig } from '../config.js';
+import { handoffKeyringOf, loadConfig } from '../config.js';
 import { assertSystemLoginPosture } from '../db/login-posture.js';
 import { createBorrowerProcessor } from '../system/borrower.js';
 import { createChangeRequestApplier } from '../system/change-requests.js';
@@ -15,6 +15,8 @@ import { createDocumentProcessor } from '../system/documents.js';
 import { createRoutingProcessor } from '../system/routing.js';
 import { createHandlers } from './handlers.js';
 import { createConnectorResolver } from './routing-handlers.js';
+import { startPeriodicJobs } from './periodic-jobs.js';
+import { createProviderResolver } from './provider-resolver.js';
 import { OutboxWorker, type WorkerLogger } from './outbox-worker.js';
 import { createPgOutboxStore } from './pg-outbox-store.js';
 
@@ -43,7 +45,15 @@ const documentProcessor = createDocumentProcessor(pool);
 const documentStore = config.LOCAL_DOCUMENT_DIR
   ? createLocalDocumentStore(config.LOCAL_DOCUMENT_DIR, config.APP_ENV)
   : undefined;
+// Phase 08a: the worker alone resolves payment and mandate providers (by secret NAME) and seals hand-off links.
+const providers = createProviderResolver({
+  environment: config.APP_ENV,
+  secret: (name) => process.env[name],
+});
+const keyring = handoffKeyringOf(config);
 const handlers = createHandlers({
+  payments: { pool, providers, keyring },
+  servicing: { pool },
   applier,
   borrower,
   routing,
@@ -82,11 +92,14 @@ const worker = new OutboxWorker({
   log,
 });
 
+const periodicJobs = startPeriodicJobs({ pool, providers, environment: config.APP_ENV, log });
+
 let stopping = false;
 async function shutdown(signal: string): Promise<void> {
   if (stopping) return;
   stopping = true;
   log.info({ signal }, 'worker stopping');
+  periodicJobs.stop();
   await worker.stop();
   await pool.end();
   process.exit(0);

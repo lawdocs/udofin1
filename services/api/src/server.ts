@@ -8,7 +8,7 @@ import {
 import pg from 'pg';
 import { buildApp, type ReadinessCheck } from './app.js';
 import { createTokenVerifier, supabaseKeys } from './auth/token-verifier.js';
-import { loadConfig, sessionIdRequired } from './config.js';
+import { handoffKeyringOf, loadConfig, sessionIdRequired } from './config.js';
 import { assertUserLoginPosture } from './db/login-posture.js';
 import { createUserContext, createWebhookDedup } from './db/user-context.js';
 
@@ -85,8 +85,11 @@ const borrower = {
   smsTimeoutMs: 4000,
 };
 
+const handoff = handoffKeyringOf(config);
+
 const app = await buildApp(config, {
   borrower,
+  ...(handoff ? { handoff } : {}),
   readinessChecks,
   ...(auth ? { auth } : {}),
   ...(documents ? { documents } : {}),

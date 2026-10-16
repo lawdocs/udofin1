@@ -733,6 +733,8 @@ begin
     raise exception 'the loan already has a mandate in progress' using errcode = '23505', hint = 'mandate_exists';
   end;
   insert into payments.mandate_events (mandate_id, lender_org_id, from_status, to_status, source) values (p_mandate, l.lender_org_id, null, 'draft', 'request');
+  -- The worker (which alone holds the lender's provider credentials) asks the provider for the hand-off; ids only, never the link.
+  perform ops.enqueue_event('mandate.handoff', jsonb_build_object('mandate_id', p_mandate), null, 'mandate.handoff:' || p_mandate::text);
   perform private.write_payments_audit(l.lender_org_id, 'payments.mandate.requested', 'mandate', p_mandate::text, jsonb_build_object('rail', p_rail, 'provider_mode', v_cfg.provider_mode::text));
   return p_mandate;
 end

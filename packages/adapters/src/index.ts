@@ -12,3 +12,4 @@ export * from './payments.js';
 export * from './mandates.js';
 export * from './notifications.js';
 export * from './account-fingerprint.js';
+export * from './handoff-vault.js';

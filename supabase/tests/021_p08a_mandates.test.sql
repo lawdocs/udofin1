@@ -4,7 +4,7 @@
 -- SAMPLE). Error codes are reported as SQLSTATE|hint.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(222);
+select plan(223);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -325,6 +325,10 @@ select pg_temp.as_owner();
 select is((select count(*) from identity.stepup_challenges where context_ref = pg_temp.mid(1)::text and status = 'consumed'), 1::bigint, 'the step-up code was consumed (single use)');
 select pg_temp.as_user(pg_temp.u(1));
 select is(payments.request_mandate(pg_temp.mid(1), pg_temp.lid(1), 'enach_api', 4000000, pg_temp.d() + 1, pg_temp.d() + 365, 'XXXXXX9999'), pg_temp.mid(1), 'the same request again returns the same mandate and needs no new code');
+select pg_temp.as_owner();
+select is((select count(*) from ops.outbox_events where event_type = 'mandate.handoff' and dedupe_key = 'mandate.handoff:' || pg_temp.mid(1)::text and payload::text ~ '^\{"mandate_id": "[0-9a-f-]{36}"\}$'), 1::bigint,
+  'the provider hand-off is queued once for the worker, naming the mandate by id and nothing else (a replay queues no second one)');
+select pg_temp.as_user(pg_temp.u(1));
 select is(pg_temp.err(format($$select payments.request_mandate(%L, %L, 'enach_api', 3000000, %L, %L, 'XXXXXX9999')$$, pg_temp.mid(1), pg_temp.lid(1), pg_temp.d() + 1, pg_temp.d() + 365)), '23505|idempotency_conflict', 'the same id with a different amount is a conflict');
 select is(pg_temp.err(format($$select payments.request_mandate(%L, %L, 'enach_api', 4000000, %L, %L, 'XXXXXX1111')$$, pg_temp.mid(1), pg_temp.lid(1), pg_temp.d() + 1, pg_temp.d() + 365)), '23505|idempotency_conflict', 'and so is the same id with a different account');
 select pg_temp.as_owner();

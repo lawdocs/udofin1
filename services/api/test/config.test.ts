@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { ConfigError, loadConfig, sessionIdRequired } from '../src/config.js';
+import { randomBytes } from 'node:crypto';
+import { ConfigError, handoffKeyringOf, loadConfig, sessionIdRequired } from '../src/config.js';
 
 describe('loadConfig', () => {
   it('applies safe local defaults', () => {
@@ -137,5 +138,44 @@ describe('loadConfig', () => {
     expect(sessionIdRequired({ APP_ENV: 'staging' })).toBe(true);
     expect(sessionIdRequired({ APP_ENV: 'local' })).toBe(false);
     expect(sessionIdRequired({ APP_ENV: 'test' })).toBe(false);
+  });
+});
+
+describe('hand-off link keys (Phase 08a)', () => {
+  const key = randomBytes(32).toString('base64');
+
+  it('are optional: without them no link can be created or shown', () => {
+    expect(handoffKeyringOf(loadConfig({}))).toBeUndefined();
+  });
+
+  it('accept a JSON object of key versions and an active version', () => {
+    const config = loadConfig({
+      HANDOFF_ENCRYPTION_KEYS: JSON.stringify({ v1: key }),
+      HANDOFF_ACTIVE_KEY_VERSION: 'v1',
+    });
+    expect(handoffKeyringOf(config)?.activeVersion).toBe('v1');
+  });
+
+  it('refuse half a configuration, a short key and an unknown active version, without echoing the key', () => {
+    const bad = [
+      { HANDOFF_ENCRYPTION_KEYS: JSON.stringify({ v1: key }) },
+      { HANDOFF_ACTIVE_KEY_VERSION: 'v1' },
+      {
+        HANDOFF_ENCRYPTION_KEYS: JSON.stringify({ v1: key.slice(0, 20) }),
+        HANDOFF_ACTIVE_KEY_VERSION: 'v1',
+      },
+      { HANDOFF_ENCRYPTION_KEYS: JSON.stringify({ v1: key }), HANDOFF_ACTIVE_KEY_VERSION: 'v2' },
+      { HANDOFF_ENCRYPTION_KEYS: 'not json', HANDOFF_ACTIVE_KEY_VERSION: 'v1' },
+    ];
+    for (const env of bad) {
+      let message = '';
+      try {
+        loadConfig(env);
+      } catch (error) {
+        message = (error as Error).message;
+      }
+      expect(message).toMatch(/HANDOFF_ENCRYPTION_KEYS/);
+      expect(message).not.toContain(key.slice(0, 20));
+    }
   });
 });

@@ -6,6 +6,8 @@ import { createRoutingHandlers, type ConnectorResolver } from './routing-handler
 import { type RoutingProcessor } from '../system/routing.js';
 import { type DocumentProcessor } from '../system/documents.js';
 import { createDocumentHandlers } from './documents-handlers.js';
+import { createPaymentsHandlers, type PaymentsHandlerDeps } from './payments-handlers.js';
+import { createServicingHandlers, type ServicingHandlerDeps } from './servicing-handlers.js';
 import { type DocumentStore, type SigningProvider, type SmsSender } from '@udofin/adapters';
 
 const ChangeRequestApproved = z.strictObject({ change_request_id: z.uuid() });
@@ -33,9 +35,15 @@ export function createHandlers(deps: {
     signing: SigningProvider;
     sms: SmsSender;
   };
+  /** Phase 08a: payment orders, provider events and mandates. Absent in tests of other modules. */
+  payments?: PaymentsHandlerDeps;
+  /** Phase 08a: servicing events (imports, closures, conflicts). Absent in tests of other modules. */
+  servicing?: ServicingHandlerDeps;
 }): Record<string, HandlerDefinition> {
   return {
     ...createRoutingHandlers({ routing: deps.routing, connectors: deps.connectors }),
+    ...(deps.payments ? createPaymentsHandlers(deps.payments) : {}),
+    ...(deps.servicing ? createServicingHandlers(deps.servicing) : {}),
     ...(deps.documents
       ? createDocumentHandlers({
           documents: deps.documents.processor,

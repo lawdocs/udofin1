@@ -1,3 +1,4 @@
+import { parseHandoffKeyring } from '@udofin/adapters';
 import { z } from 'zod';
 
 /**
@@ -54,6 +55,14 @@ const ConfigSchema = z
     STEPUP_OTP_PEPPER: z.string().min(32).optional(),
     /** Signing secret of the Supabase "Send SMS" auth hook (Standard Webhooks format, v1,whsec_...). */
     SEND_SMS_HOOK_SECRET: z.string().min(16).optional(),
+    /**
+     * Phase 08a: keys that seal provider hand-off links (payment checkout, mandate authorisation) before they rest in the database.
+     * A JSON object of key version to base64 key (32 bytes), from a secrets manager. The worker seals with the active version; the
+     * API opens any listed version. Without them no link can be created or shown (the routes answer 503 handoff_unavailable).
+     */
+    HANDOFF_ENCRYPTION_KEYS: z.string().min(1).optional(),
+    /** The key version used to seal new links; must be a key in HANDOFF_ENCRYPTION_KEYS. */
+    HANDOFF_ACTIVE_KEY_VERSION: z.string().min(1).optional(),
   })
   .superRefine((config, ctx) => {
     const deployed = config.APP_ENV === 'staging' || config.APP_ENV === 'production';
@@ -67,6 +76,17 @@ const ConfigSchema = z
         code: 'custom',
         path: ['SMS_PROVIDER'],
         message: 'mock providers are for local development and tests only',
+      });
+    }
+    try {
+      parseHandoffKeyring(config.HANDOFF_ENCRYPTION_KEYS, config.HANDOFF_ACTIVE_KEY_VERSION);
+    } catch {
+      // The message never echoes a key.
+      ctx.addIssue({
+        code: 'custom',
+        path: ['HANDOFF_ENCRYPTION_KEYS'],
+        message:
+          'must be a JSON object of key version to base64 32-byte key, with HANDOFF_ACTIVE_KEY_VERSION naming one of them',
       });
     }
     if (deployed && config.LOCAL_DOCUMENT_DIR) {
@@ -170,4 +190,11 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     throw new ConfigError(`Invalid configuration:\n  - ${problems.join('\n  - ')}`);
   }
   return { ...result.data, TRUST_PROXY_HOPS: result.data.TRUST_PROXY_HOPS ?? 0 };
+}
+
+/** The hand-off keyring, or undefined when none is configured (validated by loadConfig). */
+export function handoffKeyringOf(
+  config: Pick<AppConfig, 'HANDOFF_ENCRYPTION_KEYS' | 'HANDOFF_ACTIVE_KEY_VERSION'>,
+): ReturnType<typeof parseHandoffKeyring> {
+  return parseHandoffKeyring(config.HANDOFF_ENCRYPTION_KEYS, config.HANDOFF_ACTIVE_KEY_VERSION);
 }
