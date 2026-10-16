@@ -124,6 +124,7 @@ insert into expected_tables values
   ('payments.mandate_events', '-', 's', 's', true),
   ('payments.mandate_return_codes', '-', 's', 's', true),
   ('payments.mandate_debits', '-', 's', 's', true),
+  ('payments.handoff_links', '-', '-', '-', true),
   ('payments.pre_debit_notices', '-', 's', 's', true),
   ('payments.reconciliation_settings', '-', 's', 's', true),
   ('payments.settlement_batches', '-', 's', 's', true),
