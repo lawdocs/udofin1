@@ -305,6 +305,7 @@ const RULE_HINTS: Readonly<Record<string, { showMessage: boolean }>> = {
   sandbox_provider_blocked: { showMessage: false },
   secret_ref_invalid: { showMessage: false },
   settings_invalid: { showMessage: false },
+  intent_not_cancellable: { showMessage: false },
   settlement_account_exists: { showMessage: false },
   settlement_account_invalid: { showMessage: false },
   settlement_account_mismatch: { showMessage: false },
