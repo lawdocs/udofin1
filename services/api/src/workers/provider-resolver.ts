@@ -5,6 +5,8 @@ import {
   createUnconfiguredMandateProvider,
   createUnconfiguredPaymentProvider,
   MOCK_PAYMENT_PROVIDER_KEY,
+  withMandateTimeout,
+  withPaymentTimeout,
   type AppEnvironment,
   type MandateProviderPort,
   type PaymentProviderPort,
@@ -57,7 +59,14 @@ export interface ProviderResolverDeps {
   readonly environment: AppEnvironment;
   /** Resolves the NAME of a secret to its value. Never logged. */
   secret(name: string): string | undefined;
+  /**
+   * Bound on every provider call, in milliseconds (default 15 000). Every port the resolver hands out is wrapped with it, so a port that
+   * never answers cannot hold a worker job: the call ends as an unknown outcome (timeout), which the callers already treat as "look it up".
+   */
+  readonly providerTimeoutMs?: number;
 }
+
+const DEFAULT_PROVIDER_TIMEOUT_MS = 15_000;
 
 /**
  * A real adapter for one provider key (`sandbox` or `live` mode). NONE EXISTS TODAY: the registry below is empty and a real
@@ -101,6 +110,7 @@ export function createProviderResolverWith(
   // delivery of the same outbox event meets the same "provider" it met the first time. One instance per configuration.
   const mockPayments = new Map<string, PaymentProviderPort>();
   const mockMandates = new Map<string, MandateProviderPort>();
+  const timeoutMs = deps.providerTimeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS;
 
   function resolve<P>(
     config: PaymentConfigRow,
@@ -109,6 +119,7 @@ export function createProviderResolverWith(
     placeholder: () => P,
     cache: Map<string, P>,
     real: ((secret: string, config: PaymentConfigRow) => P) | undefined,
+    bound: (port: P, milliseconds: number) => P,
   ): Resolved<ResolvedPort<P>> {
     if (!isUsable(config)) return { ok: false, reason: 'provider_not_configured' };
     const wrap = (port: P): Resolved<ResolvedPort<P>> => ({
@@ -127,7 +138,7 @@ export function createProviderResolverWith(
           deps.environment,
           `mock ${mockDescriptor.capability} provider`,
         );
-        const port = mock();
+        const port = bound(mock(), timeoutMs);
         cache.set(config.configId, port);
         return wrap(port);
       } catch {
@@ -136,11 +147,11 @@ export function createProviderResolverWith(
     }
 
     // sandbox / live: a real adapter if one is registered for the provider, else the placeholder that refuses every call.
-    if (real === undefined) return wrap(placeholder());
+    if (real === undefined) return wrap(bound(placeholder(), timeoutMs));
     const secret = deps.secret(config.secretRef);
     if (secret === undefined || secret.length === 0) return { ok: false, reason: 'secret_missing' };
     try {
-      return wrap(real(secret, config));
+      return wrap(bound(real(secret, config), timeoutMs));
     } catch {
       // A factory that throws may have put the secret in its message. Say only that the provider is not usable.
       return { ok: false, reason: 'provider_not_configured' };
@@ -156,6 +167,7 @@ export function createProviderResolverWith(
         createUnconfiguredPaymentProvider,
         mockPayments,
         adapters[config.provider]?.payment,
+        withPaymentTimeout,
       ),
     mandate: (config) =>
       resolve<MandateProviderPort>(
@@ -165,6 +177,7 @@ export function createProviderResolverWith(
         createUnconfiguredMandateProvider,
         mockMandates,
         adapters[config.provider]?.mandate,
+        withMandateTimeout,
       ),
   };
 }

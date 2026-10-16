@@ -52,8 +52,8 @@ const providers = createProviderResolver({
 });
 const keyring = handoffKeyringOf(config);
 const handlers = createHandlers({
-  payments: { pool, providers, keyring },
-  servicing: { pool },
+  payments: { pool, providers, keyring, log },
+  servicing: { pool, log },
   applier,
   borrower,
   routing,

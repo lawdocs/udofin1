@@ -52,6 +52,13 @@ pnpm --filter @udofin/api dev
 # Worker (needs SYSTEM_DATABASE_URL = the udofin_system login)
 pnpm --filter @udofin/api worker
 
+# Phase 08a, labelled mock payment providers (local and test only): the database refuses to move a mock mandate or use a mock
+# configuration in a session that does not allow mock providers, so the worker's system login must start with the setting
+#   PGOPTIONS='-c udofin.allow_mock_providers=on' pnpm --filter @udofin/api worker
+# (the integration tests set it as a connection option). Staging and production must leave it unset: a mock configuration cannot exist there.
+# Hand-off links need HANDOFF_ENCRYPTION_KEYS and HANDOFF_ACTIVE_KEY_VERSION in both the worker and the API (see services/api/.env.example);
+# without them an order or mandate is recorded and the borrower is told no link is available.
+
 # Lender callback receiver (Phase 06; separate process, same system login; PORT/HOST as usual).
 # Signing secrets are referenced by NAME (the connector's signing_secret_ref is an environment variable name
 # set in the deployment); only the labelled mock scheme exists and it is refused in staging and production.

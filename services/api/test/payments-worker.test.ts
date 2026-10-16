@@ -203,6 +203,25 @@ describe('createProviderResolverWith: secrets of a real adapter (none exists yet
     expect(empty.payment(config)).toEqual({ ok: false, reason: 'secret_missing' });
   });
 
+  it('bounds every port it hands out: a call that never answers ends as an unknown outcome (timeout)', async () => {
+    const hanging: PaymentProviderPort = {
+      ...createMockPaymentProvider('test'),
+      getOrderStatus: () => new Promise(() => undefined),
+    };
+    const resolver = createProviderResolverWith(
+      { environment: 'production', secret: () => SECRET_VALUE, providerTimeoutMs: 20 },
+      { real_gateway: { payment: () => hanging } },
+    );
+    const resolved = resolver.payment(row({ provider: 'real_gateway', providerMode: 'live' }));
+    if (!resolved.ok) throw new Error('expected a port');
+    await expect(
+      resolved.value.port.getOrderStatus(resolved.value.contextFor('corr-1'), {
+        orderRef: null,
+        operationKey: 'key-1',
+      }),
+    ).resolves.toEqual({ outcome: 'unknown', reason: 'timeout' });
+  });
+
   it('gives the adapter the secret and never returns, names or logs it', () => {
     const resolver = createProviderResolverWith(
       { environment: 'production', secret: () => SECRET_VALUE },
