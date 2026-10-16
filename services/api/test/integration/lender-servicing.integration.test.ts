@@ -1221,5 +1221,1003 @@ describe.skipIf(!enabled)('lender servicing over HTTP', () => {
     });
   });
 
+  // ================================================================================================================
+  // File import: all or nothing
+  // ================================================================================================================
+  describe('file import', () => {
+    const A = () => ids.lenderA;
+    const out = (res: Res) => LsImportOutcome.parse(res.json());
+    const stage = (user: string, over: Record<string, unknown>, key?: string) =>
+      post('/v1/lender/imports', user, importBody(A(), over), key ? { key } : {});
+    const parseAs = (kind: LmsImportKind, content: string, format: 'csv' | 'json' = 'json') =>
+      parseLmsImportFile(content, { format, kind, sourceSystem: 'file_import' });
+    const audit = (action: string, entityId?: string) =>
+      q<{ metadata: Record<string, unknown>; tenant: string }>(
+        `select metadata, tenant_org_id::text as tenant from audit.events
+          where action = $1 and ($2::text is null or entity_id = $2) order by occurred_at`,
+        [action, entityId ?? null],
+      );
+    const loanExists = async (ref: string) =>
+      (await scalar<string>(
+        `select count(*)::text as v from servicing.loan_accounts where lms_loan_ref = $1`,
+        [ref],
+      )) !== '0';
+    const batchesWith = async (hash: string) =>
+      Number(
+        await scalar<string>(
+          `select count(*)::text as v from servicing.import_batches where file_sha256 = $1`,
+          [hash],
+        ),
+      );
+    const ref = (label: string) => `LS-${label}-${RUN}`;
+    const rec = (label: string, over: Partial<Parameters<typeof loanRecord>[0]> = {}) =>
+      loanRecord({
+        loanRef: ref(label),
+        appRef: appRef(label),
+        srid: `SRC-${label}-${RUN}`,
+        hoursAgo: 5,
+        ...over,
+      });
+
+    const state = {
+      invalidBatch: '',
+      invalidContent: '',
+      imp1: rec('IMP1'),
+      imp2: rec('IMP2'),
+      committed: '',
+      conflictId: '',
+      failedBatch: '',
+      rejectedBatch: '',
+    };
+
+    it('refuses a file with one bad row as a whole, shows the row error without the value, applies nothing and audits it', async () => {
+      const op = rotateOp();
+      const bad = rec('IMP2', { extra: { sanctioned_amount: CANARY.amountText } });
+      const content = JSON.stringify([rec('IMP1'), bad]);
+      const key = `it-refuse-${randomUUID()}`;
+      const res = await post('/v1/lender/imports', op, importBody(A(), { content }), { key });
+      expect(res.statusCode).toBe(200);
+      const outcome = out(res);
+      expect(outcome.batch).toBeNull();
+      expect(outcome.existing).toBe(false);
+      const hash = sha256(content);
+      expect(outcome.refusedFile).toEqual({
+        fileSha256: hash,
+        byteSize: Buffer.byteLength(content),
+        recordCount: 2,
+      });
+      expect(outcome.errors).toEqual([
+        {
+          rowNo: 2,
+          outcome: 'error',
+          errorCodes: ['invalid_amount'],
+          fieldNames: ['sanctioned_amount'],
+        },
+      ]);
+      // The row number, the class and the name of the field: never the value.
+      expect(res.body).not.toContain(CANARY.amountText);
+      // All or nothing: the good row of the same file was not applied either, and no batch exists.
+      expect(await batchesWith(hash)).toBe(0);
+      expect(await loanExists(ref('IMP1'))).toBe(false);
+      expect(await loanExists(ref('IMP2'))).toBe(false);
+      // The attempt is audited: the file's hash and size, the record count and the position, class and field name.
+      const rows = await audit('servicing.import.file_rejected', hash);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.tenant).toBe(A());
+      expect(rows[0]?.metadata).toMatchObject({
+        kind: 'loan',
+        source_kind: 'file',
+        format_version: 'udofin-lms-import-v1',
+        file_sha256: hash,
+        byte_size: Buffer.byteLength(content),
+        record_count: 2,
+        error_count: 1,
+        errors: [{ row_no: 2, code: 'invalid_amount', field: 'sanctioned_amount' }],
+      });
+      const text = JSON.stringify(rows[0]?.metadata);
+      for (const secret of [CANARY.amountText, ref('IMP1'), appRef('IMP1'), `SRC-IMP1-${RUN}`])
+        expect(text).not.toContain(secret);
+      // The same request again with the same key is a replay: the stored answer, and no second audit record.
+      const replay = await post('/v1/lender/imports', op, importBody(A(), { content }), { key });
+      expect(replay.headers['idempotent-replayed']).toBe('true');
+      expect(replay.json()).toEqual(res.json());
+      expect(await audit('servicing.import.file_rejected', hash)).toHaveLength(1);
+      // A new attempt with a new key is a new attempt, and is audited again.
+      const again = await stage(rotateOp(), { content });
+      expect(again.statusCode).toBe(200);
+      expect(await audit('servicing.import.file_rejected', hash)).toHaveLength(2);
+    });
+
+    it('never echoes a value that looks like an account number, a phone number or a PAN, in the answer or the audit record', async () => {
+      const pan = `ABCDE${digits(4)}F`;
+      for (const [label, value] of [
+        ['account', CANARY.account],
+        ['phone', CANARY.phoneRef],
+        ['pan', pan],
+      ] as const) {
+        const content = JSON.stringify([rec('IMP1', { appRef: value })]);
+        const res = await stage(rotateOp(), { content });
+        expect([label, res.statusCode]).toEqual([label, 200]);
+        const outcome = out(res);
+        expect(outcome.batch).toBeNull();
+        expect(outcome.errors).toHaveLength(1);
+        expect(outcome.errors[0]?.fieldNames).toEqual(['borrower_ref']);
+        expect(['borrower_ref_looks_personal', 'invalid_reference']).toContain(
+          outcome.errors[0]?.errorCodes[0],
+        );
+        expect(res.body).not.toContain(value.replace('+', ''));
+        const rows = await audit('servicing.import.file_rejected', sha256(content));
+        expect(rows).toHaveLength(1);
+        expect(JSON.stringify(rows[0]?.metadata)).not.toContain(value.replace('+', ''));
+      }
+    });
+
+    it('refuses what cannot be parsed or is not in the format, and audits the class at position zero', async () => {
+      const cases: [string, string, 'csv' | 'json', string, string | null, number][] = [
+        ['malformed JSON', '{ not json', 'json', 'malformed_file', null, 0],
+        ['an unknown column', 'lms_loan_ref,secret_notes\nX,Y\n', 'csv', 'unknown_column', null, 0],
+        ['a missing column', 'lms_loan_ref\nX\n', 'csv', 'missing_column', 'lms_receipt_ref', 0],
+        ['an empty list', '[]', 'json', 'empty_file', null, 0],
+      ];
+      for (const [label, content, format, expectedCode, field, row] of cases) {
+        const res = await stage(rotateOp(), { content, fileFormat: format, kind: 'receipt' });
+        expect([label, res.statusCode]).toEqual([label, 200]);
+        const outcome = out(res);
+        expect([label, outcome.batch]).toEqual([label, null]);
+        expect(outcome.errors[0]).toMatchObject({ rowNo: row, errorCodes: [expectedCode] });
+        if (field) expect(outcome.errors[0]?.fieldNames).toEqual([field]);
+        const rows = await audit('servicing.import.file_rejected', sha256(content));
+        expect([label, rows.length]).toEqual([label, 1]);
+      }
+    });
+
+    it('refuses a file over the size limit, audited with its hash and size', async () => {
+      const content = `${' '.repeat(5 * 1024 * 1024 + 16)}[]`;
+      const res = await stage(rotateOp(), { content });
+      expect(res.statusCode).toBe(200);
+      const outcome = out(res);
+      expect(outcome.errors).toEqual([
+        { rowNo: 0, outcome: 'error', errorCodes: ['file_too_large'], fieldNames: [] },
+      ]);
+      expect(outcome.refusedFile?.byteSize).toBe(Buffer.byteLength(content));
+      const rows = await audit('servicing.import.file_rejected', sha256(content));
+      expect(rows[0]?.metadata).toMatchObject({
+        byte_size: Buffer.byteLength(content),
+        error_count: 1,
+      });
+    });
+
+    it('stages a file the importer accepts but the database finds unmatched: invalid as a whole, no values kept, nothing applied', async () => {
+      const unmatched = rec('NOAPP', { appRef: `SAMPLE-NOAPP-${RUN}` });
+      state.invalidContent = JSON.stringify([state.imp1, unmatched]);
+      const res = await stage(rotateOp(), { content: state.invalidContent });
+      expect(res.statusCode).toBe(201);
+      const outcome = out(res);
+      const batch = outcome.batch;
+      expect(batch).toMatchObject({
+        lenderId: A(),
+        kind: 'loan',
+        sourceKind: 'file',
+        status: 'invalid',
+        rowCount: 2,
+        counts: { new: 1, quarantined: 1, error: 0, conflict: 0 },
+        fileSha256: sha256(state.invalidContent),
+        byteSize: Buffer.byteLength(state.invalidContent),
+      });
+      state.invalidBatch = batch?.id ?? '';
+      expect(outcome.errors).toEqual([
+        { rowNo: 2, outcome: 'quarantined', errorCodes: ['application_not_found'], fieldNames: [] },
+      ]);
+      // The preview keeps no row value for an invalid batch (data minimisation, in the same transaction).
+      const kept = await q<{ n: string; leaked: string }>(
+        `select count(*)::text as n, count(*) filter (where normalised is not null or source_record_id is not null or row_sha256 is not null)::text as leaked
+           from servicing.import_rows where batch_id = $1`,
+        [state.invalidBatch],
+      );
+      expect(kept[0]).toEqual({ n: '2', leaked: '0' });
+      // All or nothing: the matching row was not applied.
+      expect(await loanExists(ref('IMP1'))).toBe(false);
+      expect(res.body).not.toContain(appRef('NOAPP'));
+      expect(res.body).not.toContain(`SAMPLE-NOAPP-${RUN}`);
+      // It cannot be committed.
+      const commit = await post(`/v1/lender/imports/${state.invalidBatch}/commit`, rotateOp(), {});
+      expect([commit.statusCode, code(commit)]).toEqual([409, 'import_has_errors']);
+      expect(await loanExists(ref('IMP1'))).toBe(false);
+      // The same file again returns the same batch, whoever sends it.
+      const again = await stage(rotateOp(), { content: state.invalidContent });
+      expect(again.statusCode).toBe(200);
+      expect(out(again).existing).toBe(true);
+      expect(out(again).batch?.id).toBe(state.invalidBatch);
+    });
+
+    it('shows the stored problems of a batch to the lender and to nobody else', async () => {
+      const res = await get(`/v1/lender/imports/${state.invalidBatch}`, ids.aViewer);
+      expect(res.statusCode).toBe(200);
+      const detail = LsImportDetail.parse(res.json());
+      expect(detail.batch.status).toBe('invalid');
+      expect(detail.errors).toEqual([
+        { rowNo: 2, outcome: 'quarantined', errorCodes: ['application_not_found'], fieldNames: [] },
+      ]);
+      expect(detail.errorsTruncated).toBe(false);
+      for (const user of [ids.bOp, ids.cOp, ids.pFeatures]) {
+        const other = await get(`/v1/lender/imports/${state.invalidBatch}`, user);
+        expect([other.statusCode]).toEqual([user === ids.pFeatures ? 403 : 404]);
+      }
+      const unknown = await get(`/v1/lender/imports/${randomUUID()}`, ids.aViewer);
+      expect([unknown.statusCode, code(unknown)]).toEqual([404, 'not_found']);
+      expect((await get('/v1/lender/imports/not-a-uuid', ids.aViewer)).statusCode).toBe(422);
+    });
+
+    it('takes the corrected file as a resubmission, previews it, and keeps the earlier batch untouched', async () => {
+      const content = JSON.stringify([state.imp1, state.imp2]);
+      const res = await stage(rotateOp(), { content, resubmissionOf: state.invalidBatch });
+      expect(res.statusCode).toBe(201);
+      const outcome = out(res);
+      expect(outcome.batch).toMatchObject({
+        status: 'previewed',
+        rowCount: 2,
+        counts: { new: 2, quarantined: 0, error: 0 },
+        resubmissionOf: state.invalidBatch,
+      });
+      expect(outcome.errors).toEqual([]);
+      state.committed = outcome.batch?.id ?? '';
+      const earlier = await get(`/v1/lender/imports/${state.invalidBatch}`, ids.aOp);
+      expect(LsImportDetail.parse(earlier.json()).batch.status).toBe('invalid');
+      // Nothing is applied by staging.
+      expect(await loanExists(ref('IMP1'))).toBe(false);
+      // A resubmission must name an earlier invalid, rejected or failed batch of the same lender and kind.
+      const wrong = await stage(rotateOp(), {
+        content: JSON.stringify([rec('IMP3')]),
+        resubmissionOf: state.committed,
+      });
+      expect([wrong.statusCode, code(wrong)]).toEqual([422, 'resubmission_invalid']);
+    });
+
+    it('needs servicing.sync.manage to commit: manual entry alone, a viewer and another lender cannot', async () => {
+      for (const [label, user, status] of [
+        ['manual entry only', ids.aManual, 403],
+        ['viewer', ids.aViewer, 403],
+        ['document issue only', ids.aDocs, 403],
+        ['other lender', ids.bOp, 404],
+        ['switch-off lender', ids.cOp, 404],
+        ['platform auditor', ids.pAud, 403],
+      ] as const) {
+        const res = await post(`/v1/lender/imports/${state.committed}/commit`, user, {});
+        expect([label, res.statusCode]).toEqual([label, status]);
+      }
+      const still = await scalar<string>(
+        `select status as v from servicing.import_batches where id = $1`,
+        [state.committed],
+      );
+      expect(still).toBe('previewed');
+      expect(await loanExists(ref('IMP1'))).toBe(false);
+    });
+
+    it('commits a previewed batch in one transaction, replays the same key, and answers the same batch for another key', async () => {
+      const key = `it-commit-${randomUUID()}`;
+      const res = await post(
+        `/v1/lender/imports/${state.committed}/commit`,
+        ids.aSync,
+        {},
+        { key },
+      );
+      expect(res.statusCode).toBe(200);
+      const outcome = out(res);
+      expect(outcome.existing).toBe(false);
+      expect(outcome.batch).toMatchObject({
+        status: 'committed',
+        appliedCounts: { new: 2 },
+        failureClass: null,
+      });
+      expect(outcome.batch?.committedAt).not.toBeNull();
+      expect(await loanExists(ref('IMP1'))).toBe(true);
+      expect(await loanExists(ref('IMP2'))).toBe(true);
+      const replay = await post(
+        `/v1/lender/imports/${state.committed}/commit`,
+        ids.aSync,
+        {},
+        { key },
+      );
+      expect(replay.headers['idempotent-replayed']).toBe('true');
+      expect(replay.json()).toEqual(res.json());
+      const other = await post(`/v1/lender/imports/${state.committed}/commit`, ids.aSync, {});
+      expect(other.statusCode).toBe(200);
+      expect(out(other).existing).toBe(true);
+      expect(out(other).batch?.status).toBe('committed');
+      // Audited, and the outbox is told in the same transaction.
+      expect(await audit('servicing.import.committed', state.committed)).toHaveLength(1);
+      const events = await scalar<string>(
+        `select count(*)::text as v from ops.outbox_events where event_type = 'servicing.import.committed' and payload ->> 'batch_id' = $1`,
+        [state.committed],
+      );
+      expect(events).toBe('1');
+    });
+
+    it("shows the committed loans as the lender reported them, and the stored hash is the importer's hash", async () => {
+      const list = LsLoanPage.parse((await get('/v1/lender/loans?limit=100', ids.aViewer)).json());
+      const created = list.items.find((i) => i.lmsLoanRef === ref('IMP1'));
+      expect(created).toMatchObject({
+        status: 'active',
+        sanctionedAmountMinor: 5_000_000,
+        disbursedAmountMinor: 5_000_000,
+        sync: { stale: false, hasOpenConflict: false, newestHasWarning: false },
+      });
+      loan.IMP1 = created?.id ?? '';
+      const detail = LsLoanDetail.parse(
+        (await get(`/v1/lender/loans/${loan.IMP1}`, ids.aViewer)).json(),
+      );
+      expect(detail.report).toMatchObject({
+        version: 1,
+        status: 'active',
+        outstandingPrincipalMinor: 4_166_667,
+        overduePrincipalMinor: 0,
+        totalOverdueMinor: 0,
+        nextDueMinor: 450_000,
+        daysPastDue: 0,
+        flags: [],
+        sourceSystem: 'file_import',
+      });
+      // The API's parser and the database compute the same content hash for the same record.
+      const parsed = parseAs('loan', JSON.stringify([state.imp1, state.imp2]));
+      expect(parsed.importable).toBe(true);
+      for (const report of parsed.rows) {
+        const stored = await scalar<string>(
+          `select b.content_sha256 as v from servicing.balance_snapshots b
+             join servicing.loan_accounts l on l.id = b.loan_account_id where l.lms_loan_ref = $1`,
+          [report.reportType === 'loan' ? report.lmsLoanRef : ''],
+        );
+        expect(stored).toBe(report.contentSha256);
+      }
+      // The lender's own application is untouched by a lender-run import (the system finishes the lifecycle).
+      const appStatus = await scalar<string>(
+        `select status::text as v from lending.applications where id = $1`,
+        [apps.IMP1],
+      );
+      expect(appStatus).toBe('disbursement_pending');
+    });
+
+    it('lists the batches of the lender with their status, filters them, and shows other lenders none', async () => {
+      const all = LsImportBatchPage.parse(
+        (await get('/v1/lender/imports?limit=100', ids.aViewer)).json(),
+      );
+      expect(all.items.length).toBeGreaterThanOrEqual(2);
+      expect(new Set(all.items.map((i) => i.lenderId))).toEqual(new Set([A()]));
+      for (const status of all.items.map((i) => i.status))
+        expect(LS_BATCH_STATUSES).toContain(status);
+      const committed = LsImportBatchPage.parse(
+        (await get('/v1/lender/imports?status=committed&kind=loan&limit=100', ids.aOp)).json(),
+      );
+      expect(committed.items.map((i) => i.id)).toContain(state.committed);
+      expect(committed.items.every((i) => i.status === 'committed' && i.kind === 'loan')).toBe(
+        true,
+      );
+      const b = LsImportBatchPage.parse(
+        (await get('/v1/lender/imports?limit=100', ids.bOp)).json(),
+      );
+      expect(b.items.map((i) => i.id)).not.toContain(state.committed);
+      expect((await get(`/v1/lender/imports?lenderId=${A()}`, ids.bOp)).statusCode).toBe(403);
+      // A page holds at most the limit and ends with a null cursor.
+      const walked: string[] = [];
+      let cursor: string | null = null;
+      for (let guard = 0; guard < 80; guard += 1) {
+        const res: Res = await get(
+          `/v1/lender/imports?limit=2${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+          ids.aOp,
+        );
+        const page = LsImportBatchPage.parse(res.json());
+        expect(page.items.length).toBeLessThanOrEqual(2);
+        walked.push(...page.items.map((i) => i.id));
+        cursor = page.nextCursor;
+        if (!cursor) break;
+      }
+      expect(new Set(walked).size).toBe(walked.length);
+      expect(walked).toContain(state.committed);
+    });
+
+    it('imports receipts from a CSV file entered by hand: staged by manual entry, committed by someone who may manage the sync', async () => {
+      const header =
+        'lms_loan_ref,lms_receipt_ref,receipt_kind,reverses_receipt_ref,amount,value_date,payment_mode,bank_reference,source_record_id,reported_as_of';
+      const stamp = iso(4);
+      const csv = [
+        header,
+        `${ref('IMP1')},RCPT-${RUN}-1,receipt,,1500.00,${dateOnly(2)},upi,SAMPLE-UTR-${RUN}-1,SRC-RCPT-${RUN}-1,${stamp}`,
+        `${ref('IMP1')},RCPT-${RUN}-2,reversal,RCPT-${RUN}-1,500.00,${dateOnly(1)},,,SRC-RCPT-${RUN}-2,${stamp}`,
+      ].join('\n');
+      // Only manual entry can stage; sync.manage alone cannot.
+      const denied = await stage(ids.aSync, {
+        kind: 'receipt',
+        sourceKind: 'manual',
+        fileFormat: 'csv',
+        content: csv,
+      });
+      expect([denied.statusCode, code(denied)]).toEqual([403, 'forbidden']);
+      expect(await batchesWith(sha256(csv))).toBe(0);
+      const res = await stage(ids.aManual, {
+        kind: 'receipt',
+        sourceKind: 'manual',
+        fileFormat: 'csv',
+        content: csv,
+      });
+      expect(res.statusCode).toBe(201);
+      const outcome = out(res);
+      expect(outcome.batch).toMatchObject({
+        kind: 'receipt',
+        sourceKind: 'manual',
+        status: 'previewed',
+        rowCount: 2,
+        counts: { new: 2 },
+      });
+      const id = outcome.batch?.id ?? '';
+      expect(
+        await scalar<string>(
+          `select source_system::text as v from servicing.import_batches where id = $1`,
+          [id],
+        ),
+      ).toBe('manual_import');
+      // Manual entry cannot commit.
+      const forbidden = await post(`/v1/lender/imports/${id}/commit`, ids.aManual, {});
+      expect([forbidden.statusCode, code(forbidden)]).toEqual([403, 'forbidden']);
+      const committed = await post(`/v1/lender/imports/${id}/commit`, ids.aSync, {});
+      expect(committed.statusCode).toBe(200);
+      expect(out(committed).batch?.appliedCounts).toEqual({ new: 2 });
+      const detail = LsLoanDetail.parse(
+        (await get(`/v1/lender/loans/${loan.IMP1}`, ids.aViewer)).json(),
+      );
+      expect(detail.receipts.map((r) => [r.kind, r.amountMinor]).sort()).toEqual([
+        ['receipt', 150_000],
+        ['reversal', 50_000],
+      ]);
+      expect(detail.receipts.find((r) => r.kind === 'reversal')?.reversesReceiptRef).toBe(
+        `RCPT-${RUN}-1`,
+      );
+      // The stored receipt hashes are the importer's.
+      const parsed = parseAs('receipt', csv, 'csv');
+      expect(parsed.importable).toBe(true);
+      for (const report of parsed.rows) {
+        const stored = await scalar<string>(
+          `select content_sha256 as v from servicing.lms_receipts where lms_receipt_ref = $1 and lender_org_id = $2`,
+          [report.reportType === 'receipt' ? report.lmsReceiptRef : '', A()],
+        );
+        expect(stored).toBe(report.contentSha256);
+      }
+    });
+
+    it("imports a schedule given as JSON records, and the stored hash is the importer's", async () => {
+      const record = {
+        lms_loan_ref: ref('IMP1'),
+        source_record_id: `SRC-SCHED-${RUN}`,
+        reported_as_of: iso(4),
+        installments: [
+          {
+            installment_seq: '1',
+            due_date: dateOnly(-30),
+            principal: '4166.67',
+            interest: '333.33',
+            fees: '0.00',
+          },
+          {
+            installment_seq: '2',
+            due_date: dateOnly(-60),
+            principal: '4166.67',
+            interest: '333.33',
+          },
+        ],
+      };
+      const res = await stage(rotateOp(), { kind: 'schedule', rows: [record], content: undefined });
+      expect(res.statusCode).toBe(201);
+      const id = out(res).batch?.id ?? '';
+      const committed = await post(`/v1/lender/imports/${id}/commit`, rotateOp(), {});
+      expect(out(committed).batch?.status).toBe('committed');
+      const detail = LsLoanDetail.parse(
+        (await get(`/v1/lender/loans/${loan.IMP1}`, ids.aViewer)).json(),
+      );
+      expect(detail.schedule?.version).toBe(1);
+      expect(detail.schedule?.installments).toEqual([
+        {
+          seq: 1,
+          dueDate: dateOnly(-30),
+          principalMinor: 416_667,
+          interestMinor: 33_333,
+          feesMinor: 0,
+          totalMinor: 450_000,
+        },
+        {
+          seq: 2,
+          dueDate: dateOnly(-60),
+          principalMinor: 416_667,
+          interestMinor: 33_333,
+          feesMinor: 0,
+          totalMinor: 450_000,
+        },
+      ]);
+      const parsed = parseAs('schedule', JSON.stringify([record]));
+      expect(parsed.importable).toBe(true);
+      const report = parsed.rows[0];
+      const stored = await scalar<string>(
+        `select s.content_sha256 as v from servicing.schedule_snapshots s where s.loan_account_id = $1`,
+        [loan.IMP1],
+      );
+      expect(stored).toBe(report?.contentSha256);
+    });
+
+    it('queues a conflict for a record reported twice with different content, and the lender handles it: acknowledge, then resolve', async () => {
+      const changed = { ...state.imp1, outstanding_principal: '40000.00' };
+      const content = JSON.stringify([changed]);
+      const res = await stage(rotateOp(), { content });
+      expect(res.statusCode).toBe(201);
+      const outcome = out(res);
+      // A conflict does not invalidate the file; it is queued at commit and nothing is applied for that record.
+      expect(outcome.batch).toMatchObject({ status: 'previewed', counts: { conflict: 1, new: 0 } });
+      const commit = await post(
+        `/v1/lender/imports/${outcome.batch?.id ?? ''}/commit`,
+        rotateOp(),
+        {},
+      );
+      expect(out(commit).batch).toMatchObject({
+        status: 'committed',
+        appliedCounts: { conflict: 1 },
+      });
+      const list = LsConflictPage.parse(
+        (await get(`/v1/lender/sync/conflicts?loanAccountId=${loan.IMP1}`, ids.aViewer)).json(),
+      );
+      expect(list.items).toHaveLength(1);
+      const conflict = list.items[0];
+      expect(conflict).toMatchObject({
+        conflictReason: 'same_record_different_content',
+        recordType: 'loan',
+        status: 'open',
+        sourceRecordId: `SRC-IMP1-${RUN}`,
+      });
+      state.conflictId = conflict?.id ?? '';
+      expect(
+        (LS_CONFLICT_REASONS as readonly string[]).includes(conflict?.conflictReason ?? ''),
+      ).toBe(true);
+      // The stored report is unchanged: still the first one.
+      const detail = LsLoanDetail.parse(
+        (await get(`/v1/lender/loans/${loan.IMP1}`, ids.aViewer)).json(),
+      );
+      expect(detail.report?.outstandingPrincipalMinor).toBe(4_166_667);
+      expect(detail.openConflicts).toBe(1);
+
+      // Acknowledge: sync.manage only; another lender cannot even see it.
+      for (const [label, user, status] of [
+        ['viewer', ids.aViewer, 403],
+        ['manual entry only', ids.aManual, 403],
+        ['other lender', ids.bOp, 404],
+      ] as const) {
+        const denied = await post(
+          `/v1/lender/sync/conflicts/${state.conflictId}/acknowledge`,
+          user,
+          {},
+        );
+        expect([label, denied.statusCode]).toEqual([label, status]);
+      }
+      const early = await post(`/v1/lender/sync/conflicts/${state.conflictId}/resolve`, ids.aSync, {
+        confirmedVersion: 'existing',
+        note: 'Checked against the lender system of record.',
+        evidence: { review_ref: `REV-${RUN}` },
+      });
+      expect([early.statusCode, code(early)]).toEqual([409, 'conflict_not_acknowledged']);
+      const key = `it-ack-${randomUUID()}`;
+      const ack = await post(
+        `/v1/lender/sync/conflicts/${state.conflictId}/acknowledge`,
+        ids.aSync,
+        {},
+        { key },
+      );
+      expect([ack.statusCode, ack.json()]).toEqual([
+        200,
+        { id: state.conflictId, status: 'acknowledged' },
+      ]);
+      const ackReplay = await post(
+        `/v1/lender/sync/conflicts/${state.conflictId}/acknowledge`,
+        ids.aSync,
+        {},
+        { key },
+      );
+      expect(ackReplay.headers['idempotent-replayed']).toBe('true');
+      const ackAgain = await post(
+        `/v1/lender/sync/conflicts/${state.conflictId}/acknowledge`,
+        ids.aSync,
+        {},
+      );
+      expect([ackAgain.statusCode, code(ackAgain)]).toEqual([409, 'conflict_not_open']);
+
+      const resolveBody = {
+        confirmedVersion: 'existing',
+        note: 'Checked against the lender system of record.',
+        evidence: { review_ref: `REV-${RUN}` },
+      };
+      // Evidence that looks like personal data is refused, and so is a note that is too short or a bad version.
+      const personal = await post(
+        `/v1/lender/sync/conflicts/${state.conflictId}/resolve`,
+        ids.aSync,
+        {
+          ...resolveBody,
+          evidence: { reviewer: CANARY.email },
+        },
+      );
+      expect([personal.statusCode, code(personal)]).toEqual([422, 'evidence_invalid']);
+      expect(personal.body).not.toContain(CANARY.email);
+      for (const bad of [
+        { ...resolveBody, note: 'short' },
+        { ...resolveBody, confirmedVersion: 'both' },
+        { ...resolveBody, evidence: {} },
+        { ...resolveBody, evidence: { Bad_Key: 'x' } },
+        { ...resolveBody, evidence: { review_ref: 5 } },
+        { ...resolveBody, extra: true },
+      ]) {
+        const res422 = await post(
+          `/v1/lender/sync/conflicts/${state.conflictId}/resolve`,
+          ids.aSync,
+          bad,
+        );
+        expect([JSON.stringify(bad), res422.statusCode]).toEqual([JSON.stringify(bad), 422]);
+      }
+      const resolved = await post(
+        `/v1/lender/sync/conflicts/${state.conflictId}/resolve`,
+        ids.aSync,
+        resolveBody,
+      );
+      expect([resolved.statusCode, resolved.json()]).toEqual([
+        200,
+        { id: state.conflictId, status: 'resolved' },
+      ]);
+      const resolvedAgain = await post(
+        `/v1/lender/sync/conflicts/${state.conflictId}/resolve`,
+        ids.aSync,
+        resolveBody,
+      );
+      expect([resolvedAgain.statusCode, code(resolvedAgain)]).toEqual([409, 'conflict_resolved']);
+      const after = LsConflictPage.parse(
+        (
+          await get(
+            `/v1/lender/sync/conflicts?status=resolved&loanAccountId=${loan.IMP1}`,
+            ids.aViewer,
+          )
+        ).json(),
+      );
+      expect(after.items[0]).toMatchObject({
+        status: 'resolved',
+        confirmedVersion: 'existing',
+        resolutionNote: 'Checked against the lender system of record.',
+      });
+      // Resolving changed no stored report.
+      const detail2 = LsLoanDetail.parse(
+        (await get(`/v1/lender/loans/${loan.IMP1}`, ids.aViewer)).json(),
+      );
+      expect(detail2.report?.outstandingPrincipalMinor).toBe(4_166_667);
+      expect(detail2.openConflicts).toBe(0);
+      // The conflict that came with the fixture cannot be resolved before it is acknowledged.
+      const fixture = LsConflictPage.parse(
+        (await get(`/v1/lender/sync/conflicts?loanAccountId=${loan.A1}`, ids.aViewer)).json(),
+      ).items[0];
+      const premature = await post(
+        `/v1/lender/sync/conflicts/${fixture?.id ?? ''}/resolve`,
+        ids.aSync,
+        resolveBody,
+      );
+      expect([premature.statusCode, code(premature)]).toEqual([409, 'conflict_not_acknowledged']);
+    });
+
+    it('flags, never corrects: a newer report with a higher outstanding amount and no reported charge is stored and raises an anomaly', async () => {
+      const newer = rec('IMP1', {
+        srid: `SRC-IMP1-${RUN}-2`,
+        hoursAgo: 2,
+        extra: { outstanding_principal: '43000.00' },
+      });
+      const res = await stage(rotateOp(), { content: JSON.stringify([newer]) });
+      expect(res.statusCode).toBe(201);
+      expect(out(res).batch).toMatchObject({ status: 'previewed', counts: { changed: 1 } });
+      const commit = await post(
+        `/v1/lender/imports/${out(res).batch?.id ?? ''}/commit`,
+        rotateOp(),
+        {},
+      );
+      expect(out(commit).batch?.appliedCounts).toEqual({ changed: 1 });
+      const anomalies = LsAnomalyPage.parse(
+        (await get(`/v1/lender/sync/anomalies?loanAccountId=${loan.IMP1}`, ids.aViewer)).json(),
+      );
+      expect(anomalies.items).toHaveLength(1);
+      expect(anomalies.items[0]).toMatchObject({
+        kind: 'outstanding_rise_without_charge',
+        severity: 'warning',
+        previousAmountMinor: 4_166_667,
+        reportedAmountMinor: 4_300_000,
+      });
+      expect((LS_ANOMALY_KINDS as readonly string[]).includes(anomalies.items[0]?.kind ?? '')).toBe(
+        true,
+      );
+      const detail = LsLoanDetail.parse(
+        (await get(`/v1/lender/loans/${loan.IMP1}`, ids.aViewer)).json(),
+      );
+      // Stored exactly as reported, not corrected; the loan list marks the warning.
+      expect(detail.report).toMatchObject({ version: 2, outstandingPrincipalMinor: 4_300_000 });
+      expect(detail.anomalies).toEqual({ warning: 1, info: 0 });
+      expect(detail.loan.sync.newestHasWarning).toBe(true);
+      // Other lenders see none of it.
+      const other = LsAnomalyPage.parse(
+        (await get('/v1/lender/sync/anomalies?limit=100', ids.bOp)).json(),
+      );
+      expect(other.items.map((i) => i.loanAccountId)).not.toContain(loan.IMP1);
+    });
+
+    it('records a commit that fails inside the database as failed, applies nothing, keeps the record, and lets the file be staged again', async () => {
+      // Two files claim one application under different loan references. Both preview as new; the second cannot apply.
+      const f1 = JSON.stringify([rec('F1', { appRef: appRef('IMP3') })]);
+      const f2 = JSON.stringify([rec('F2', { appRef: appRef('IMP3') })]);
+      const s1 = await stage(rotateOp(), { content: f1 });
+      const s2 = await stage(rotateOp(), { content: f2 });
+      expect(out(s1).batch?.status).toBe('previewed');
+      expect(out(s2).batch?.status).toBe('previewed');
+      const first = await post(
+        `/v1/lender/imports/${out(s1).batch?.id ?? ''}/commit`,
+        rotateOp(),
+        {},
+      );
+      expect(out(first).batch?.status).toBe('committed');
+      state.failedBatch = out(s2).batch?.id ?? '';
+      const failed = await post(`/v1/lender/imports/${state.failedBatch}/commit`, rotateOp(), {});
+      // A failed commit is answered, not raised: raising would roll back the very record that says it failed.
+      expect(failed.statusCode).toBe(200);
+      expect(out(failed).batch).toMatchObject({
+        status: 'failed',
+        failureClass: 'P0001',
+        appliedCounts: null,
+      });
+      expect(await loanExists(ref('F2'))).toBe(false);
+      expect(await loanExists(ref('F1'))).toBe(true);
+      // The failure is on record: the batch, the audit event, and no row values kept.
+      const kept = await scalar<string>(
+        `select count(*) filter (where normalised is not null)::text as v from servicing.import_rows where batch_id = $1`,
+        [state.failedBatch],
+      );
+      expect(kept).toBe('0');
+      const detail = LsImportDetail.parse(
+        (await get(`/v1/lender/imports/${state.failedBatch}`, ids.aViewer)).json(),
+      );
+      expect(detail.batch).toMatchObject({ status: 'failed', failureClass: 'P0001' });
+      expect(detail.batch.failedAt).not.toBeNull();
+      const failures = await audit('servicing.import.failed', state.failedBatch);
+      expect(failures).toHaveLength(1);
+      expect(failures[0]?.metadata).toMatchObject({ failure_class: 'P0001' });
+      // It cannot be committed again; staging the same file starts over (the hash was released).
+      const again = await post(`/v1/lender/imports/${state.failedBatch}/commit`, rotateOp(), {});
+      expect([again.statusCode, code(again)]).toEqual([409, 'batch_failed']);
+      const restaged = await stage(rotateOp(), { content: f2, resubmissionOf: state.failedBatch });
+      expect(restaged.statusCode).toBe(201);
+      expect(out(restaged).batch?.id).not.toBe(state.failedBatch);
+      expect(out(restaged).batch).toMatchObject({
+        status: 'invalid',
+        resubmissionOf: state.failedBatch,
+      });
+      expect(out(restaged).errors[0]?.errorCodes).toEqual(['application_already_linked']);
+    });
+
+    it('rejects a previewed batch with a reason and drops its content; only people who work with imports may', async () => {
+      const content = JSON.stringify([rec('IMP4', { appRef: appRef('IMP4') })]);
+      const staged = await stage(rotateOp(), { content });
+      const id = out(staged).batch?.id ?? '';
+      expect(out(staged).batch?.status).toBe('previewed');
+      const url = `/v1/lender/imports/${id}/reject`;
+      const reason = 'The file is the wrong period; the lender will send the right one.';
+      expect([(await post(url, ids.aOp, { reason: 'too short' })).statusCode]).toEqual([422]);
+      expect((await post(url, ids.aOp, { reason, extra: 1 })).statusCode).toBe(422);
+      for (const [label, user, status] of [
+        ['viewer', ids.aViewer, 403],
+        ['document issue only', ids.aDocs, 403],
+        ['other lender', ids.bOp, 404],
+        ['platform auditor', ids.pAud, 403],
+      ] as const) {
+        const denied = await post(url, user, { reason });
+        expect([label, denied.statusCode]).toEqual([label, status]);
+      }
+      expect(
+        await scalar<string>(`select status as v from servicing.import_batches where id = $1`, [
+          id,
+        ]),
+      ).toBe('previewed');
+      const key = `it-reject-${randomUUID()}`;
+      const rejected = await post(url, ids.aManual, { reason }, { key });
+      expect(rejected.statusCode).toBe(200);
+      expect(out(rejected).batch).toMatchObject({ status: 'rejected' });
+      expect(out(rejected).batch?.rejectedAt).not.toBeNull();
+      expect(
+        (await post(url, ids.aManual, { reason }, { key })).headers['idempotent-replayed'],
+      ).toBe('true');
+      const left = await q<{ n: string; leaked: string }>(
+        `select count(*)::text as n, count(*) filter (where normalised is not null or source_record_id is not null or row_sha256 is not null)::text as leaked
+           from servicing.import_rows where batch_id = $1`,
+        [id],
+      );
+      expect(left[0]).toEqual({ n: '1', leaked: '0' });
+      // Rejecting again answers the same batch; committing a rejected batch is refused.
+      const twice = await post(url, ids.aOp, { reason });
+      expect([twice.statusCode, out(twice).existing]).toEqual([200, true]);
+      const commit = await post(`/v1/lender/imports/${id}/commit`, rotateOp(), {});
+      expect([commit.statusCode, code(commit)]).toEqual([409, 'batch_rejected']);
+      // The hash was released: the same file can be staged again, and sync.manage alone may reject that one.
+      const restaged = await stage(rotateOp(), { content });
+      expect(restaged.statusCode).toBe(201);
+      expect(out(restaged).batch?.id).not.toBe(id);
+      const byManager = await post(
+        `/v1/lender/imports/${out(restaged).batch?.id ?? ''}/reject`,
+        ids.aSync,
+        { reason },
+      );
+      expect(out(byManager).batch?.status).toBe('rejected');
+      // A committed batch cannot be rejected.
+      const late = await post(`/v1/lender/imports/${state.committed}/reject`, ids.aOp, { reason });
+      expect([late.statusCode, code(late)]).toEqual([409, 'batch_not_rejectable']);
+      state.rejectedBatch = id;
+    });
+
+    it('stages a larger receipt file (500 records) within the extended time limit', async () => {
+      const header =
+        'lms_loan_ref,lms_receipt_ref,receipt_kind,reverses_receipt_ref,amount,value_date,payment_mode,bank_reference,source_record_id,reported_as_of';
+      const stamp = iso(3);
+      const rows = Array.from(
+        { length: 500 },
+        (_, n) =>
+          `${ref('IMP1')},BULK-${RUN}-${String(n)},receipt,,10.00,${dateOnly(1)},upi,,SRC-BULK-${RUN}-${String(n)},${stamp}`,
+      );
+      const content = [header, ...rows].join('\n');
+      const res = await stage(rotateOp(), { kind: 'receipt', fileFormat: 'csv', content });
+      expect(res.statusCode).toBe(201);
+      expect(out(res).batch).toMatchObject({
+        rowCount: 500,
+        counts: { new: 500 },
+        status: 'previewed',
+      });
+      const commit = await post(
+        `/v1/lender/imports/${out(res).batch?.id ?? ''}/commit`,
+        rotateOp(),
+        {},
+      );
+      expect(out(commit).batch?.appliedCounts).toEqual({ new: 500 });
+      expect(
+        await scalar<string>(
+          `select count(*)::text as v from servicing.lms_receipts where lms_receipt_ref like $1`,
+          [`BULK-${RUN}-%`],
+        ),
+      ).toBe('500');
+    });
+
+    it('keeps lenders apart: a batch of lender B is invisible to lender A, and A cannot stage for B', async () => {
+      const content = JSON.stringify([rec('IMPB', { appRef: appRef('IMPB') })]);
+      const staged = await post(
+        '/v1/lender/imports',
+        ids.bOp,
+        importBody(ids.lenderB, { content }),
+      );
+      expect(staged.statusCode).toBe(201);
+      const bBatch = out(staged).batch?.id ?? '';
+      expect(out(staged).batch?.lenderId).toBe(ids.lenderB);
+      for (const [method, url] of [
+        ['GET', `/v1/lender/imports/${bBatch}`],
+        ['POST', `/v1/lender/imports/${bBatch}/commit`],
+        ['POST', `/v1/lender/imports/${bBatch}/reject`],
+      ] as const) {
+        const res = await call(
+          method,
+          url,
+          ids.aOp,
+          method === 'POST' ? { reason: 'A reason that is long enough.' } : undefined,
+        );
+        expect([url, res.statusCode, code(res)]).toEqual([url, 404, 'not_found']);
+      }
+      const asA = LsImportBatchPage.parse(
+        (await get('/v1/lender/imports?limit=100', ids.aOp)).json(),
+      );
+      expect(asA.items.map((i) => i.id)).not.toContain(bBatch);
+      // A caller of lender B cannot stage into lender A, and a refused file leaves nothing in A's audit trail either.
+      const refusedBefore = (await audit('servicing.import.file_rejected')).filter(
+        (r) => r.tenant === A(),
+      ).length;
+      for (const body of [
+        importBody(A(), { content: JSON.stringify([rec('IMPB')]) }),
+        importBody(A(), { content: '{ not json' }),
+      ]) {
+        const into = await post('/v1/lender/imports', ids.bOp, body);
+        expect([into.statusCode, code(into)]).toEqual([403, 'forbidden']);
+      }
+      expect(
+        (await audit('servicing.import.file_rejected')).filter((r) => r.tenant === A()).length,
+      ).toBe(refusedBefore);
+      expect(await loanExists(ref('IMPB'))).toBe(false);
+      // A resubmission cannot point at another lender's batch.
+      const link = await stage(rotateOp(), {
+        content: JSON.stringify([rec('IMP5', { appRef: appRef('IMP5') })]),
+        resubmissionOf: bBatch,
+      });
+      expect([link.statusCode, code(link)]).toEqual([422, 'resubmission_invalid']);
+    });
+
+    it('needs servicing.manual_entry to stage: nobody else, not even for a file that would be refused, leaves a trace', async () => {
+      const valid = JSON.stringify([rec('IMP5', { appRef: appRef('IMP5') })]);
+      const refused = '{ not json at all';
+      const refusedHash = sha256(refused);
+      for (const [label, user] of [
+        ['viewer', ids.aViewer],
+        ['sync.manage only', ids.aSync],
+        ['document issue only', ids.aDocs],
+        ['no loan.read', ids.aNoRead],
+        ['platform auditor', ids.pAud],
+      ] as const) {
+        for (const content of [valid, refused]) {
+          const res = await post('/v1/lender/imports', user, importBody(A(), { content }));
+          expect([label, res.statusCode]).toEqual([label, 403]);
+        }
+      }
+      expect(await batchesWith(sha256(valid))).toBe(0);
+      expect(await audit('servicing.import.file_rejected', refusedHash)).toHaveLength(0);
+      // Unknown lender: the same answer as a lender that is not yours.
+      const unknown = await post(
+        '/v1/lender/imports',
+        ids.aOp,
+        importBody(randomUUID(), { content: valid }),
+      );
+      expect([unknown.statusCode, code(unknown)]).toEqual([403, 'forbidden']);
+    });
+
+    it('answers feature_disabled while the servicing_sync switch is off, for a good file and a refused one, and records nothing', async () => {
+      const valid = JSON.stringify([rec('C1', { appRef: appRef('C1') })]);
+      const refused = '{ nope';
+      for (const content of [valid, refused]) {
+        const res = await post('/v1/lender/imports', ids.cOp, importBody(ids.lenderC, { content }));
+        expect([res.statusCode, code(res)]).toEqual([409, 'feature_disabled']);
+      }
+      expect(
+        await scalar<string>(
+          `select count(*)::text as v from servicing.import_batches where lender_org_id = $1`,
+          [ids.lenderC],
+        ),
+      ).toBe('0');
+      expect(await audit('servicing.import.file_rejected', sha256(refused))).toHaveLength(0);
+      // Reading stays possible with the switch off (history is never hidden): the lender's own loan.
+      const loans = LsLoanPage.parse((await get('/v1/lender/loans', ids.cOp)).json());
+      expect(loans.items.map((i) => i.id)).toEqual([loan.C1]);
+    });
+
+    it('validates the shape of the request before anything else', async () => {
+      const ok = importBody(A(), { content: JSON.stringify([rec('IMP5')]) });
+      const rows = [rec('IMP5')];
+      const bad: [string, Record<string, unknown>][] = [
+        ['content and rows together', { ...ok, rows }],
+        ['neither content nor rows', { ...ok, content: undefined }],
+        ['content without a format', { ...ok, fileFormat: undefined }],
+        ['rows declared csv', { ...ok, content: undefined, rows, fileFormat: 'csv' }],
+        ['an unknown field', { ...ok, extra: 1 }],
+        ['an unknown kind', { ...ok, kind: 'payment' }],
+        ['an unknown source kind', { ...ok, sourceKind: 'api' }],
+        ['another format version', { ...ok, formatVersion: 'v2' }],
+        ['a lender that is not an id', { ...ok, lenderId: 'nope' }],
+        ['a resubmission that is not an id', { ...ok, resubmissionOf: 'nope' }],
+        ['empty content', { ...ok, content: '' }],
+        ['empty rows', { ...ok, content: undefined, rows: [] }],
+        ['rows that are not records', { ...ok, content: undefined, rows: ['x'] }],
+      ];
+      for (const [label, body] of bad) {
+        const res = await post('/v1/lender/imports', ids.aOp, body);
+        expect([label, res.statusCode, code(res)]).toEqual([label, 422, 'validation_failed']);
+      }
+      const noKey = await post('/v1/lender/imports', ids.aOp, ok, { key: null });
+      expect([noKey.statusCode, code(noKey)]).toEqual([400, 'idempotency_key_required']);
+      expect((await post('/v1/lender/imports/not-a-uuid/commit', ids.aSync, {})).statusCode).toBe(
+        422,
+      );
+      expect(
+        (await post(`/v1/lender/imports/${randomUUID()}/commit`, rotateOp(), {})).statusCode,
+      ).toBe(404);
+      expect(
+        (
+          await post(`/v1/lender/imports/${randomUUID()}/reject`, ids.aSync, {
+            reason: 'A reason that is long enough.',
+          })
+        ).statusCode,
+      ).toBe(404);
+    });
+  });
+
   // @@MORE@@
 });
