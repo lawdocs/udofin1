@@ -472,7 +472,7 @@ export const LsDocumentUploadInput = z.strictObject({
   mimeType: z.literal('application/pdf'),
   contentBase64: z.string().min(4).max(12_000_000),
   /** The lender's own number for this document (letters, digits and . _ / - only; the database checks it again). */
-  lenderReference: z.string().min(1).max(100),
+  lenderReference: z.string().regex(/^[A-Za-z0-9._/-]{1,100}$/),
   issuedAt: Timestamp,
   periodFrom: DateOnly.optional(),
   periodTo: DateOnly.optional(),
