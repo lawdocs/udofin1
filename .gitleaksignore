@@ -5,3 +5,9 @@
 # fingerprints are listed here. A fingerprint pins the exact commit, file, rule and line: nothing else is allowed.
 3ec10fc1334ee2a89dbd2e551159ceb56b49ff34:packages/adapters/src/lms.test.ts:generic-api-key:913
 3ec10fc1334ee2a89dbd2e551159ceb56b49ff34:supabase/tests/016_p08a_accounts_config.test.sql:stripe-access-token:773
+# Findings in commits of Phase 08a wave 5 (the account/payment-configuration routes tests): Stripe-shaped fake values that the tests feed to
+# "a secret reference must be a NAME, never a value" checks. The values were replaced with neutral ones in the next commit; the history still
+# contains them, so the three fingerprints are listed here (each pins commit, file, rule and line).
+c75bd76efe9b9e9c33c3aeb7ea6e4c68f7098d6b:services/api/test/lender-accounts.test.ts:stripe-access-token:184
+262c56b299a205a396ac165c9893f2e4c2c0b540:services/api/test/integration/lender-accounts.integration.test.ts:stripe-access-token:425
+262c56b299a205a396ac165c9893f2e4c2c0b540:services/api/test/integration/lender-accounts.integration.test.ts:stripe-access-token:1533

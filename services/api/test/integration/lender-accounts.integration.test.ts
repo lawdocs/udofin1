@@ -445,7 +445,7 @@ describe.skipIf(!enabled)(
           kind: 'payment',
           status: 'draft',
           evidenceLabel: 'unverified',
-          apiKey: 'sk_live_abcdefghijklmnop',
+          apiKey: 'not_a_secret_name_but_a_value_2',
         });
         expect(unknownBody.statusCode).toBe(422);
         expect(unknownBody.body).not.toContain('sk_live');
@@ -1635,7 +1635,7 @@ describe.skipIf(!enabled)(
         const value = await post(
           '/v1/lender/payment-configs',
           ids.l1,
-          draftBody({ secretRef: 'sk_live_abcdef123456' }),
+          draftBody({ secretRef: 'not_a_secret_name_but_a_value_1' }),
         );
         expect(value.statusCode).toBe(422);
         expect(value.body).not.toContain('sk_live');

@@ -202,7 +202,7 @@ describe('request shapes', () => {
     };
     expect(PaymentConfigDraftInput.safeParse(draft).success).toBe(true);
     for (const change of [
-      { secretRef: 'sk_live_abcdef123456' },
+      { secretRef: 'not_a_secret_name_but_a_value_1' },
       { secretRef: 'AB' },
       { webhookSecretRef: 'whsec abc' },
       { providerMode: 'staging' },
