@@ -1147,14 +1147,16 @@ describe.skipIf(!enabled)('scheduled jobs and servicing handlers against a real 
           [intent.linkOrphan],
         );
       });
-      const countLinks = () =>
-        scalar<number>(`select count(*)::int as v from payments.handoff_links`);
-      expect(await countLinks()).toBe(3);
+      // Other test files share this database and store links of their own, so only this test's three subjects are counted.
+      const subjects = [intent.linkOk, intent.linkOld, intent.linkOrphan];
+      const linksOfThisTest = () =>
+        q<{ subject_id: string }>(
+          `select subject_id::text as subject_id from payments.handoff_links where subject_id = any($1::uuid[])`,
+          [subjects],
+        );
+      expect(await linksOfThisTest()).toHaveLength(3);
       await periodic().run('handoff_links');
-      expect(await countLinks()).toBe(1);
-      expect(await scalar<string>(`select subject_id::text as v from payments.handoff_links`)).toBe(
-        intent.linkOk,
-      );
+      expect((await linksOfThisTest()).map((r) => r.subject_id)).toEqual([intent.linkOk]);
     });
   });
 
