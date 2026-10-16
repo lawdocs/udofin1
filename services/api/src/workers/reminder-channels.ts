@@ -66,11 +66,16 @@ export function createUnconfiguredPushChannel(): NotificationChannelPort<'push'>
   };
 }
 
-/** Start-up guard for the push channel, the same shape as the SMS guard: no mock outside local development and tests. */
+/**
+ * Start-up guard for the push channel. A mock is refused outside local development and tests (the generic guard lets staging use
+ * mocks; no mock push exists anywhere deployed). The unconfigured placeholder keeps the mode `production` so it can sit in the
+ * production wiring, and answers `not_configured` in every environment; everything else must pass the generic guard.
+ */
 export function assertPushChannelAllowed(
   channel: NotificationChannelPort<'push'>,
   environment: AppEnvironment,
 ): void {
+  if (channel.descriptor.key.endsWith('_not_configured')) return;
   assertProviderAllowed(channel.descriptor, environment);
   if (channel.descriptor.mode === 'mock' && environment !== 'local' && environment !== 'test') {
     throw new Error('a mock push channel is for local development and tests only');

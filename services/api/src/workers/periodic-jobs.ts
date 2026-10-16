@@ -782,8 +782,14 @@ export function addDays(date: string, days: number): string {
   return moved.toISOString().slice(0, 10);
 }
 
-/** What the database accepts as a provider reference in the delivery log. */
+/**
+ * What the database accepts as a provider reference in the delivery log, and nothing that looks like a link (a reference is an id;
+ * the character set the database allows would let a URL through).
+ */
 const PROVIDER_REF = /^[A-Za-z0-9._:=+/-]{1,100}$/;
+export function safeProviderRef(ref: string | undefined): string | null {
+  return ref !== undefined && PROVIDER_REF.test(ref) && !ref.includes('//') ? ref : null;
+}
 
 /** Sends on a channel. sms is never sent: there is no provider, and nothing is called. A channel that throws did not answer. */
 export async function sendOnChannel(
@@ -809,10 +815,7 @@ export function reminderRecordOf(result: ChannelSendResult): {
     case 'accepted':
       return {
         state: 'accepted',
-        providerRef:
-          result.providerRef !== undefined && PROVIDER_REF.test(result.providerRef)
-            ? result.providerRef
-            : null,
+        providerRef: safeProviderRef(result.providerRef),
         errorClass: null,
       };
     case 'not_configured':
@@ -837,13 +840,11 @@ export function noticeOutcomeOf(results: readonly ChannelSendResult[]): {
   state: NoticeState;
   providerRef: string | null;
 } {
-  const accepted = results.find((result) => result.state === 'accepted');
-  if (accepted) {
-    const ref = accepted.providerRef;
-    return {
-      state: 'accepted',
-      providerRef: ref !== undefined && PROVIDER_REF.test(ref) ? ref : null,
-    };
+  const taken = results.flatMap((result) => (result.state === 'accepted' ? [result] : []));
+  if (taken.length > 0) {
+    // A channel that gave a usable reference supplies it (the in-app inbox has none).
+    const ref = taken.map((result) => safeProviderRef(result.providerRef)).find((r) => r !== null);
+    return { state: 'accepted', providerRef: ref ?? null };
   }
   if (results.every((result) => result.state === 'not_configured')) {
     return { state: 'not_configured', providerRef: null };
