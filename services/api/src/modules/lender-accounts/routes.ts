@@ -409,14 +409,30 @@ async function approvedRule(
 }
 
 /** One row per (lender, catalogue feature): the stored switch, off when there is no row or the catalogue says it cannot be enabled. */
-const SWITCH_STATE_BODY = `
-  select o.id as "lenderId", c.feature, (coalesce(f.enabled, false) and c.enableable) as enabled, c.enableable,
-         ${ts('f.enabled_at')} as "enabledAt", ${ts('f.disabled_at')} as "disabledAt"
-    from tenancy.organizations o
+/**
+ * One row per catalogue feature: the stored switch, off when there is no row or the catalogue says it cannot be enabled. The
+ * platform view takes the lender id as given (a features administrator cannot read organisations, so an unknown lender looks like
+ * one with every switch off; requests and kills for it answer 404). The lender view lists the lenders the caller may read.
+ */
+const SWITCH_COLUMNS = `
+  (coalesce(f.enabled, false) and c.enableable) as enabled, c.enableable,
+  ${ts('f.enabled_at')} as "enabledAt", ${ts('f.disabled_at')} as "disabledAt"`;
+const PLATFORM_SWITCH_SQL = `
+  select $1::uuid as "lenderId", c.feature, ${SWITCH_COLUMNS}
+    from servicing.feature_catalog c
+    left join servicing.lender_features f on f.lender_org_id = $1::uuid and f.feature = c.feature
+   order by c.feature`;
+const LENDER_SWITCH_SQL = `
+  with mine as (
+    select o as lender from private.orgs_with_permission('loan.read') o
+    union select o from private.orgs_with_permission('payment.read') o)
+  select m.lender as "lenderId", c.feature, ${SWITCH_COLUMNS}
+    from mine m
+    join tenancy.organizations org on org.id = m.lender and org.kind = 'lender'
    cross join servicing.feature_catalog c
-    left join servicing.lender_features f on f.lender_org_id = o.id and f.feature = c.feature
-   where o.kind = 'lender'`;
-const SWITCH_STATE_SQL = `select * from (${SWITCH_STATE_BODY}) s where s."lenderId" = $1::uuid order by s.feature`;
+    left join servicing.lender_features f on f.lender_org_id = m.lender and f.feature = c.feature
+   where $1::uuid is null or m.lender = $1::uuid
+   order by m.lender, c.feature`;
 
 const keyUnavailable = (): ApiError =>
   new ApiError(
@@ -1609,16 +1625,11 @@ export function lenderAccountsRoutes(deps: LenderAccountsDeps = {}): RouteDefini
       auth: 'staff',
       params: LenderParam,
       responses: { 200: FeatureSwitchList },
-      errors: [401, 403, 404],
+      errors: [401, 403],
       rateLimit: READ_LIMIT,
       handler: async ({ tx, params }) => {
         await requirePlatform(tx, [PLATFORM_FEATURES]);
-        const exists = await tx.query(
-          "select 1 from tenancy.organizations where id = $1::uuid and kind = 'lender'",
-          [params.lenderId],
-        );
-        if (!exists.rows[0]) throw notFound();
-        const result = await tx.query(SWITCH_STATE_SQL, [params.lenderId]);
+        const result = await tx.query(PLATFORM_SWITCH_SQL, [params.lenderId]);
         return { status: 200, body: out(FeatureSwitchList, { items: result.rows }) };
       },
     }),
@@ -1636,15 +1647,7 @@ export function lenderAccountsRoutes(deps: LenderAccountsDeps = {}): RouteDefini
       rateLimit: READ_LIMIT,
       handler: async ({ tx, query }) => {
         await requireLenderPermission(tx, ['loan.read', 'payment.read'], query.lenderId);
-        const result = await tx.query(
-          `with mine as (
-             select o as lender from private.orgs_with_permission('loan.read') o
-             union select o from private.orgs_with_permission('payment.read') o)
-           select * from (${SWITCH_STATE_BODY}) s
-            where s."lenderId" in (select lender from mine) and ($1::uuid is null or s."lenderId" = $1::uuid)
-            order by s."lenderId", s.feature`,
-          [query.lenderId ?? null],
-        );
+        const result = await tx.query(LENDER_SWITCH_SQL, [query.lenderId ?? null]);
         return { status: 200, body: out(FeatureSwitchList, { items: result.rows }) };
       },
     }),
