@@ -11,3 +11,5 @@
 c75bd76efe9b9e9c33c3aeb7ea6e4c68f7098d6b:services/api/test/lender-accounts.test.ts:stripe-access-token:184
 262c56b299a205a396ac165c9893f2e4c2c0b540:services/api/test/integration/lender-accounts.integration.test.ts:stripe-access-token:425
 262c56b299a205a396ac165c9893f2e4c2c0b540:services/api/test/integration/lender-accounts.integration.test.ts:stripe-access-token:1533
+# A fifteen-character Idempotency-Key fixture ("too short" test) that the generic key rule flagged; the value was replaced in the next commit.
+d8c9331493c5af3401a73ebbb92aca22a573b319:services/api/test/integration/payments.integration.test.ts:generic-api-key:954

@@ -977,7 +977,7 @@ describe.skipIf(!enabled)('borrower payments and mandates over HTTP', () => {
         const none = await call(r.method, r.url, person('a1').user, r.body, { key: null });
         expectProblem(none, 400, 'idempotency_key_required');
         const short = await call(r.method, r.url, person('a1').user, r.body, {
-          key: 'short-key-15chr',
+          key: 'aaaaaaaaaaaaaaa',
         });
         expectProblem(short, 400, 'idempotency_key_required');
       }
