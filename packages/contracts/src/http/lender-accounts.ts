@@ -7,9 +7,6 @@ import { DateOnly, Paise, Timestamp } from '../primitives.js';
 
 // ---- shared building blocks ----------------------------------------------------------------------------------------
 
-/** A plain reference label (a document title, an evidence tag): no file contents, no account details. Mirrors the database check. */
-export const AccountsEvidenceLabel = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9 ._:/#,()-]{2,199}$/);
-
 /** The provider key as the register spells it. */
 export const AccountsProviderKey = z.string().regex(/^[a-z][a-z0-9_]{2,49}$/);
 
@@ -20,6 +17,15 @@ export const AccountsProviderKey = z.string().regex(/^[a-z][a-z0-9_]{2,49}$/);
  */
 const looksPersonal = (text: string): boolean =>
   /[0-9]{9,}/.test(text.replace(/[\s-]/g, '')) || /\b[A-Z]{5}[0-9]{4}[A-Z]\b/.test(text);
+
+/**
+ * A plain reference label (a document title, an evidence tag): no file contents, no account details. The pattern mirrors the
+ * database check; the digit-run rule is added here so a label cannot carry a number either.
+ */
+export const AccountsEvidenceLabel = z
+  .string()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9 ._:/#,()-]{2,199}$/)
+  .refine((text) => !looksPersonal(text), { message: 'unsafe_free_text' });
 export const AccountsReason = z
   .string()
   .trim()
@@ -384,7 +390,13 @@ export const PaymentConfigDraftInput = z.strictObject({
   secretRef: PaymentConfigSecretName,
   webhookSecretRef: PaymentConfigSecretName,
   railLimits: PaymentConfigRailLimits.default({}),
-  railLimitsSource: z.string().trim().min(10).max(500).optional(),
+  railLimitsSource: z
+    .string()
+    .trim()
+    .min(10)
+    .max(500)
+    .refine((text) => !looksPersonal(text), { message: 'unsafe_free_text' })
+    .optional(),
   evidenceRef: AccountsEvidenceLabel.optional(),
   contractSectionRef: AccountsEvidenceLabel.optional(),
 });

@@ -120,6 +120,13 @@ describe.skipIf(!enabled)(
     };
     const q = async <T extends pg.QueryResultRow>(sql: string, values: unknown[] = []) =>
       (await admin.query<T>(sql, values)).rows;
+    /** Registry rows registered by this file's platform users (other integration files may share the database). */
+    const myRegistry = () =>
+      q('select 1 from payments.account_registry where registered_by = any($1::uuid[])', [
+        [ids.p1, ids.p2],
+      ]);
+    /** What the database looked like when this file started: empty, or only key version 1 active (the fixtures of other files). */
+    let pristineKeys = false;
 
     async function member(org: string, user: string, kind: 'lender' | 'platform', roles: string[]) {
       const m = await admin.query<{ id: string }>(
@@ -206,6 +213,21 @@ describe.skipIf(!enabled)(
     beforeAll(async () => {
       admin = new pg.Pool({ connectionString: ADMIN, max: 3 });
       apiPool = new pg.Pool({ connectionString: API, max: 10 });
+      const startKeys = await q<{ key_version: number; status: string }>(
+        'select key_version, status from payments.fingerprint_key_versions order by key_version',
+      );
+      pristineKeys = startKeys.length === 0;
+      if (
+        !pristineKeys &&
+        !(
+          startKeys.length === 1 &&
+          startKeys[0]?.key_version === 1 &&
+          startKeys[0].status === 'active'
+        )
+      )
+        throw new Error(
+          'this file needs a freshly migrated database (or one only the fixtures of other integration files used)',
+        );
 
       for (const id of [ids.p1, ids.p2, ids.p3, ids.l1, ids.l2, ids.l3, ids.la, ids.b1, ids.b2]) {
         await admin.query(
@@ -455,7 +477,9 @@ describe.skipIf(!enabled)(
         );
         expect(draft.json()).toEqual({ provider: 'testpay', status: 'draft' });
         expect(
-          (await get('/v1/lender/payment-providers', ids.l1)).json<{ items: unknown[] }>().items,
+          (await get('/v1/lender/payment-providers', ids.l1))
+            .json<{ items: { provider: string }[] }>()
+            .items.filter((i) => i.provider === 'testpay'),
         ).toEqual([]);
 
         const approved = ok(
@@ -477,7 +501,7 @@ describe.skipIf(!enabled)(
             evidenceLabel: string;
           }[];
         }>();
-        expect(list.items).toEqual([
+        expect(list.items.filter((i) => i.provider === 'testpay')).toEqual([
           expect.objectContaining({
             provider: 'testpay',
             status: 'approved',
@@ -488,7 +512,7 @@ describe.skipIf(!enabled)(
         const choices = ok(await get('/v1/lender/payment-providers', ids.l1)).json<{
           items: Record<string, unknown>[];
         }>();
-        expect(choices.items).toEqual([
+        expect(choices.items.filter((i) => i.provider === 'testpay')).toEqual([
           {
             provider: 'testpay',
             displayName: 'Testpay (SAMPLE provider)',
@@ -586,7 +610,7 @@ describe.skipIf(!enabled)(
           expect.objectContaining({ code: 'U16', class: 'technical' }),
         ]);
         const retired = ok(
-          await get('/v1/platform/return-code-classes?status=retired', ids.p1),
+          await get('/v1/platform/return-code-classes?status=retired&provider=testpay', ids.p1),
         ).json<{ items: { class: string }[] }>();
         expect(retired.items.map((i) => i.class)).toEqual(['insufficient_funds']);
         const unknown = await post('/v1/platform/return-code-classes', ids.p1, {
@@ -612,15 +636,17 @@ describe.skipIf(!enabled)(
 
     // ----------------------------------------------------------------------------------------------------------------------
     describe('the registry fails closed until a key version and a format rule are approved by two different people', () => {
-      it('refuses to register an account while no fingerprint key version is active', async () => {
+      it('refuses to register an account while no fingerprint key version is active', async (ctx) => {
+        if (!pristineKeys) ctx.skip();
         const sample = newSample();
         const res = await post('/v1/platform/accounts', ids.p1, registerBody(sample));
         expect(res.statusCode, res.body).toBe(409);
         expect(code(res)).toBe('key_version_not_active');
-        expect(await q('select 1 from payments.account_registry')).toHaveLength(0);
+        expect(await myRegistry()).toHaveLength(0);
       });
 
-      it('proposes key version 1 by one person and activates it by a different one', async () => {
+      it('proposes key version 1 by one person and activates it by a different one', async (ctx) => {
+        if (!pristineKeys) ctx.skip();
         const wrongNext = await post('/v1/platform/fingerprint-key-versions', ids.p1, {
           version: 3,
         });
@@ -669,7 +695,9 @@ describe.skipIf(!enabled)(
       });
 
       it('still refuses to register while the only format rule is the unverified, unapproved seed', async () => {
-        const seeded = ok(await get('/v1/platform/account-format-rules', ids.p1)).json<{
+        const seeded = ok(
+          await get('/v1/platform/account-format-rules?accountType=bank_account', ids.p1),
+        ).json<{
           items: Record<string, unknown>[];
         }>();
         expect(seeded.items).toEqual([
@@ -690,7 +718,7 @@ describe.skipIf(!enabled)(
         const res = await post('/v1/platform/accounts', ids.p1, registerBody(newSample()));
         expect(res.statusCode).toBe(409);
         expect(code(res)).toBe('account_format_unvalidated');
-        expect(await q('select 1 from payments.account_registry')).toHaveLength(0);
+        expect(await myRegistry()).toHaveLength(0);
       });
 
       it('takes the seeded rule through submit by one person and approval by another, and keeps the evidence label honest', async () => {
@@ -725,7 +753,10 @@ describe.skipIf(!enabled)(
         );
         expect(approved.json()).toEqual({ id: state.seedRule, status: 'approved' });
         const rules = ok(
-          await get('/v1/platform/account-format-rules?status=approved', ids.p2),
+          await get(
+            '/v1/platform/account-format-rules?status=approved&accountType=bank_account',
+            ids.p2,
+          ),
         ).json<{
           items: {
             id: string;
@@ -831,7 +862,7 @@ describe.skipIf(!enabled)(
         const reused = await post('/v1/platform/accounts', ids.p1, registerBody(other), key);
         expect(reused.statusCode).toBe(422);
         expect(code(reused)).toBe('idempotency_key_reused');
-        expect(await q('select 1 from payments.account_registry')).toHaveLength(1);
+        expect(await myRegistry()).toHaveLength(1);
 
         // The idempotency record keeps a hash of the request. It covers the bank code, the length and the last four digits of
         // the number (the masked reference) and never the number: an unsalted hash of a short number could be guessed offline.
@@ -884,7 +915,7 @@ describe.skipIf(!enabled)(
           registerBody({ ...sample, ifsc: `${sample.ifsc.slice(0, 4)}0${alnum(6)}` }),
         );
         expect(code(otherBranch)).toBe('account_already_registered');
-        expect(await q('select 1 from payments.account_registry')).toHaveLength(1);
+        expect(await myRegistry()).toHaveLength(1);
       });
 
       it('validates the number against the approved rule and the request by shape, and never echoes the number', async () => {
@@ -974,7 +1005,7 @@ describe.skipIf(!enabled)(
           registerBody(sample, { effectiveFrom: '2026-10-01', effectiveTo: '2026-09-01' }),
         );
         expect(code(datesBackwards)).toBe('dates_invalid');
-        expect(await q('select 1 from payments.account_registry')).toHaveLength(1);
+        expect(await myRegistry()).toHaveLength(1);
       });
 
       it('lets only a registry manager register: the verifier, a lender user and a platform user without it get 403', async () => {
@@ -987,7 +1018,7 @@ describe.skipIf(!enabled)(
         expect(
           (await post('/v1/platform/accounts', ids.borrower, registerBody(sample))).statusCode,
         ).toBe(403);
-        expect(await q('select 1 from payments.account_registry')).toHaveLength(1);
+        expect(await myRegistry()).toHaveLength(1);
       });
 
       it('answers 503 key_management_unavailable when this process has no fingerprint key, after checking the permission', async () => {
@@ -1004,7 +1035,7 @@ describe.skipIf(!enabled)(
         expect(res.statusCode, res.body).toBe(503);
         expect(code(res)).toBe('key_management_unavailable');
         expect(res.body).not.toContain(sample.accountNumber);
-        expect(await q('select 1 from payments.account_registry')).toHaveLength(1);
+        expect(await myRegistry()).toHaveLength(1);
         // The full application declares the module's routes (the lead wires the key source in).
         const declared = app.registeredRoutes.map((r) => `${r.method} ${r.url}`);
         expect(declared).toContain('POST /v1/platform/accounts');
@@ -1013,7 +1044,7 @@ describe.skipIf(!enabled)(
       });
 
       it('lists and reads registrations masked, never with a fingerprint, and hides them from every lender', async () => {
-        const list = ok(await get('/v1/platform/accounts', ids.p2));
+        const list = ok(await get(`/v1/platform/accounts?ownerOrgId=${ids.lenderA}`, ids.p2));
         const page = list.json<{ items: Record<string, unknown>[]; nextCursor: string | null }>();
         expect(page.items).toHaveLength(1);
         expect(page.nextCursor).toBeNull();
@@ -1038,36 +1069,30 @@ describe.skipIf(!enabled)(
           expect((await get(`/v1/platform/accounts/${state.regE}`, user)).statusCode).toBe(403);
         }
         expect(
-          (await get('/v1/platform/accounts?status=verified', ids.p1)).json<{ items: unknown[] }>()
-            .items,
+          (
+            await get(`/v1/platform/accounts?status=verified&ownerOrgId=${ids.lenderA}`, ids.p1)
+          ).json<{ items: unknown[] }>().items,
         ).toHaveLength(0);
       });
 
       it('pages the registry with a keyset cursor and rejects a tampered cursor', async () => {
         const sample = newSample();
         state.sampleF = JSON.stringify(sample);
-        const second = ok(
-          await post(
-            '/v1/platform/accounts',
-            ids.p1,
-            registerBody(sample, {
-              ownerKind: 'udofin',
-              ownerOrgId: undefined,
-              legalOwnerName: 'Udofin Technologies Private Limited',
-              permittedPurposes: ['fee_collection'],
-            }),
-          ),
-          201,
-        );
+        const second = ok(await post('/v1/platform/accounts', ids.p1, registerBody(sample)), 201);
         state.regF = String(second.json<{ id: string }>().id);
-        const firstPage = ok(await get('/v1/platform/accounts?limit=1', ids.p1)).json<{
+        const firstPage = ok(
+          await get(`/v1/platform/accounts?limit=1&ownerOrgId=${ids.lenderA}`, ids.p1),
+        ).json<{
           items: { id: string }[];
           nextCursor: string | null;
         }>();
         expect(firstPage.items.map((i) => i.id)).toEqual([state.regF]);
         expect(firstPage.nextCursor).not.toBeNull();
         const nextPage = ok(
-          await get(`/v1/platform/accounts?limit=1&cursor=${firstPage.nextCursor}`, ids.p1),
+          await get(
+            `/v1/platform/accounts?limit=1&ownerOrgId=${ids.lenderA}&cursor=${firstPage.nextCursor}`,
+            ids.p1,
+          ),
         ).json<{ items: { id: string }[]; nextCursor: string | null }>();
         expect(nextPage.items.map((i) => i.id)).toEqual([state.regE]);
         expect(nextPage.nextCursor).toBeNull();
@@ -1177,7 +1202,12 @@ describe.skipIf(!enabled)(
         state.regG = stillOld.json<{ id: string }>().id;
         ok(await post(`/v1/platform/account-format-rules/${narrow.id}/approve`, ids.p2, {}));
         expect(
-          (await get('/v1/platform/account-format-rules?status=retired', ids.p1))
+          (
+            await get(
+              '/v1/platform/account-format-rules?status=retired&accountType=bank_account',
+              ids.p1,
+            )
+          )
             .json<{ items: { id: string }[] }>()
             .items.map((r) => r.id),
         ).toEqual([state.seedRule]);
@@ -1296,8 +1326,8 @@ describe.skipIf(!enabled)(
         const all = ok(await get('/v1/platform/merchants', ids.p1)).json<{
           items: { id: string }[];
         }>();
-        expect(all.items.map((m) => m.id).sort()).toEqual(
-          [state.merchantA, state.merchantB].sort(),
+        expect(all.items.map((m) => m.id)).toEqual(
+          expect.arrayContaining([state.merchantA as string, state.merchantB as string]),
         );
         expect(
           ok(
@@ -1535,6 +1565,53 @@ describe.skipIf(!enabled)(
           (await get('/v1/lender/settlement-accounts/registry-status', ids.borrower)).statusCode,
         ).toBe(403);
       });
+
+      it("registers Udofin's own account for fee collection, and no lender settlement account can be linked to it", async () => {
+        const sample = newSample();
+        const created = ok(
+          await post(
+            '/v1/platform/accounts',
+            ids.p1,
+            registerBody(sample, {
+              ownerKind: 'udofin',
+              ownerOrgId: undefined,
+              legalOwnerName: 'Udofin Technologies Private Limited',
+              permittedPurposes: ['fee_collection'],
+            }),
+          ),
+          201,
+        ).json<{ id: string; maskedRef: string }>();
+        ok(
+          await post(`/v1/platform/accounts/${created.id}/verify`, ids.p2, {
+            evidenceRef: 'SAMPLE-BANK-LETTER-UDOFIN-FEES',
+          }),
+        );
+        const entry = ok(await get(`/v1/platform/accounts/${created.id}`, ids.p1)).json<
+          Record<string, unknown>
+        >();
+        expect(entry).toMatchObject({
+          ownerKind: 'udofin',
+          ownerOrgId: null,
+          permittedPurposes: ['fee_collection'],
+          verificationStatus: 'verified',
+        });
+        const settlement = randomUUID();
+        await admin.query(
+          `insert into tenancy.lender_settlement_accounts (id, lender_org_id, label, bank_name, masked_account_ref) values ($1, $2, 'Looks like the fee account (SAMPLE)', 'Sample Bank', $3)`,
+          [settlement, ids.lenderB, created.maskedRef],
+        );
+        const link = await post(`/v1/platform/settlement-accounts/${settlement}/link`, ids.p1, {
+          registryId: created.id,
+        });
+        expect(link.statusCode).toBe(409);
+        expect(code(link)).toBe('registry_not_permitted');
+        expect(
+          await q(
+            'select 1 from tenancy.lender_settlement_accounts where id = $1 and registry_id is not null',
+            [settlement],
+          ),
+        ).toHaveLength(0);
+      });
     });
 
     // ----------------------------------------------------------------------------------------------------------------------
@@ -1661,7 +1738,12 @@ describe.skipIf(!enabled)(
             user,
           ).toBe(403);
         }
-        expect(await q('select 1 from payments.lender_payment_configs')).toHaveLength(0);
+        expect(
+          await q(
+            'select 1 from payments.lender_payment_configs where lender_org_id = any($1::uuid[])',
+            [[ids.lenderA, ids.lenderB]],
+          ),
+        ).toHaveLength(0);
       });
 
       it('explains why a configuration cannot be submitted (an unverified merchant and an unlinked account are named)', async () => {
@@ -1835,10 +1917,15 @@ describe.skipIf(!enabled)(
           await get(`/v1/lender/payment-configs?lenderId=${ids.lenderA}&status=draft`, ids.l1),
         ).json<{ items: unknown[] }>();
         expect(filtered.items).toHaveLength(2);
-        const platformAll = ok(await get('/v1/platform/payment-configs', ids.p1)).json<{
-          items: unknown[];
-        }>();
-        expect(platformAll.items).toHaveLength(3);
+        for (const [lender, count] of [
+          [ids.lenderA, 2],
+          [ids.lenderB, 1],
+        ] as const) {
+          const platformView = ok(
+            await get(`/v1/platform/payment-configs?lenderId=${lender}`, ids.p1),
+          ).json<{ items: unknown[] }>();
+          expect(platformView.items).toHaveLength(count);
+        }
       });
 
       it('refuses to submit a configuration without evidence, then submits and withdraws it', async () => {
@@ -2009,7 +2096,12 @@ describe.skipIf(!enabled)(
         expect(unmet.statusCode).toBe(409);
         expect(code(unmet)).toBe('prerequisites_unmet');
         expect(unmet.json<{ detail?: string }>().detail).toBe('Reasons: lms_connection_not_active');
-        expect(await q('select 1 from servicing.feature_change_requests')).toHaveLength(0);
+        expect(
+          await q(
+            'select 1 from servicing.feature_change_requests where lender_org_id = any($1::uuid[])',
+            [[ids.lenderA, ids.lenderB]],
+          ),
+        ).toHaveLength(0);
         const unknown = await post('/v1/platform/feature-change-requests', ids.p1, {
           lenderId: ids.lenderA,
           feature: 'telepathy',
@@ -2575,7 +2667,33 @@ describe.skipIf(!enabled)(
 
     // ----------------------------------------------------------------------------------------------------------------------
     describe('rotating the fingerprint key: every live entry is re-keyed, and the proposal needs a different approver', () => {
-      it('needs the fingerprint under every live key version, so a process missing a key answers 503', async () => {
+      // The other integration files build their fixtures on key version 1 being the active one. Restore that in the shared
+      // database when this rotation is done (a test-only repair as the database owner, with triggers off), so file order is free.
+      afterAll(async () => {
+        if (!pristineKeys) return;
+        const client = await admin.connect();
+        try {
+          await client.query('begin');
+          await client.query("set local session_replication_role = 'replica'");
+          await client.query(
+            `update payments.fingerprint_key_versions set status = 'retired', approved_by = coalesce(approved_by, $1), approved_at = coalesce(approved_at, now()),
+                    retired_by = $1, retired_at = now() where key_version = 2 and status <> 'retired'`,
+            [ids.p2],
+          );
+          await client.query(
+            `update payments.fingerprint_key_versions set status = 'active', retired_by = null, retired_at = null where key_version = 1`,
+          );
+          await client.query('commit');
+        } catch (error) {
+          await client.query('rollback');
+          throw error;
+        } finally {
+          client.release();
+        }
+      });
+
+      it('needs the fingerprint under every live key version, so a process missing a key answers 503', async (ctx) => {
+        if (!pristineKeys) ctx.skip();
         ok(
           await post('/v1/platform/fingerprint-key-versions', ids.p1, {
             version: 2,
@@ -2620,7 +2738,8 @@ describe.skipIf(!enabled)(
         expect(code(direct)).toBe('rekey_invalid');
       });
 
-      it('refuses to approve version 2 until every unverified or verified entry has a successor, then activates it', async () => {
+      it('refuses to approve version 2 until every unverified or verified entry has a successor, then activates it', async (ctx) => {
+        if (!pristineKeys) ctx.skip();
         expect(
           code(await post('/v1/platform/fingerprint-key-versions/2/approve', ids.p2, {})),
         ).toBe('rotation_incomplete');
@@ -2649,7 +2768,7 @@ describe.skipIf(!enabled)(
           `select id, fingerprint, owner_org_id, owner_kind, legal_owner_name, permitted_purposes, verification_status from payments.account_registry
             where key_version = 1 and verification_status in ('unverified', 'verified')`,
         );
-        expect(rows.length).toBe(unverified.length);
+        expect(rows.length).toBeGreaterThanOrEqual(unverified.length);
         const successorOfVerified: string[] = [];
         for (const row of rows) {
           const sample = sampleWithFingerprint(row.fingerprint, 1);
@@ -2687,16 +2806,18 @@ describe.skipIf(!enabled)(
           });
           if (row.verification_status === 'verified') successorOfVerified.push(rekey.id);
         }
-        expect(successorOfVerified).toHaveLength(1);
+        expect(successorOfVerified.length).toBeGreaterThanOrEqual(1);
         // Every entry has a successor, but the successor of the verified entry is not verified yet.
         expect(
           code(await post('/v1/platform/fingerprint-key-versions/2/approve', ids.p2, {})),
         ).toBe('rotation_incomplete');
-        ok(
-          await post(`/v1/platform/accounts/${successorOfVerified[0]}/verify`, ids.p2, {
-            evidenceRef: 'SAMPLE-BANK-LETTER-ROTATION',
-          }),
-        );
+        for (const successor of successorOfVerified) {
+          ok(
+            await post(`/v1/platform/accounts/${successor}/verify`, ids.p2, {
+              evidenceRef: 'SAMPLE-BANK-LETTER-ROTATION',
+            }),
+          );
+        }
         expect(
           (await post('/v1/platform/fingerprint-key-versions/2/approve', ids.p1, {})).statusCode,
         ).toBe(403);

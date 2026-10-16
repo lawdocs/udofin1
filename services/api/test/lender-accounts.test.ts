@@ -8,6 +8,7 @@ import {
   type EncryptedBlob,
 } from '@udofin/adapters';
 import {
+  AccountsEvidenceLabel,
   AccountsReason,
   FeatureChangeRequestInput,
   PaymentConfigDraftInput,
@@ -166,6 +167,26 @@ describe('request shapes', () => {
       'x'.repeat(1001),
     ]) {
       expect(AccountsReason.safeParse(text).success, text.slice(0, 30)).toBe(false);
+    }
+  });
+
+  it('keeps an evidence label a label: letters, short numbers and separators, never a long number', () => {
+    for (const label of [
+      'SAMPLE-BANK-LETTER-2026-1',
+      'LSP agreement 7.1 (signed)',
+      'PA/2026/0042',
+    ]) {
+      expect(AccountsEvidenceLabel.safeParse(label).success, label).toBe(true);
+    }
+    for (const label of [
+      '',
+      'ab',
+      '-leading',
+      'BANK-LETTER-912345678901',
+      'letter ABCDE1234F',
+      'a'.repeat(201),
+    ]) {
+      expect(AccountsEvidenceLabel.safeParse(label).success, label).toBe(false);
     }
   });
 
