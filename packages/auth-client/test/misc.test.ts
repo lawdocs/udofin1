@@ -155,6 +155,12 @@ describe('generic call allow-list', () => {
     '/v1/documentsx/1',
     '/v1/platform/document-rules',
     '/v1/applications/../admin/x',
+    '/v1/loansx',
+    '/v1/payments/../admin/x',
+    '/v1/mandatesx/1',
+    '/v1/me/remindersx',
+    '/v1/me/reminders/../x',
+    '/v1/loan',
   ])('refuses %s', async (path) => {
     expect(await api.get(path, any)).toEqual({ ok: false, status: 0, code: 'path_not_allowed' });
   });
@@ -169,6 +175,13 @@ describe('generic call allow-list', () => {
     '/v1/documents/0f1e2d3c-4b5a-4c6d-8e7f-0a1b2c3d4e5f/kfs?language=hi',
     '/v1/offers/0f1e2d3c-4b5a-4c6d-8e7f-0a1b2c3d4e5f/accept',
     '/v1/agreements/0f1e2d3c-4b5a-4c6d-8e7f-0a1b2c3d4e5f/signing',
+    '/v1/loans',
+    '/v1/loans/0f1e2d3c-4b5a-4c6d-8e7f-0a1b2c3d4e5f/schedule',
+    '/v1/loans/0f1e2d3c-4b5a-4c6d-8e7f-0a1b2c3d4e5f/activity?limit=30&cursor=abc_DEF-123',
+    '/v1/payments/0f1e2d3c-4b5a-4c6d-8e7f-0a1b2c3d4e5f/cancel',
+    '/v1/mandates',
+    '/v1/mandates/0f1e2d3c-4b5a-4c6d-8e7f-0a1b2c3d4e5f/debits',
+    '/v1/me/reminders',
   ])('allows %s through to the network', async (path) => {
     const result = await api.get(path, any);
     expect(result.ok === false && result.code === 'path_not_allowed').toBe(false);
