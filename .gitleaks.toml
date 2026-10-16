@@ -1,0 +1,46 @@
+# gitleaks configuration. Extends the default rules. Every allowance below is for a synthetic,
+# fixed fake string that a test feeds to a "refuse a privileged or secret-shaped value" check.
+# They are not credentials for anything.
+#
+# Each allowance is scoped twice (condition = "AND"): the finding must match BOTH the exact value
+# AND one of the exact test files listed. The same string anywhere else, or any other
+# secret-shaped string in these files, still fails the scan. Add a file here only after
+# `git grep -F <value>` shows it really contains the value; do not widen to directories.
+#
+# Scope history: the paths were checked against every commit (`git rev-list --all`); the values
+# have only ever existed in the files named here.
+title = "Udofin gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Fake Stripe-shaped key that the onboarding free-text guard must refuse (API integration test, pgTAP)"
+condition = "AND"
+paths = [
+  '''^services/api/test/integration/onboarding\.integration\.test\.ts$''',
+  '''^supabase/tests/008_onboarding\.test\.sql$''',
+]
+regexes = ['''^sk_live_abcdef123456$''']
+
+[[allowlists]]
+description = "Fixed form idempotency key used by the portal-kit component tests"
+condition = "AND"
+paths = [
+  '''^packages/portal-kit/test/applications\.test\.tsx$''',
+  '''^packages/portal-kit/test/documents\.test\.tsx$''',
+  '''^packages/portal-kit/test/onboarding\.test\.tsx$''',
+  '''^packages/portal-kit/test/panel-products\.test\.tsx$''',
+]
+regexes = ['''^ui-0f1e2d3c-4b5a-4c6d-8e7f-0a1b2c3d4e5f$''']
+
+[[allowlists]]
+description = "Fake Supabase publishable and secret key shapes used by the configuration-validation tests"
+condition = "AND"
+paths = [
+  '''^apps/mobile/test/env\.test\.ts$''',
+  '''^packages/auth-client/test/portal-env\.test\.ts$''',
+  '''^packages/auth-client/test/rate-limit-unattributed\.test\.ts$''',
+  '''^tests/e2e/test/portals\.e2e\.test\.ts$''',
+]
+regexes = ['''^sb_(publishable|secret)_0123456789abcdef$''']

@@ -1,0 +1,42 @@
+{
+  "name": "@udofin/portal-kit",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Accessible React building blocks shared by the operations and partner-lender portals: sign-in with second factor, sign-out, page shell and state panels.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "react": "19.2.3"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "^10.4.0",
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/node": "^24.19.2",
+    "@types/react": "~19.2.18",
+    "@types/react-dom": "~19.2.7",
+    "jsdom": "^27.0.0",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "typescript": "~6.0.3",
+    "vitest": "^5.0.3"
+  },
+  "dependencies": {
+    "@udofin/contracts": "workspace:*",
+    "zod": "^4.6.5"
+  }
+}

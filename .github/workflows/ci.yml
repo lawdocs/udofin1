@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Format, build, lint, typecheck, test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install poppler-utils (the PDF tests read the rendered text with pdftotext; they fail in CI without it)
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends poppler-utils
+          pdftotext -v
+      - run: pnpm format:check
+      - run: pnpm build
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - name: Validate production mobile config (permissions, identifiers)
+        run: pnpm --filter @udofin/mobile config:check
+        env:
+          APP_ENV: production
+      - name: Audit-ignore scope (the accepted advisories must stay out of server-side code, RA-001 and RA-002)
+        run: node scripts/check-audit-ignores.mjs
+      - name: Dependency audit (production dependencies, high and critical)
+        run: pnpm audit --prod --audit-level high
+
+  database:
+    name: Migrations and RLS tests (Supabase, Postgres 17)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: supabase/setup-cli@45a513f8c64c0bc8e0e3dfe572b5c95be85f6359 # v3.0.1
+        with:
+          version: 2.120.0
+      - run: supabase db start
+      - run: supabase test db
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter "@udofin/api^..." build
+      - name: API integration tests against the real migrated database
+        env:
+          # Throwaway local CI database only; these are not secrets.
+          PGPASSWORD: postgres
+          INTEGRATION_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+          INTEGRATION_API_URL: postgresql://udofin_api:ci-api-only@127.0.0.1:54322/postgres
+          INTEGRATION_SYSTEM_URL: postgresql://udofin_system:ci-system-only@127.0.0.1:54322/postgres
+        run: |
+          psql -h 127.0.0.1 -p 54322 -U postgres -d postgres -v ON_ERROR_STOP=1 \
+            -c "alter role udofin_api password 'ci-api-only'" \
+            -c "alter role udofin_system password 'ci-system-only'"
+          pnpm --filter @udofin/api test
+
+  portals-e2e:
+    name: Portals in a real browser (fake Supabase Auth and API)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter "@udofin/ops-portal..." --filter "@udofin/lender-portal..." build
+      - name: Browser tests
+        env:
+          E2E: '1'
+          # The GitHub-hosted runner image ships Google Chrome.
+          PLAYWRIGHT_CHROMIUM_PATH: /usr/bin/google-chrome
+        run: pnpm --filter @udofin/e2e test
+
+  secrets:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: docker run --rm -v "$GITHUB_WORKSPACE:/repo" ghcr.io/gitleaks/gitleaks:v8.30.1 git --redact --verbose /repo
+
+  api-image:
+    name: API container builds
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: docker build -f infra/docker/api.Dockerfile -t udofin-api:ci .
