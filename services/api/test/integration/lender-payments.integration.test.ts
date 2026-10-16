@@ -809,6 +809,50 @@ describe.skipIf(!enabled)(
       await app?.close();
       await apiPool?.end();
       await systemPool?.end();
+      // The integration files share one database and some assert on database-wide counts of money rows (for example "no
+      // refund exists"), so this file leaves none of its payment rows behind. Triggers and foreign keys are off for this one
+      // transaction (the append-only triggers would refuse a delete), and every delete is scoped to this file's two lenders.
+      if (admin && A && B) {
+        const mine = [A.id, B.id];
+        const c = await admin.connect();
+        try {
+          await c.query('begin');
+          await c.query('set local session_replication_role = replica');
+          for (const table of [
+            'payments.reconciliation_exception_events',
+            'payments.reconciliation_exceptions',
+            'payments.reconciliation_matches',
+            'payments.reconciliation_runs',
+            'payments.reconciliation_settings',
+            'payments.event_processing',
+            'payments.payment_adjustments',
+            'payments.provider_payments',
+            'payments.provider_events',
+            'payments.webhook_receipts',
+            'payments.pre_debit_notices',
+            'payments.mandate_debits',
+            'payments.mandate_events',
+            'payments.mandates',
+            'payments.handoff_links',
+            'payments.payment_intents',
+            'payments.settlement_items',
+            'payments.settlement_batches',
+            'payments.bank_credits',
+            'payments.lender_payment_policies',
+            'payments.lender_mandate_policies',
+            'payments.lender_payment_configs',
+            'servicing.lms_receipts',
+            'tenancy.lender_settlement_accounts',
+          ])
+            await c.query(`delete from ${table} where lender_org_id = any($1::uuid[])`, [mine]);
+          await c.query('commit');
+        } catch (error) {
+          await c.query('rollback');
+          throw error;
+        } finally {
+          c.release();
+        }
+      }
       await admin?.end();
     });
 
@@ -1093,10 +1137,13 @@ describe.skipIf(!enabled)(
         );
         expect(idsOf(b)).toEqual(idsOf(B.intents));
         expect(b.every((r) => r.lenderId === ids.lenderB)).toBe(true);
-        const ops = rowsOf<{ id: string }>(await get('/v1/lender/payments?limit=100', ids.pOps));
-        const seenIds = new Set(idsOf(ops));
-        for (const intent of [...A.intents, ...B.intents])
-          expect(seenIds.has(intent.id)).toBe(true);
+        // Platform operations staff read every lender (other integration files leave rows of their own, so ask lender by lender).
+        for (const lender of [A, B]) {
+          const ops = rowsOf<{ id: string }>(
+            await get(`/v1/lender/payments?limit=100&lenderId=${lender.id}`, ids.pOps),
+          );
+          expect(idsOf(ops)).toEqual(idsOf(lender.intents));
+        }
       });
 
       it('pages through every row without skips or repeats', async () => {
@@ -2398,11 +2445,12 @@ describe.skipIf(!enabled)(
         );
         expect(b.every((r) => r.lenderId === ids.lenderB)).toBe(true);
         for (const id of A.exceptions) expect(idsOf(b)).not.toContain(id);
-        const all = rowsOf<{ id: string }>(await get(`${base}?limit=100`, ids.pPay));
+        // Every exception of every lender (other integration files leave rows of their own, so page through all of them).
         const total = await count('select count(*) as n from payments.reconciliation_exceptions');
-        expect(all).toHaveLength(total);
-        const ops = rowsOf<{ id: string }>(await get(`${base}?limit=100`, ids.pOps));
-        expect(ops).toHaveLength(total);
+        expect((await pages<{ id: string }>(base, ids.pPay, 100)).all).toHaveLength(total);
+        expect((await pages<{ id: string }>(base, ids.pOps, 100)).all).toHaveLength(total);
+        const mine = new Set(idsOf((await pages<{ id: string }>(base, ids.pPay, 100)).all));
+        for (const id of [...A.exceptions, ...B.exceptions]) expect(mine.has(id)).toBe(true);
       });
 
       it('filters, and pages without skips or repeats', async () => {
@@ -2702,7 +2750,9 @@ describe.skipIf(!enabled)(
         expect(idsOf(rows)).toEqual(expect.arrayContaining([mine, theirs]));
         expect(idsOf(rows)).not.toContain(closed);
         expect(rows.every((r) => r.owner === 'platform' && r.status !== 'resolved')).toBe(true);
-        expect(new Set(rows.map((r) => r.lenderId))).toEqual(new Set([ids.lenderA, ids.lenderB]));
+        // Both lenders appear (other integration files may have left platform exceptions of other lenders).
+        const lenders = new Set(rows.map((r) => r.lenderId));
+        expect(lenders.has(ids.lenderA) && lenders.has(ids.lenderB)).toBe(true);
         const expected = await q<{ id: string }>(
           "select id from payments.reconciliation_exceptions where owner = 'platform' and status <> 'resolved' order by opened_at desc, id desc",
         );
@@ -2715,7 +2765,10 @@ describe.skipIf(!enabled)(
         ).toBe(true);
         expect(
           rowsOf<{ class: string }>(
-            await get('/v1/platform/exceptions?class=merchant_mismatch', ids.pPay),
+            await get(
+              `/v1/platform/exceptions?class=merchant_mismatch&lenderId=${ids.lenderB}`,
+              ids.pPay,
+            ),
           ),
         ).toHaveLength(1);
         // Lender users (even with payment.reconcile) and platform staff without the provider permission are refused.
@@ -2770,7 +2823,12 @@ describe.skipIf(!enabled)(
         expect(
           await count('select count(*) as n from auth.users where phone = $1', [CANARY.phone]),
         ).toBe(1);
-        expect(await count('select count(*) as n from payments.handoff_links')).toBe(2);
+        expect(
+          await count(
+            'select count(*) as n from payments.handoff_links where lender_org_id = any($1::uuid[])',
+            [[ids.lenderA, ids.lenderB]],
+          ),
+        ).toBe(2);
       });
 
       it('never returns a secret reference, a token or payload hash, an address hash, a link, a phone number, an account number, a borrower id or an internal key', async () => {
