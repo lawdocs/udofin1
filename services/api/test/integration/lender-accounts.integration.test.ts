@@ -17,6 +17,7 @@ import { buildApp } from '../../src/app.js';
 import { TokenError, type TokenVerifier } from '../../src/auth/token-verifier.js';
 import { loadConfig } from '../../src/config.js';
 import { createUserContext } from '../../src/db/user-context.js';
+import { requestFingerprint } from '../../src/idempotency/idempotency.js';
 import { registerRoutes } from '../../src/http/routes.js';
 import { loggerOptions } from '../../src/logger.js';
 import {
@@ -831,6 +832,33 @@ describe.skipIf(!enabled)(
         expect(reused.statusCode).toBe(422);
         expect(code(reused)).toBe('idempotency_key_reused');
         expect(await q('select 1 from payments.account_registry')).toHaveLength(1);
+
+        // The idempotency record keeps a hash of the request. It covers the bank code, the length and the last four digits of
+        // the number (the masked reference) and never the number: an unsalted hash of a short number could be guessed offline.
+        const stored = await q<{ request_hash: string }>(
+          `select request_hash from ops.idempotency_keys where route = 'POST /v1/platform/accounts' and idem_key = $1`,
+          [key],
+        );
+        const { accountNumber, ifsc, ...rest } = registerBody(sample);
+        const sealed = requestFingerprint({
+          route: 'POST /v1/platform/accounts',
+          params: undefined,
+          body: {
+            ...rest,
+            account: {
+              bankCode: ifsc.slice(0, 4),
+              digits: accountNumber.length,
+              lastFour: accountNumber.slice(-4),
+            },
+          },
+        });
+        const naive = requestFingerprint({
+          route: 'POST /v1/platform/accounts',
+          params: undefined,
+          body: registerBody(sample),
+        });
+        expect(stored).toEqual([{ request_hash: sealed }]);
+        expect(sealed).not.toBe(naive);
       });
 
       it('refuses the same real account again, under any owner, and keeps one entry per account', async () => {
@@ -2298,6 +2326,96 @@ describe.skipIf(!enabled)(
             expect.objectContaining({ mode: 'emergency', enable: false, feature: 'payments' }),
           ]),
         );
+      });
+    });
+
+    // ----------------------------------------------------------------------------------------------------------------------
+    describe('the database recognises a retried key even after the stored replay has expired', () => {
+      it('returns the same registration and the same feature request, and refuses a second token for the same draft', async () => {
+        const expire = (key: string) =>
+          q(`delete from ops.idempotency_keys where idem_key = $1`, [key]);
+
+        const sample = newSample();
+        const registerKey = `it-${randomUUID()}`;
+        const first = ok(
+          await post('/v1/platform/accounts', ids.p1, registerBody(sample), registerKey),
+          201,
+        ).json<{ id: string }>();
+        await expire(registerKey);
+        const again = await post(
+          '/v1/platform/accounts',
+          ids.p1,
+          registerBody(sample),
+          registerKey,
+        );
+        expect(again.statusCode, again.body).toBe(201);
+        expect(again.headers['idempotent-replayed']).toBeUndefined();
+        expect(again.json<{ id: string }>().id).toBe(first.id);
+        // The same key with another account is a conflict the database reports.
+        await expire(registerKey);
+        const other = await post(
+          '/v1/platform/accounts',
+          ids.p1,
+          registerBody(newSample()),
+          registerKey,
+        );
+        expect(other.statusCode).toBe(409);
+        expect(code(other)).toBe('idempotency_conflict');
+        expect(
+          await q('select 1 from payments.account_registry where registered_by = $1 and id = $2', [
+            ids.p1,
+            first.id,
+          ]),
+        ).toHaveLength(1);
+
+        const requestKey = `it-${randomUUID()}`;
+        const request = {
+          lenderId: ids.lenderA,
+          feature: 'servicing_sync',
+          enable: false,
+          reason: 'pausing synchronisation while the lender fixes its export',
+        };
+        const pending = ok(
+          await post('/v1/platform/feature-change-requests', ids.p1, request, requestKey),
+          201,
+        ).json<{ id: string }>();
+        await expire(requestKey);
+        const retried = await post(
+          '/v1/platform/feature-change-requests',
+          ids.p1,
+          request,
+          requestKey,
+        );
+        expect(retried.statusCode, retried.body).toBe(201);
+        expect(retried.json<{ id: string }>().id).toBe(pending.id);
+        expect(
+          ok(
+            await post(`/v1/platform/feature-change-requests/${pending.id}/cancel`, ids.p1),
+          ).json(),
+        ).toEqual({ id: pending.id, status: 'cancelled' });
+
+        // A draft cannot be re-issued with a second token: the stored hash belongs to the first one.
+        const draftKey = `it-${randomUUID()}`;
+        const draft = {
+          lenderId: ids.lenderA,
+          provider: 'testpay',
+          providerMode: 'production',
+          merchantRegistryId: state.merchantA,
+          settlementAccountId: state.settlementA,
+          secretRef: 'TESTPAY_RETRY_SECRET',
+          webhookSecretRef: 'TESTPAY_RETRY_WEBHOOK',
+        };
+        ok(await post('/v1/lender/payment-configs', ids.l1, draft, draftKey), 201);
+        await expire(draftKey);
+        const second = await post('/v1/lender/payment-configs', ids.l1, draft, draftKey);
+        expect(second.statusCode).toBe(409);
+        expect(code(second)).toBe('idempotency_conflict');
+        expect(second.body).not.toMatch(/[A-Za-z0-9_-]{43}/);
+        expect(
+          await q(
+            `select 1 from payments.lender_payment_configs where secret_ref = 'TESTPAY_RETRY_SECRET'`,
+          ),
+        ).toHaveLength(1);
       });
     });
 
