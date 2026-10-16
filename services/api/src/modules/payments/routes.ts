@@ -410,13 +410,9 @@ function mapDebit(r: DebitRow) {
 interface LinkRow {
   lenderId: string;
   keyVersion: string;
-  alg: string;
   ciphertext: Buffer;
   expiresAt: string;
 }
-/** The one cipher the vault implements (`packages/adapters/src/handoff-vault.ts`); a row with another name is not opened. */
-const VAULT_ALG = 'aes-256-gcm';
-
 /** True when a database error carries exactly this hint (the stable word the SQL function raised). */
 const hasHint = (error: unknown, hint: string): boolean =>
   typeof error === 'object' && error !== null && (error as { hint?: unknown }).hint === hint;
@@ -436,18 +432,17 @@ export function paymentsRoutes(deps: { handoff?: HandoffKeyring }): RouteDefinit
         503,
         'handoff_unavailable',
         'Service Unavailable',
-        'Payment links cannot be shown in this environment.',
+        'Hand-off links cannot be shown in this environment.',
       );
     }
     const r = await tx.query<LinkRow>(
-      `select lender_org_id as "lenderId", key_version as "keyVersion", alg, ciphertext, ${ts('expires_at')} as "expiresAt"
+      `select lender_org_id as "lenderId", key_version as "keyVersion", ciphertext, ${ts('expires_at')} as "expiresAt"
          from payments.take_handoff_link($1, $2::uuid)`,
       [kind, id],
     );
     const row = first(r.rows);
     let link: string;
     try {
-      if (row.alg !== VAULT_ALG) throw new HandoffVaultError('cannot_open');
       link = openHandoffLink(
         keyring,
         { kind, subjectId: id, lenderOrgId: row.lenderId },
