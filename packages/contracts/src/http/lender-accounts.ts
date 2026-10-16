@@ -171,8 +171,14 @@ export const AccountFormatRuleEntry = z.object({
 export type AccountFormatRuleEntry = z.infer<typeof AccountFormatRuleEntry>;
 export const AccountFormatRuleQuery = z.strictObject({
   status: AccountFormatRuleStatus.optional(),
-  country: z.string().regex(/^[A-Z]{2}$/).optional(),
-  accountType: z.string().regex(/^[a-z][a-z0-9_]{2,40}$/).optional(),
+  country: z
+    .string()
+    .regex(/^[A-Z]{2}$/)
+    .optional(),
+  accountType: z
+    .string()
+    .regex(/^[a-z][a-z0-9_]{2,40}$/)
+    .optional(),
 });
 export const AccountFormatRuleList = z.object({ items: z.array(AccountFormatRuleEntry) });
 export const AccountFormatRuleCreated = z.object({ id: z.uuid(), status: z.literal('draft') });
@@ -345,7 +351,13 @@ export const MerchantRegistered = z.object({ id: z.uuid(), status: z.literal('ac
 // ---- payment configurations ---------------------------------------------------------------------------------------
 
 export const PaymentConfigMode = z.enum(['mock', 'sandbox', 'production']);
-export const PaymentConfigStatus = z.enum(['draft', 'pending_approval', 'active', 'suspended', 'retired']);
+export const PaymentConfigStatus = z.enum([
+  'draft',
+  'pending_approval',
+  'active',
+  'suspended',
+  'retired',
+]);
 
 /** Rail limits copied from the provider's documentation: rail -> limit name -> a short string, a flag or an integer (paise for amounts). */
 export const PaymentConfigRailLimits = z
@@ -399,7 +411,10 @@ export const PaymentConfigEntry = z.object({
   settlementAccountId: z.uuid(),
   secretRef: z.string(),
   webhookSecretRef: z.string(),
-  railLimits: z.record(z.string(), z.record(z.string(), z.union([z.string(), z.boolean(), z.number()]))),
+  railLimits: z.record(
+    z.string(),
+    z.record(z.string(), z.union([z.string(), z.boolean(), z.number()])),
+  ),
   railLimitsSource: z.string().nullable(),
   evidenceRef: z.string().nullable(),
   contractSectionRef: z.string().nullable(),
@@ -490,7 +505,13 @@ export const FeatureChangeRequestInput = z.strictObject({
   reason: AccountsReason.optional(),
 });
 export type FeatureChangeRequestInput = z.infer<typeof FeatureChangeRequestInput>;
-export const FeatureChangeStatus = z.enum(['pending', 'applied', 'rejected', 'cancelled', 'expired']);
+export const FeatureChangeStatus = z.enum([
+  'pending',
+  'applied',
+  'rejected',
+  'cancelled',
+  'expired',
+]);
 export const FeatureChangeRequested = z.object({ id: z.uuid(), status: z.literal('pending') });
 export const FeatureChangeDecisionInput = z.strictObject({
   approve: z.boolean(),
