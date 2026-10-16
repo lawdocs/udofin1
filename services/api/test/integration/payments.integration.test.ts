@@ -2932,29 +2932,44 @@ describe.skipIf(!enabled)('borrower payments and mandates over HTTP', () => {
       'alg',
     ];
 
+    const planted = () => [
+      CANARY.secretRef,
+      CANARY.webhookSecretRef,
+      CANARY.account,
+      CANARY.bankName,
+      CANARY.fingerprint,
+      CANARY.tokenHash,
+      CANARY.orderRef,
+      A.merchantRef,
+      B.merchantRef,
+      'MOCK-ORDER',
+      'CANARYORDER',
+      'PROVIDER-MANDATE-',
+      ...Object.values(people).map((p) => p.phone),
+      ...Object.values(people).map((p) => p.phone.slice(2)),
+    ];
+
     it('no response carries a secret reference, fingerprint, ciphertext, key version, provider reference, merchant, phone or account value', () => {
       const everything = seen
         .filter((s) => !s.url.endsWith('/link'))
         .map((s) => s.body)
         .join('\n');
       expect(seen.length).toBeGreaterThan(100);
-      const planted = [
-        CANARY.secretRef,
-        CANARY.webhookSecretRef,
-        CANARY.account,
-        CANARY.bankName,
-        CANARY.fingerprint,
-        CANARY.tokenHash,
-        CANARY.orderRef,
-        A.merchantRef,
-        B.merchantRef,
-        'MOCK-ORDER',
-        'CANARYORDER',
-        'PROVIDER-MANDATE-',
-        ...Object.values(people).map((p) => p.phone),
-        ...Object.values(people).map((p) => p.phone.slice(2)),
-      ];
-      for (const value of planted)
+      for (const value of planted())
+        expect([value, everything.includes(value)]).toEqual([value, false]);
+      for (const link of bearerLinks) expect(everything.includes(link)).toBe(false);
+      for (const key of forbiddenKeys)
+        expect([key, everything.includes(`"${key}"`)]).toEqual([key, false]);
+    });
+
+    it('the stored idempotent answers (replayed later) hold none of it either, and no link', async () => {
+      const rows = await q<{ t: string }>(
+        `select response_body::text as t from ops.idempotency_keys where principal_id = any($1::uuid[]) and response_body is not null`,
+        [Object.values(people).map((p) => p.user)],
+      );
+      expect(rows.length).toBeGreaterThan(15);
+      const everything = rows.map((r) => r.t).join('\n');
+      for (const value of planted())
         expect([value, everything.includes(value)]).toEqual([value, false]);
       for (const link of bearerLinks) expect(everything.includes(link)).toBe(false);
       for (const key of forbiddenKeys)
