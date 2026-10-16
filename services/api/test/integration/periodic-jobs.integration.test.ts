@@ -483,6 +483,29 @@ describe.skipIf(!enabled)('scheduled jobs and servicing handlers against a real 
     paymentPorts.set(cfg.P, paymentPortP);
     paymentPorts.set(cfg.N, paymentPortN);
     mandatePorts.set(cfg.P, mandatePortP);
+    // Lender Q has every switch off, but a working provider is registered for it: if any job asked it anything, the spies would show.
+    paymentPorts.set(cfg.Q, {
+      ...paymentFailure,
+      getOrderStatus: (ctx, query) => {
+        calls.orderLookups.push(query.operationKey);
+        return paymentFailure.getOrderStatus(ctx, query);
+      },
+      fetchSettlements: (ctx, date) => {
+        calls.settlementFetches.push({ config: cfg.Q, date });
+        return paymentFailure.fetchSettlements(ctx, date);
+      },
+    });
+    mandatePorts.set(cfg.Q, {
+      ...mandateMock,
+      getMandateStatus: (ctx, query) => {
+        calls.mandateStatus.push(query.operationKey);
+        return mandateMock.getMandateStatus(ctx, query);
+      },
+      listDebitStatus: (_ctx, query) => {
+        calls.debitLists.push(query.providerMandateRef);
+        return Promise.resolve({ outcome: 'ok' as const, value: [] });
+      },
+    });
 
     borrower.b1 = await scalar<string>(
       `select id::text as v from identity.borrowers where user_id = $1::uuid`,
@@ -860,6 +883,8 @@ describe.skipIf(!enabled)('scheduled jobs and servicing handlers against a real 
     it('a lender whose payments switch is off is never asked about: no lookup for its intent, no exception', async () => {
       expect(calls.orderLookups).not.toContain(intent.off);
       expect(await openExceptions('webhook_gap', 'intent_id', intent.off)).toBe(0);
+      // The database function that expires intents does not look at switches, so this stale intent is expired by it, unlooked-up.
+      expect(await intentStatus(intent.off)).toBe('expired');
     });
 
     it('running again changes nothing (one exception, same statuses, the held intent looked up again)', async () => {
