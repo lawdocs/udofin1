@@ -63,7 +63,7 @@ import { userRoute, type RouteDefinition } from '../../http/routes.js';
 
 const WRITE_LIMIT = { max: 30, timeWindow: '1 minute' };
 const READ_LIMIT = { max: 120, timeWindow: '1 minute' };
-const UPLOAD_LIMIT = { max: 6, timeWindow: '1 minute' };
+const UPLOAD_LIMIT = { max: 30, timeWindow: '1 minute' };
 const Id = z.strictObject({ id: z.uuid() });
 
 /** The permissions that let a lender user read each family of rows (they mirror the row level security policies). */
