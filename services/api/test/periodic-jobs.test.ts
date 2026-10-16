@@ -35,7 +35,6 @@ import {
   sendOnChannel,
   settlementBatchesJson,
   startPeriodicJobs,
-  type JobName,
   type PeriodicJobOptions,
   type Scheduler,
 } from '../src/workers/periodic-jobs.js';
@@ -197,7 +196,7 @@ const fakePool: SystemPool = {
 
 function jobs(
   parts: {
-    store?: JobsStore;
+    store?: FakeStore;
     resolver?: ProviderResolver;
     channels?: ServiceChannels;
     options?: PeriodicJobOptions;
@@ -206,7 +205,7 @@ function jobs(
 ) {
   const { log, lines } = captureLog();
   const { scheduler, registered } = fakeScheduler();
-  const store = parts.store ?? fakeStore();
+  const store: FakeStore = parts.store ?? fakeStore();
   const instance = createPeriodicJobs(
     {
       pool: fakePool,
@@ -1455,7 +1454,7 @@ describe('nothing personal in a log line', () => {
       }),
       options: { clock: () => new Date('2026-10-16T15:00:00.000Z') },
     });
-    for (const name of instance.names) await instance.run(name as JobName);
+    for (const name of instance.names) await instance.run(name);
     expect(lines.length).toBeGreaterThan(0);
     const text = lines.join('\n');
     for (const canary of canaries) expect(text).not.toContain(canary);
