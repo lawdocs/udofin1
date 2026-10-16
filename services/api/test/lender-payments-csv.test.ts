@@ -31,7 +31,7 @@ describe('parseBankCreditsCsv', () => {
 
   it('accepts any order of the columns, CRLF line ends, a byte-order mark and no final newline', () => {
     const rows = parseBankCreditsCsv(
-      `﻿utr,valueDate,amountMinor\r\nUTR0000001,2026-10-15,500\r\nUTR0000002,2026-10-16,600`,
+      `\uFEFFutr,valueDate,amountMinor\r\nUTR0000001,2026-10-15,500\r\nUTR0000002,2026-10-16,600`,
     );
     expect(rows).toEqual([
       { valueDate: '2026-10-15', amountMinor: 500, utr: 'UTR0000001' },
