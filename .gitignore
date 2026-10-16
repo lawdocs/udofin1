@@ -64,3 +64,6 @@ next-env.d.ts
 
 # Vitest cache
 .vitest/
+
+# Agent worktrees and local settings
+.claude/worktrees/

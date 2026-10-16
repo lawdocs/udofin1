@@ -120,6 +120,8 @@ Events that should cause this decision to be reopened.
 | [0028](0028-lender-onboarding-gates.md)                              | Lender onboarding: separate gates, versioned records, function-only writes       | Accepted (pending owner review of the Phase 04 PR) | Phase 04          |
 | [0032](0032-tenant-ownership-and-authorization-rule.md)              | Tenant ownership and the authorization rule                                      | Proposed                                           | Security / data   |
 | [0033](0033-sql-domain-layer-and-lender-envelope.md)                 | SQL functions are the domain layer; a lender-neutral integration envelope        | Proposed (part B is an unimplemented contract)     | Integration       |
+| [0034](0034-servicing-payments-mandates-reconciliation.md)           | Servicing, payments, mandates and reconciliation (Phase 08a)                     | Proposed (Phase 08a)                               | Payments          |
+| [0035](0035-provider-handoff-link-vault.md)                          | Provider hand-off links rest only as ciphertext in a vault                       | Proposed (Phase 08a)                               | Payments          |
 
 ## Owner actions
 
