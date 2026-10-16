@@ -274,20 +274,24 @@ export function createPeriodicJobs(
     const payments = paymentPorts();
     const failures = new Map<string, number>();
     const tally = { examined: 0, safe: 0, held: 0, exceptions: 0 };
+    const reasons: Record<string, number> = {};
     let oldestHeld: string | undefined;
     for (const candidate of candidates) {
       if (stopping) return; // nothing is expired on a half-finished pass
       tally.examined += 1;
       const verdict = await examineIntent(candidate, payments, failures);
-      const pastHold = candidate.ageSeconds >= INTENT_HOLD_LIMIT_SECONDS;
       if (verdict.kind === 'safe') {
         tally.safe += 1;
         continue;
       }
-      // Evidence (the provider reports money, or something that contradicts what we hold) is told to a person at once. When
-      // nothing could be established, a person is told at the end of the hold, because from then on the intent is expired
-      // without an answer.
-      if (verdict.kind === 'evidence' || pastHold) {
+      reasons[verdict.reason] = (reasons[verdict.reason] ?? 0) + 1;
+      // Not safe: the intent is held back from expiry until the hold ends. Evidence (the provider reports money, or something
+      // that contradicts what we hold) is told to a person at once. When nothing could be established, a person is told when
+      // the hold ends, because from then on the database expires the intent without an answer. An intent that should have
+      // been flagged and could not be is not let go.
+      const holdEnded = candidate.ageSeconds >= INTENT_HOLD_LIMIT_SECONDS;
+      let flagged = true;
+      if (verdict.kind === 'evidence' || holdEnded) {
         try {
           await store.raiseException({
             lenderOrgId: candidate.lenderOrgId,
@@ -298,19 +302,14 @@ export function createPeriodicJobs(
           });
           tally.exceptions += 1;
         } catch (error) {
+          flagged = false;
           log.warn(
             { job: 'payments_upkeep', ...errorFields(error) },
             'could not open an exception',
           );
-          // An intent that could not be flagged is not let go either.
-          if (!pastHold) {
-            tally.held += 1;
-            oldestHeld ??= candidate.linkExpiresAt;
-            continue;
-          }
         }
       }
-      if (!pastHold) {
+      if (!holdEnded || !flagged) {
         tally.held += 1;
         oldestHeld ??= candidate.linkExpiresAt;
       }
@@ -328,7 +327,7 @@ export function createPeriodicJobs(
     }
     if (tally.examined > 0 || (expired ?? 0) > 0) {
       log.info(
-        { job: 'payments_upkeep', ...tally, expired: expired ?? 0 },
+        { job: 'payments_upkeep', ...tally, reasons, expired: expired ?? 0 },
         'stale payments processed',
       );
     }
@@ -344,19 +343,20 @@ export function createPeriodicJobs(
     payments: (configId: string) => Promise<PortLookup<PaymentProviderPort>>,
     failures: Map<string, number>,
   ): Promise<IntentVerdict> => {
-    if (candidate.configId === undefined) return { kind: 'undetermined', reason: 'no_config' };
-    const resolved = await payments(candidate.configId);
+    const configId = candidate.configId;
+    if (configId === undefined) return { kind: 'undetermined', reason: 'no_config' };
+    const resolved = await payments(configId);
     if (!resolved.ok) return { kind: 'undetermined', reason: `resolver_${resolved.reason}` };
     const { port } = resolved.value;
     if (!port.capabilities.statusLookup)
       return { kind: 'undetermined', reason: 'lookup_unsupported' };
-    if ((failures.get(candidate.configId) ?? 0) >= PROVIDER_FAILURES_BEFORE_SKIP) {
+    if ((failures.get(configId) ?? 0) >= PROVIDER_FAILURES_BEFORE_SKIP) {
       return { kind: 'undetermined', reason: 'provider_skipped' };
     }
     const failed = (): void => {
-      failures.set(candidate.configId ?? '', (failures.get(candidate.configId ?? '') ?? 0) + 1);
+      failures.set(configId, (failures.get(configId) ?? 0) + 1);
     };
-    let answer;
+    let answer: Awaited<ReturnType<PaymentProviderPort['getOrderStatus']>>;
     try {
       answer = await port.getOrderStatus(resolved.value.contextFor(candidate.intentId), {
         orderRef: candidate.providerOrderRef ?? null,

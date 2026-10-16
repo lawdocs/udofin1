@@ -13,7 +13,7 @@ import {
   type PaymentResult,
   type OrderStatus,
 } from '@udofin/adapters';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   type ClaimedNotice,
   type ClaimedReminder,
@@ -269,6 +269,36 @@ describe('scheduling', () => {
     });
     expect(typeof started.stop).toBe('function');
     started.stop();
+  });
+
+  it('with the real timers (a fake clock): the first run comes shortly after start, then once a minute for reminders; stop ends it', async () => {
+    vi.useFakeTimers();
+    try {
+      const { log } = captureLog();
+      const store = fakeStore();
+      const instance = createPeriodicJobs(
+        { pool: fakePool, providers: resolverOf({}), environment: 'test', log },
+        { store, channels: createServiceChannels({ environment: 'test' }) },
+      );
+      instance.start();
+      expect(store.called('planReminders')).toHaveLength(0); // nothing at start-up itself
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(store.called('planReminders')).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(store.called('planReminders')).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(store.called('planReminders')).toHaveLength(2);
+      // The five-minute jobs ran once by now and run again five minutes after their first run.
+      expect(store.called('purgeHandoffLinks')).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(store.called('purgeHandoffLinks')).toHaveLength(2);
+      instance.stop();
+      const before = store.called('planReminders').length;
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(store.called('planReminders')).toHaveLength(before);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('runs a job only once at a time: a tick that finds it running is skipped', async () => {
@@ -739,6 +769,25 @@ describe('payments upkeep: look the order up before an intent is expired', () =>
       oldestHeld: candidate(1).linkExpiresAt,
     });
     expect(lines.join('\n')).toContain('could not open an exception');
+  });
+
+  it('an intent whose hold has ended is let go only once a person has been told; if that fails it is held one more run', async () => {
+    const old = candidate(1, { ageSeconds: INTENT_HOLD_LIMIT_SECONDS + 1 });
+    const failing = upkeep(
+      [old],
+      { [ID(1)]: status('captured') },
+      { raiseException: () => Promise.reject(new Error('down')) },
+    );
+    await failing.instance.run('payments_upkeep');
+    expect(failing.store.called('expireStaleIntents')[0]?.[0]).toMatchObject({
+      oldestHeld: old.linkExpiresAt,
+    });
+    const working = upkeep([old], { [ID(1)]: status('captured') });
+    await working.instance.run('payments_upkeep');
+    expect(working.store.called('raiseException')).toHaveLength(1);
+    expect(working.store.called('expireStaleIntents')[0]?.[0]).toMatchObject({
+      oldestHeld: undefined,
+    });
   });
 
   it('a lender the resolver cannot serve is skipped: nothing is looked up, nothing is expired for it, only the reason class is logged', async () => {
