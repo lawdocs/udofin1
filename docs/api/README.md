@@ -17,7 +17,7 @@ through this API.
 
 ## 1. What exists today and what is planned
 
-Updated 13 October 2026 (Phase 03). The machine-readable description of what is implemented is [`openapi.json`](openapi.json) (generated; a test fails if it is stale); the idempotency and outbox design is in [`idempotency-and-outbox.md`](idempotency-and-outbox.md); authentication in [`../auth/README.md`](../auth/README.md).
+Updated 13 October 2026 (Phase 03). The machine-readable description of what is implemented is [`openapi.json`](openapi.json) (generated; a test fails if it is stale); the idempotency and outbox design is in [`idempotency-and-outbox.md`](idempotency-and-outbox.md); authentication in [`../auth/README.md`](../auth/README.md). The Phase 08a routes (servicing, payments, mandates, reconciliation, reminders, payment setup) are listed in [`servicing-payments.md`](servicing-payments.md), generated from the same document.
 
 | Area            | Exists in `services/api` today                                                                                                                                                                                                | Planned                                                                                                               |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
