@@ -18,6 +18,8 @@ import {
   sealHandoffLink,
   type HandoffKeyring,
   type HandoffKind,
+  type MockMandateProvider,
+  type MockPaymentProvider,
 } from '@udofin/adapters';
 import {
   BP_DEBIT_STATUSES,
@@ -43,6 +45,18 @@ import { TokenError, type TokenVerifier } from '../../src/auth/token-verifier.js
 import { loadConfig } from '../../src/config.js';
 import { createUserContext } from '../../src/db/user-context.js';
 import { createSystemPool, type SystemPool } from '../../src/system/pool.js';
+import {
+  OutboxWorker,
+  type OutboxEvent,
+  type OutboxStore,
+  type WorkerLogger,
+} from '../../src/workers/outbox-worker.js';
+import { createPaymentsHandlers } from '../../src/workers/payments-handlers.js';
+import { createPgOutboxStore } from '../../src/workers/pg-outbox-store.js';
+import {
+  createProviderResolver,
+  type PaymentConfigRow,
+} from '../../src/workers/provider-resolver.js';
 
 const ADMIN = process.env.INTEGRATION_ADMIN_URL;
 const API = process.env.INTEGRATION_API_URL;
@@ -746,6 +760,7 @@ describe.skipIf(!enabled)('borrower payments and mandates over HTTP', () => {
         'foreclosure',
         'other',
         'again',
+        'worker',
       ].map(normal),
       true,
     );
@@ -2717,6 +2732,168 @@ describe.skipIf(!enabled)('borrower payments and mandates over HTTP', () => {
       expect(BpMandate.parse((await get(`/v1/mandates/${id}`, person('b1').user)).json()).id).toBe(
         id,
       );
+    });
+  });
+
+  // ======================================================================================================================
+  // The whole chain with the real worker and the labelled mock providers
+  // ======================================================================================================================
+  describe('end to end with the real outbox worker (labelled mock providers)', () => {
+    const resolver = createProviderResolver({ environment: 'test', secret: () => undefined });
+    const configOf = (lender: LenderFixture): PaymentConfigRow => ({
+      configId: lender.configId,
+      lenderOrgId: lender.id,
+      provider: PROVIDER,
+      providerMode: 'mock',
+      merchantRef: lender.merchantRef,
+      secretRef: CANARY.secretRef,
+      webhookSecretRef: CANARY.webhookSecretRef,
+    });
+    const paymentMock = (lender: LenderFixture): MockPaymentProvider => {
+      const resolved = resolver.payment(configOf(lender));
+      if (!resolved.ok) throw new Error('no mock');
+      return resolved.value.port as MockPaymentProvider;
+    };
+    const mandateMock = (lender: LenderFixture): MockMandateProvider => {
+      const resolved = resolver.mandate(configOf(lender));
+      if (!resolved.ok) throw new Error('no mock');
+      return resolved.value.port as MockMandateProvider;
+    };
+    const logLines: string[] = [];
+    const logger: WorkerLogger = {
+      info: (fields, message) => logLines.push(JSON.stringify({ message, ...fields })),
+      warn: (fields, message) => logLines.push(JSON.stringify({ message, ...fields })),
+      error: (fields, message) => logLines.push(JSON.stringify({ message, ...fields })),
+    };
+    /** Only this file's events, so another file's jobs are never touched. */
+    const ownStore = (ids: string[]): OutboxStore => {
+      const pgStore = createPgOutboxStore(systemPool);
+      return {
+        claim: async (workerId, batch, leaseSeconds) =>
+          (
+            await admin.query<OutboxEvent>(
+              `with picked as (
+                 select e.id from ops.outbox_events e
+                  where e.status = 'pending' and e.available_at <= now()
+                    and coalesce(e.payload ->> 'intent_id', e.payload ->> 'mandate_id') = any ($1::text[])
+                  order by e.available_at, e.id limit $2 for update skip locked)
+               update ops.outbox_events e set status = 'processing', attempts = e.attempts + 1, locked_by = $3, locked_until = now() + make_interval(secs => $4)
+                 from picked where e.id = picked.id
+               returning e.id, e.event_type, e.payload, e.payload_version, e.attempts, e.max_attempts, e.correlation_id`,
+              [ids, batch, workerId, leaseSeconds],
+            )
+          ).rows,
+        complete: pgStore.complete,
+        fail: pgStore.fail,
+        purge: pgStore.purge,
+      };
+    };
+    let workerNumber = 0;
+    const drain = async (ids: string[]) => {
+      const worker = new OutboxWorker({
+        store: ownStore(ids),
+        handlers: createPaymentsHandlers({
+          pool: systemPool,
+          providers: resolver,
+          keyring: KEYRING,
+          log: logger,
+        }),
+        workerId: `it-pb-${String((workerNumber += 1))}`,
+        log: logger,
+        concurrency: 1,
+      });
+      let completed = 0;
+      for (let i = 0; i < 8; i += 1) {
+        const summary = await worker.runOnce();
+        completed += summary.completed;
+        if (summary.claimed === 0) break;
+      }
+      return completed;
+    };
+
+    it('the request returns at once; after the worker creates the order the app sees the payment pending, fetches the link, and can no longer cancel', async () => {
+      const id = await newPayment('a1', 'worker');
+      const created = BpPaymentDetail.parse(
+        (await get(`/v1/payments/${id}`, person('a1').user)).json(),
+      );
+      expect(created).toMatchObject({ status: 'created', linkAvailable: false, cancellable: true });
+      expectProblem(await get(`/v1/payments/${id}/link`, person('a1').user), 404, 'not_found');
+
+      expect(await drain([id])).toBe(1);
+      const polled = BpPaymentDetail.parse(
+        (await get(`/v1/payments/${id}`, person('a1').user)).json(),
+      );
+      expect(polled).toMatchObject({
+        status: 'pending',
+        stage: 'started',
+        linkAvailable: true,
+        cancellable: false,
+      });
+      expect(polled.linkExpiresAt).not.toBeNull();
+
+      const res = await get(`/v1/payments/${id}/link`, person('a1').user);
+      expect(res.statusCode, res.body).toBe(200);
+      const link = BpHandoffLink.parse(res.json()).link;
+      bearerLinks.push(link);
+      // Exactly what the provider returned for this payment, asked again under the same operation key.
+      const mock = paymentMock(A);
+      const request = mock.created.find((r) => r.operationKey === id);
+      if (!request) throw new Error('the mock never saw this payment');
+      const again = await mock.createOrder({ tenantId: A.id, correlationId: 'it' }, request);
+      expect(again.outcome === 'ok' ? again.value.checkoutLink : null).toBe(link);
+      expect(request).toMatchObject({
+        merchantRef: A.merchantRef,
+        amountMinor: 475_000n,
+        purpose: 'installment',
+      });
+
+      expectProblem(
+        await post(`/v1/payments/${id}/cancel`, person('a1').user, {}),
+        409,
+        'intent_not_cancellable',
+      );
+      // The worker's log carries ids and closed words, never the link.
+      expect(logLines.join('\n')).not.toContain(link);
+    });
+
+    it('a mandate: the hand-off job moves it to registration_pending, the link is available, and a cancellation request reaches the provider without cancelling anything', async () => {
+      const id = await newMandate('a4', 'm8');
+      expect(
+        BpMandate.parse((await get(`/v1/mandates/${id}`, person('a4').user)).json()).status,
+      ).toBe('draft');
+      expectProblem(await get(`/v1/mandates/${id}/link`, person('a4').user), 404, 'not_found');
+
+      expect(await drain([id])).toBe(1);
+      expect(
+        BpMandate.parse((await get(`/v1/mandates/${id}`, person('a4').user)).json()),
+      ).toMatchObject({
+        status: 'registration_pending',
+        cancelRequested: false,
+      });
+      const res = await get(`/v1/mandates/${id}/link`, person('a4').user);
+      expect(res.statusCode, res.body).toBe(200);
+      const link = BpHandoffLink.parse(res.json()).link;
+      bearerLinks.push(link);
+      expect(link).toMatch(/^https:\/\/mock-mandate\.invalid\/handoff\//);
+
+      const cancel = await post(`/v1/mandates/${id}/cancel`, person('a4').user, {});
+      expect(cancel.statusCode, cancel.body).toBe(202);
+      expect(await drain([id])).toBe(1);
+      // The provider was asked; the mandate is cancelled only when the provider confirms it.
+      expect(mandateMock(A).cancelRequests.length).toBeGreaterThan(0);
+      expect(
+        BpMandate.parse((await get(`/v1/mandates/${id}`, person('a4').user)).json()),
+      ).toMatchObject({
+        status: 'registration_pending',
+        cancelRequested: true,
+      });
+      expect(
+        await one(
+          `select cancel_sent_at is not null as sent from payments.mandates where id = $1`,
+          [id],
+        ),
+      ).toEqual({ sent: true });
+      expect(logLines.join('\n')).not.toContain(link);
     });
   });
 
