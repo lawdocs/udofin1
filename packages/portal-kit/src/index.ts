@@ -16,3 +16,4 @@ export * from './servicing/index.js';
 export * from './payments/index.js';
 export * from './reminders/index.js';
 export * from './accounts/index.js';
+export * from './setup/index.js';
