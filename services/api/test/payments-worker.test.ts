@@ -585,6 +585,20 @@ describe('payment.create_order', () => {
     }
   });
 
+  it('makes no order for an intent whose payment period is already over: the expiry sweep closes it', async () => {
+    const provider = paymentPort();
+    const { processor, logs, run } = setup(
+      { intent: intentRecord({ linkExpiresAt: plus(-1000) }) },
+      { payment: provider },
+    );
+    await run('payment.create_order', { intent_id: INTENT });
+    expect(provider.created).toHaveLength(0);
+    expect(names(processor)).toEqual(['loadIntent']);
+    expect(logs.lines.some((l) => l.message.includes('payment period has already ended'))).toBe(
+      true,
+    );
+  });
+
   it('is safe to run twice: a repeat after success does nothing; a repeat after a crash meets the same order', async () => {
     const provider = paymentPort();
     const { processor, run } = setup({}, { payment: provider });

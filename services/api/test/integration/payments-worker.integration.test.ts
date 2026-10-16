@@ -44,12 +44,14 @@ const enabled = Boolean(ADMIN && SYSTEM);
 
 // A provider key of this file's own, so a provider row another integration file registered with a different kind cannot interfere.
 const PROVIDER = 'mock_gateway_w1';
+// Event and delivery ids are unique per run, so the file can run again against a database an earlier run used.
+const RUN = randomBytes(4).toString('hex');
 const WEBHOOK_SECRET = `unit-webhook-secret-${randomBytes(10).toString('hex')}`;
 const RAIL_LIMITS = JSON.stringify({
   enach_api: { max_mandate_amount_minor: 5_000_000, needs_afa_each_debit: false },
   upi_autopay: { max_mandate_amount_minor: 1_500_000, needs_afa_each_debit: true },
 });
-const LOANS_PER_LENDER = 8;
+const LOANS_PER_LENDER = 9;
 const phone = () => `91${Math.floor(1_000_000_000 + Math.random() * 8_999_999_999)}`;
 const sha256 = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex');
 
@@ -79,6 +81,8 @@ describe.skipIf(!enabled)('payments worker over a real database', () => {
   let blockedPool: SystemPool;
   let A: Lender;
   let B: Lender;
+  /** A lender whose mandates switch is OFF. */
+  let C: Lender;
 
   /** Every log line the handlers and the worker wrote in this file. */
   const logLines: string[] = [];
@@ -348,7 +352,10 @@ describe.skipIf(!enabled)('payments worker over a real database', () => {
   // ------------------------------------------------------------------------------------------------------
   // Fixture
   // ------------------------------------------------------------------------------------------------------
-  async function buildLender(name: string): Promise<Lender> {
+  async function buildLender(
+    name: string,
+    features: readonly string[] = ['payments', 'servicing_sync', 'mandates'],
+  ): Promise<Lender> {
     const id = randomUUID();
     const tag = id.replaceAll('-', '').slice(0, 12);
     const [
@@ -496,7 +503,7 @@ describe.skipIf(!enabled)('payments worker over a real database', () => {
       );
 
       // The activation switches (an applied two-person request and the switch itself, as the pgTAP suites do).
-      for (const feature of ['payments', 'servicing_sync', 'mandates']) {
+      for (const feature of features) {
         const request = (
           await c.query<{ id: string }>(
             `insert into servicing.feature_change_requests (lender_org_id, feature, enable, mode, status, evidence, requested_by, idempotency_key, decided_by, decided_at, applied_at)
@@ -609,6 +616,7 @@ describe.skipIf(!enabled)('payments worker over a real database', () => {
     blockedPool = createSystemPool(SYSTEM ?? '');
     A = await buildLender('Alpha');
     B = await buildLender('Beta');
+    C = await buildLender('Gamma', ['payments', 'servicing_sync']);
   });
 
   afterAll(async () => {
@@ -732,6 +740,54 @@ describe.skipIf(!enabled)('payments worker over a real database', () => {
       );
       expect(anon).toMatchObject({ ok: false, code: '42501' });
       expect((await linkRow('payment_intent', s.intent))?.read_count).toBe(1);
+    });
+
+    it('a lender that is not active hides the stored link at once, and it comes back when the lender does', async () => {
+      const taking = () =>
+        attempt(
+          A.borrowerUser,
+          `select * from payments.take_handoff_link('payment_intent', $1::uuid)`,
+          [s.intent],
+        );
+      await admin.query(`update tenancy.organizations set status = 'suspended' where id = $1`, [
+        A.id,
+      ]);
+      try {
+        expect(await taking()).toMatchObject({
+          ok: false,
+          code: 'P0002',
+          hint: 'link_unavailable',
+        });
+      } finally {
+        await admin.query(`update tenancy.organizations set status = 'active' where id = $1`, [
+          A.id,
+        ]);
+      }
+      expect(await taking()).toMatchObject({ ok: true });
+    });
+
+    it('a lender whose payments switch is off cannot even start a mandate: nothing is enqueued for the worker', async () => {
+      const id = randomUUID();
+      const before = await q(
+        `select 1 from ops.outbox_events where event_type = 'mandate.handoff' and payload ->> 'mandate_id' = $1`,
+        [id],
+      );
+      await q(
+        `insert into identity.stepup_challenges (id, borrower_id, action, context_ref, code_hash, status, delivery_status, expires_at, verified_at, verified_until)
+         values (gen_random_uuid(), $1, 'mandate_creation', $2, repeat('a', 64), 'verified', 'accepted', now() + interval '10 minutes', now(), now() + interval '10 minutes')`,
+        [C.borrowerId, id],
+      );
+      const refused = await attempt(
+        C.borrowerUser,
+        `select payments.request_mandate($1::uuid, $2::uuid, 'enach_api', 4000000::bigint, $3::date, $4::date, 'XXXXXX1234')`,
+        [id, C.loans[0], await today(1), await today(365)],
+      );
+      expect(refused).toMatchObject({ ok: false, code: '55000', hint: 'feature_disabled' });
+      expect(before).toHaveLength(0);
+      expect(await q(`select 1 from payments.mandates where id = $1`, [id])).toHaveLength(0);
+      expect(
+        await q(`select 1 from ops.outbox_events where payload ->> 'mandate_id' = $1`, [id]),
+      ).toHaveLength(0);
     });
 
     it('a stored link opens only for its own payment and its own lender (the associated data binds it)', async () => {
@@ -909,6 +965,24 @@ describe.skipIf(!enabled)('payments worker over a real database', () => {
       expect(config.status).toBe('active');
     });
 
+    it('an intent whose payment period ended while the worker was down gets no order; the expiry sweep closes it as expired', async () => {
+      const intent = await requestPayment(A, 8);
+      await admin.query(
+        `update payments.payment_intents set link_expires_at = clock_timestamp() - interval '2 hours' where id = $1`,
+        [intent],
+      );
+      const before = mockOf(A).created.length;
+      expect(await drain()).toMatchObject({ claimed: 1, completed: 1, dead: 0 });
+      expect(mockOf(A).created).toHaveLength(before);
+      expect((await intentRow(intent)).status).toBe('created');
+      const expired = await systemPool.withSystem((tx) =>
+        tx.query<{ n: number }>(`select payments.expire_stale_intents(interval '0 minutes') as n`),
+      );
+      expect(expired.rows[0]?.n).toBeGreaterThanOrEqual(1);
+      expect((await intentRow(intent)).status).toBe('expired');
+      expect(await linkRow('payment_intent', intent)).toBeUndefined();
+    });
+
     it('a job with a bad payload or for an unknown intent is dead at once with a stable code', async () => {
       const missing = randomUUID();
       mine.add(missing);
@@ -1020,7 +1094,7 @@ describe.skipIf(!enabled)('payments worker over a real database', () => {
 
     it('a signed delivery verified by the receiver and ingested is applied exactly once and the intent succeeds only on the exact amount', async () => {
       const { intent, orderRef } = await orderOf(A, 4);
-      const { results, eventIds } = await deliver(A, 'success', orderRef, 475_000n, 'W1OK');
+      const { results, eventIds } = await deliver(A, 'success', orderRef, 475_000n, `W1${RUN}OK`);
       expect(results.map((r) => r.outcome)).toEqual(['verified', 'verified']);
       expect(results.every((r) => (r.accepted as { accepted: boolean }).accepted)).toBe(true);
       expect(eventIds).toHaveLength(2);
@@ -1057,7 +1131,13 @@ describe.skipIf(!enabled)('payments worker over a real database', () => {
 
     it('a forged delivery (wrong secret) is rejected by the database and enqueues nothing: the intent stays pending', async () => {
       const { intent, orderRef } = await orderOf(A, 5);
-      const { results, eventIds } = await deliver(A, 'bad_signature', orderRef, 475_000n, 'W1BAD');
+      const { results, eventIds } = await deliver(
+        A,
+        'bad_signature',
+        orderRef,
+        475_000n,
+        `W1${RUN}BAD`,
+      );
       expect(results.map((r) => r.outcome)).toEqual(['unverified']);
       expect(results[0]?.accepted).toMatchObject({ accepted: false, outcome: 'rejected' });
       expect(eventIds).toEqual([]);
@@ -1068,7 +1148,7 @@ describe.skipIf(!enabled)('payments worker over a real database', () => {
     it('a capture of a different amount never makes the intent succeed: the worker reports an exception outcome', async () => {
       // A third lender-A intent: loan 2 is used by a timeout test, loan 7 by the tenant test; reuse loan 3 after its failure.
       const { intent, orderRef } = await orderOf(A, 3);
-      const { eventIds } = await deliver(A, 'partial_amount', orderRef, 475_000n, 'W1PART');
+      const { eventIds } = await deliver(A, 'partial_amount', orderRef, 475_000n, `W1${RUN}PART`);
       expect(eventIds).toHaveLength(1);
       expect(await drain()).toMatchObject({ claimed: 1, completed: 1, dead: 0 });
       expect((await intentRow(intent)).status).toBe('pending');

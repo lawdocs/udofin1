@@ -208,6 +208,15 @@ export function createPaymentsHandlers(
       );
       return;
     }
+    if (intent.linkExpiresAt !== null && Date.parse(intent.linkExpiresAt) <= now().getTime()) {
+      // The worker was down for longer than the whole payment period. No order is made for a link that is already over; the
+      // expiry sweep (payments.expire_stale_intents) closes the intent as expired, which is the honest word for it.
+      log.info(
+        fields,
+        'payment order not created: the payment period has already ended; the expiry sweep closes the intent',
+      );
+      return;
+    }
 
     const failIntent = async (reason: OrderFailureClass, why: string): Promise<void> => {
       try {
