@@ -59,7 +59,7 @@ A mock or sandbox payment configuration can never satisfy a database condition, 
      No provider is approved; only the labelled mock and an unconfigured placeholder exist. No real provider adapter has been written.
   2. The provider's written specification: webhook scheme and signing, status vocabulary and ranks, settlement report, cut-off times,
      refund and chargeback handling. Until a scheme exists the callback receiver answers every delivery with the uniform refusal.
-  3. The lender's verified account and merchant details entered by a platform user in the registry (no account details are seeded;
+  3. The lender's settlement account requested by its maker (label, bank and masked reference only) and the real account and merchant details entered by a platform user in the registry (no account details are seeded;
      the account-number length rule 9 to 18 digits is configuration, **unverified** until its source is supplied).
   4. Hand-off link keys in a secrets manager (`HANDOFF_ENCRYPTION_KEYS`, `HANDOFF_ACTIVE_KEY_VERSION`) for the worker and the API; the
      fingerprint key in a managed key store (D-47: only a local development key manager exists).

@@ -59,6 +59,9 @@ import {
   SettlementAccountLinkInput,
   SettlementAccountPage,
   SettlementAccountQuery,
+  SettlementAccountRequestInput,
+  SettlementAccountRequested,
+  LenderSettlementAccountQuery,
   SettlementAccountRegistryStatusList,
   UdofinFeeMerchantInput,
 } from '@udofin/contracts';
@@ -1260,6 +1263,66 @@ export function lenderAccountsRoutes(deps: LenderAccountsDeps = {}): RouteDefini
           query,
         );
         return { status: 200, body: out(MerchantPage, page) };
+      },
+    }),
+    // ---- settlement accounts (the lender's own; masked reference only) -------------------------------------------------------
+    userRoute({
+      method: 'post',
+      path: '/v1/lender/settlement-accounts',
+      operationId: 'requestSettlementAccount',
+      summary:
+        "Ask for one of the lender's own settlement accounts to be set up (payment.configure, aal2)",
+      description:
+        'Label, bank and MASKED reference only. The account starts unverified and can be used for a payment only after a platform user links it to a verified registry entry with the same masked reference. A full account number is never accepted here.',
+      tags: ['Lender payments'],
+      auth: 'staff',
+      idempotent: true,
+      idempotencyTenant: ({ body }) => (body as { lenderId?: string }).lenderId ?? null,
+      body: SettlementAccountRequestInput,
+      responses: { 201: SettlementAccountRequested },
+      errors: [400, 401, 403, 409, 422],
+      rateLimit: WRITE_LIMIT,
+      handler: async ({ tx, body }) => {
+        const id = await one<string>(
+          tx,
+          'select payments.request_settlement_account($1::uuid, $2, $3, $4) as r',
+          [body.lenderId, body.label, body.bankName, body.maskedRef],
+        );
+        return { status: 201, body: out(SettlementAccountRequested, { id, status: 'unverified' }) };
+      },
+    }),
+    userRoute({
+      method: 'get',
+      path: '/v1/lender/settlement-accounts',
+      operationId: 'listLenderSettlementAccounts',
+      summary:
+        "The lender's own settlement accounts (masked) and whether each is linked to the registry",
+      tags: ['Lender payments'],
+      auth: 'staff',
+      query: LenderSettlementAccountQuery,
+      responses: { 200: SettlementAccountPage },
+      errors: [401, 403, 422],
+      rateLimit: READ_LIMIT,
+      handler: async ({ tx, query }) => {
+        await requireLenderPermission(tx, LENDER_PAYMENT_ROLES, query.lenderId);
+        const where: string[] = [];
+        const values: unknown[] = [];
+        if (query.lenderId) {
+          values.push(query.lenderId);
+          where.push(`lender_org_id = $${String(values.length)}::uuid`);
+        }
+        const page = await keysetPage(
+          tx,
+          {
+            columns: SETTLEMENT_COLUMNS,
+            from: 'tenancy.lender_settlement_accounts',
+            sortColumn: 'created_at',
+            where,
+            values,
+          },
+          query,
+        );
+        return { status: 200, body: out(SettlementAccountPage, page) };
       },
     }),
     userRoute({

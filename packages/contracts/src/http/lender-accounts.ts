@@ -316,6 +316,25 @@ export const SettlementAccountQuery = z.strictObject({
 });
 export const SettlementAccountPage = pageOf(SettlementAccountForLinking);
 
+/**
+ * A lender asks for one of its own settlement accounts to be set up. Masked reference only: a full account number is refused by the
+ * shape (letters X or * and at most four digits) and by the database. The account stays unverified until the platform links it.
+ */
+export const SettlementAccountRequestInput = z.strictObject({
+  lenderId: z.uuid(),
+  label: z.string().trim().min(2).max(80),
+  bankName: z.string().trim().min(2).max(120),
+  maskedRef: z.string().regex(/^[X*]{2,}[0-9]{2,4}$/),
+});
+export const SettlementAccountRequested = z.object({
+  id: z.uuid(),
+  status: z.literal('unverified'),
+});
+export const LenderSettlementAccountQuery = z.strictObject({
+  ...PageFields,
+  lenderId: z.uuid().optional(),
+});
+
 // ---- merchants ----------------------------------------------------------------------------------------------------
 
 export const MerchantClaimInput = z.strictObject({

@@ -4,7 +4,7 @@
 -- feature prerequisite. Synthetic data only (labelled SAMPLE). Error codes are reported as SQLSTATE|hint.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(550);
+select plan(569);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -272,7 +272,7 @@ select ok((select bool_and(not has_function_privilege('anon', p, 'execute') and 
                              'payments.draft_payment_config(uuid,text,text,uuid,uuid,text,text,text,jsonb,text,text,text,text)',
                              'payments.submit_payment_config(uuid)', 'payments.decide_payment_config(uuid,boolean,text)',
                              'payments.withdraw_payment_config(uuid,text)', 'payments.suspend_payment_config(uuid,text)',
-                             'payments.retire_payment_config(uuid,text)']) p),
+                             'payments.retire_payment_config(uuid,text)', 'payments.request_settlement_account(uuid,text,text,text)']) p),
   'the user-facing workflow functions are executable by authenticated users only (the permission checks are inside)');
 
 -- ============================================================================================================================
@@ -1449,6 +1449,41 @@ select ok((select count(*) from audit.events where action in ('payments.account_
 select is((select count(*) from audit.events where action like 'payments.%' and (regexp_replace(metadata::text, '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', '', 'g') ~ '[0-9a-f]{64}' or regexp_replace(metadata::text, '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', '', 'g') ~ '[0-9]{9,}')), 0::bigint, 'no audit record of these functions carries a fingerprint (64 hex), a token hash or a long number (identifiers excluded)');
 select is((select count(*) from audit.events where action = 'payments.account_registry.registered' and actor_type = 'platform'), (select count(*) from audit.events where action = 'payments.account_registry.registered'), 'registrations are recorded with a platform actor');
 select is((select count(*) from audit.events where action = 'payments.config.suspended' and actor_type = 'system'), (select count(*) from audit.events where action = 'payments.config.suspended' and metadata ->> 'by' = 'system'), 'system holds are recorded with a system actor');
+
+-- A lender asks for one of its own settlement accounts to be set up (migration 919): masked reference only, unverified until linked.
+select pg_temp.as_user(pg_temp.u(8));
+select pg_temp.keep('sa_req1', payments.request_settlement_account('f6b00000-0000-4000-8000-000000000001', '  SAMPLE collection account ', 'Sample Bank', 'XXXXXX7421')::text);
+select is((select (status::text, registry_id is null, label, bank_name, masked_account_ref, verified_by is null)::text from tenancy.lender_settlement_accounts where id = pg_temp.got('sa_req1')::uuid),
+  '(unverified,t,"SAMPLE collection account","Sample Bank",XXXXXX7421,t)', 'a lender maker asks for a settlement account: unverified, not linked, trimmed, masked reference only');
+select is(payments.request_settlement_account('f6b00000-0000-4000-8000-000000000001', 'SAMPLE collection account', 'SAMPLE BANK', 'XXXXXX7421')::text, pg_temp.got('sa_req1'), 'asking again for the same bank and masked reference is idempotent');
+select is(pg_temp.err($$select payments.request_settlement_account('f6b00000-0000-4000-8000-000000000001', 'Another label', 'Sample Bank', 'XXXXXX7421')$$), '23505|settlement_account_exists', 'the same bank and masked reference under another label is refused, not silently relabelled');
+select is(pg_temp.err($$select payments.request_settlement_account('f6b00000-0000-4000-8000-000000000001', 'SAMPLE collection account', 'Sample Bank', '123456789012')$$), '22023|settlement_account_invalid', 'a full account number is not accepted as the reference');
+select is(pg_temp.err($$select payments.request_settlement_account('f6b00000-0000-4000-8000-000000000001', 'Account 123456789012', 'Sample Bank', 'XXXXXX1111')$$), '22023|settlement_account_invalid', 'nor inside the label');
+select is(pg_temp.err($$select payments.request_settlement_account('f6b00000-0000-4000-8000-000000000001', 'SAMPLE account', 'Bank 9876543210', 'XXXXXX1111')$$), '22023|settlement_account_invalid', 'nor inside the bank name');
+select is(pg_temp.err($$select payments.request_settlement_account('f6b00000-0000-4000-8000-000000000001', 'x', 'Sample Bank', 'XXXXXX1111')$$), '22023|settlement_account_invalid', 'a one-letter label is refused');
+select is(pg_temp.err($$select payments.request_settlement_account('f6b00000-0000-4000-8000-000000000002', 'SAMPLE account', 'Sample Bank', 'XXXXXX1111')$$), '42501|', 'a maker of one lender cannot ask for a settlement account of another');
+select pg_temp.as_user(pg_temp.u(10));
+select is(pg_temp.err($$select payments.request_settlement_account('f6b00000-0000-4000-8000-000000000001', 'SAMPLE account', 'Sample Bank', 'XXXXXX1111')$$), '42501|', 'an approver (no payment.configure) cannot');
+select pg_temp.as_user(pg_temp.u(14));
+select is(pg_temp.err($$select payments.request_settlement_account('f6b00000-0000-4000-8000-000000000001', 'SAMPLE account', 'Sample Bank', 'XXXXXX1111')$$), '42501|', 'a read-only user cannot');
+select pg_temp.as_user(pg_temp.u(15));
+select is(pg_temp.err($$select payments.request_settlement_account('f6b00000-0000-4000-8000-000000000001', 'SAMPLE account', 'Sample Bank', 'XXXXXX1111')$$), '42501|', 'a borrower cannot');
+select pg_temp.as_anon();
+select is(pg_temp.err($$select payments.request_settlement_account('f6b00000-0000-4000-8000-000000000001', 'SAMPLE account', 'Sample Bank', 'XXXXXX1111')$$), '42501|', 'anon cannot');
+select pg_temp.as_user(pg_temp.u(12));
+select ok(payments.request_settlement_account('f6b00000-0000-4000-8000-000000000002', 'SAMPLE account Y', 'Sample Bank', 'XXXXXX7421') is not null, 'the other lender may use the same masked reference at the same bank: the table is per lender');
+select pg_temp.as_owner();
+select is((select count(*) from audit.events where action = 'payments.settlement_account.requested' and entity_id = pg_temp.got('sa_req1') and metadata = '{}'::jsonb and tenant_org_id = 'f6b00000-0000-4000-8000-000000000001'), 1::bigint, 'the request is audited, with no account detail in the audit record');
+select is((select count(*) from audit.events where action = 'payments.settlement_account.requested'), 2::bigint, 'one audit record per created account (the idempotent repeat and every refusal wrote none)');
+insert into tenancy.lender_settlement_accounts (lender_org_id, label, bank_name, masked_account_ref)
+select 'f6b00000-0000-4000-8000-000000000001', 'SAMPLE filler ' || g, 'Filler Bank', 'XXXXXX' || lpad(g::text, 4, '0')
+  from generate_series(1, 20 - (select count(*)::int from tenancy.lender_settlement_accounts where lender_org_id = 'f6b00000-0000-4000-8000-000000000001')) g;
+select pg_temp.as_user(pg_temp.u(8));
+select is(pg_temp.err($$select payments.request_settlement_account('f6b00000-0000-4000-8000-000000000001', 'SAMPLE one too many', 'Sample Bank', 'XXXXXX9999')$$), '22023|too_many_settlement_accounts', 'a lender cannot pile up more than twenty settlement accounts');
+select is(payments.request_settlement_account('f6b00000-0000-4000-8000-000000000001', 'SAMPLE collection account', 'Sample Bank', 'XXXXXX7421')::text, pg_temp.got('sa_req1'), 'but a repeat of an existing one still answers it');
+select pg_temp.as_owner();
+select is((select count(*) from tenancy.lender_settlement_accounts where lender_org_id = 'f6b00000-0000-4000-8000-000000000001' and status = 'unverified' and label like 'SAMPLE filler%'), (select count(*) from tenancy.lender_settlement_accounts where label like 'SAMPLE filler%'), 'every account created this way is unverified: only the registry link verifies');
+select is(pg_temp.err(format($$update tenancy.lender_settlement_accounts set status = 'verified', verified_by = %L, verified_at = now() where id = %L$$, pg_temp.u(1), pg_temp.got('sa_req1'))), '55000|settlement_account_unproven', 'and an account requested this way cannot be marked verified without a verified registry entry');
 
 select * from finish();
 rollback;
