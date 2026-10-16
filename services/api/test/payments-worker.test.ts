@@ -203,7 +203,7 @@ describe('createProviderResolverWith: secrets of a real adapter (none exists yet
     expect(empty.payment(config)).toEqual({ ok: false, reason: 'secret_missing' });
   });
 
-  it('bounds every port it hands out: a call that never answers ends as an unknown outcome (timeout)', async () => {
+  it('bounds every real port it hands out: a call that never answers ends as an unknown outcome (timeout)', async () => {
     const hanging: PaymentProviderPort = {
       ...createMockPaymentProvider('test'),
       getOrderStatus: () => new Promise(() => undefined),

@@ -60,8 +60,10 @@ export interface ProviderResolverDeps {
   /** Resolves the NAME of a secret to its value. Never logged. */
   secret(name: string): string | undefined;
   /**
-   * Bound on every provider call, in milliseconds (default 15 000). Every port the resolver hands out is wrapped with it, so a port that
-   * never answers cannot hold a worker job: the call ends as an unknown outcome (timeout), which the callers already treat as "look it up".
+   * Bound on every call to a REAL adapter, in milliseconds (default 15 000). The resolver wraps each real port with it, so a port that
+   * never answers cannot hold a worker job: the call ends as an unknown outcome (timeout), which the callers already treat as "look it
+   * up". The labelled mocks and the unconfigured placeholders never touch a network and answer at once, so they are handed out as they
+   * are (a test needs the mock's own recorded calls).
    */
   readonly providerTimeoutMs?: number;
 }
@@ -138,7 +140,7 @@ export function createProviderResolverWith(
           deps.environment,
           `mock ${mockDescriptor.capability} provider`,
         );
-        const port = bound(mock(), timeoutMs);
+        const port = mock();
         cache.set(config.configId, port);
         return wrap(port);
       } catch {
@@ -147,7 +149,7 @@ export function createProviderResolverWith(
     }
 
     // sandbox / live: a real adapter if one is registered for the provider, else the placeholder that refuses every call.
-    if (real === undefined) return wrap(bound(placeholder(), timeoutMs));
+    if (real === undefined) return wrap(placeholder());
     const secret = deps.secret(config.secretRef);
     if (secret === undefined || secret.length === 0) return { ok: false, reason: 'secret_missing' };
     try {
