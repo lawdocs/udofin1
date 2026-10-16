@@ -1,8 +1,15 @@
 import {
+  assertLocalOrTestOnly,
+  createMockMandateProvider,
+  createMockPaymentProvider,
+  createUnconfiguredMandateProvider,
+  createUnconfiguredPaymentProvider,
+  MOCK_PAYMENT_PROVIDER_KEY,
   type AppEnvironment,
   type MandateProviderPort,
   type PaymentProviderPort,
   type ProviderCallContext,
+  type ProviderDescriptor,
 } from '@udofin/adapters';
 
 /**
@@ -52,10 +59,116 @@ export interface ProviderResolverDeps {
   secret(name: string): string | undefined;
 }
 
-/** Wave 5 (builder W1) replaces this body. Until then nothing is configured, which is the honest answer. */
-export function createProviderResolver(_deps: ProviderResolverDeps): ProviderResolver {
+/**
+ * A real adapter for one provider key (`sandbox` or `live` mode). NONE EXISTS TODAY: the registry below is empty and a real
+ * adapter needs a provider specification, a contract and owner approval first (D-65/D-66). The shape is here so that adding
+ * one cannot skip the two rules this file enforces: the secret is read by NAME and its absence is a refusal, and the secret
+ * never leaves the factory.
+ */
+export interface RealAdapterFactories {
+  /** `secret` is the value the configuration's `secretRef` names; the factory keeps it in a closure and nowhere else. */
+  readonly payment?: (secret: string, config: PaymentConfigRow) => PaymentProviderPort;
+  readonly mandate?: (secret: string, config: PaymentConfigRow) => MandateProviderPort;
+}
+
+/** Provider key to its real adapter. Empty on purpose: no provider is contracted, specified or approved. */
+const NO_REAL_ADAPTERS: Readonly<Record<string, RealAdapterFactories>> = {};
+
+const contextOf =
+  (lenderOrgId: string) =>
+  (correlationId: string, idempotencyKey?: string): ProviderCallContext => ({
+    tenantId: lenderOrgId,
+    correlationId,
+    ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+  });
+
+const MODES: readonly string[] = ['mock', 'sandbox', 'live'];
+
+/** A configuration row that cannot name a provider or a mode is not a configuration: nothing is guessed from it. */
+function isUsable(config: PaymentConfigRow): boolean {
+  return config.provider.length > 0 && MODES.includes(config.providerMode);
+}
+
+/**
+ * Same as `createProviderResolver` with the real-adapter registry supplied. Production code calls `createProviderResolver`
+ * (empty registry); this exists so the secret rules can be tested before any real adapter exists.
+ */
+export function createProviderResolverWith(
+  deps: ProviderResolverDeps,
+  adapters: Readonly<Record<string, RealAdapterFactories>>,
+): ProviderResolver {
+  // A mock keeps its scripted state (orders it created, how often it was asked) for as long as the process runs, so a retried
+  // delivery of the same outbox event meets the same "provider" it met the first time. One instance per configuration.
+  const mockPayments = new Map<string, PaymentProviderPort>();
+  const mockMandates = new Map<string, MandateProviderPort>();
+
+  function resolve<P>(
+    config: PaymentConfigRow,
+    mockDescriptor: ProviderDescriptor,
+    mock: () => P,
+    placeholder: () => P,
+    cache: Map<string, P>,
+    real: ((secret: string, config: PaymentConfigRow) => P) | undefined,
+  ): Resolved<ResolvedPort<P>> {
+    if (!isUsable(config)) return { ok: false, reason: 'provider_not_configured' };
+    const wrap = (port: P): Resolved<ResolvedPort<P>> => ({
+      ok: true,
+      value: { port, contextFor: contextOf(config.lenderOrgId) },
+    });
+
+    if (config.providerMode === 'mock') {
+      const cached = cache.get(config.configId);
+      if (cached) return wrap(cached);
+      try {
+        // Stated here and again inside the mock constructors: a mock exists in local development and tests only. Staging
+        // and production refuse it, and the thrown message is not passed on (a closed reason is all a caller needs).
+        assertLocalOrTestOnly(
+          mockDescriptor,
+          deps.environment,
+          `mock ${mockDescriptor.capability} provider`,
+        );
+        const port = mock();
+        cache.set(config.configId, port);
+        return wrap(port);
+      } catch {
+        return { ok: false, reason: 'mock_not_allowed_here' };
+      }
+    }
+
+    // sandbox / live: a real adapter if one is registered for the provider, else the placeholder that refuses every call.
+    if (real === undefined) return wrap(placeholder());
+    const secret = deps.secret(config.secretRef);
+    if (secret === undefined || secret.length === 0) return { ok: false, reason: 'secret_missing' };
+    try {
+      return wrap(real(secret, config));
+    } catch {
+      // A factory that throws may have put the secret in its message. Say only that the provider is not usable.
+      return { ok: false, reason: 'provider_not_configured' };
+    }
+  }
+
   return {
-    payment: () => ({ ok: false, reason: 'provider_not_configured' }),
-    mandate: () => ({ ok: false, reason: 'provider_not_configured' }),
+    payment: (config) =>
+      resolve<PaymentProviderPort>(
+        config,
+        { key: MOCK_PAYMENT_PROVIDER_KEY, capability: 'payment_collection', mode: 'mock' },
+        () => createMockPaymentProvider(deps.environment),
+        createUnconfiguredPaymentProvider,
+        mockPayments,
+        adapters[config.provider]?.payment,
+      ),
+    mandate: (config) =>
+      resolve<MandateProviderPort>(
+        config,
+        { key: 'mock_mandate_provider', capability: 'mandate', mode: 'mock' },
+        () => createMockMandateProvider(deps.environment),
+        createUnconfiguredMandateProvider,
+        mockMandates,
+        adapters[config.provider]?.mandate,
+      ),
   };
+}
+
+export function createProviderResolver(deps: ProviderResolverDeps): ProviderResolver {
+  return createProviderResolverWith(deps, NO_REAL_ADAPTERS);
 }
