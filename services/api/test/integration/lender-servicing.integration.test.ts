@@ -83,10 +83,6 @@ const CANARY = {
   logToken: `LOGCANARY-${RUN}`,
 };
 
-interface Page<T> {
-  items: T[];
-  nextCursor: string | null;
-}
 interface Problem {
   code?: string;
   status?: number;
@@ -1805,6 +1801,17 @@ describe.skipIf(!enabled)('lender servicing over HTTP', () => {
           {},
         );
         expect([label, denied.statusCode]).toEqual([label, status]);
+        // Resolving is guarded the same way.
+        const deniedResolve = await post(
+          `/v1/lender/sync/conflicts/${state.conflictId}/resolve`,
+          user,
+          {
+            confirmedVersion: 'existing',
+            note: 'Checked against the lender system of record.',
+            evidence: { review_ref: `REV-${RUN}` },
+          },
+        );
+        expect([label, deniedResolve.statusCode]).toEqual([label, status]);
       }
       const early = await post(`/v1/lender/sync/conflicts/${state.conflictId}/resolve`, ids.aSync, {
         confirmedVersion: 'existing',
@@ -3554,7 +3561,7 @@ describe.skipIf(!enabled)('lender servicing over HTTP', () => {
           ids.aOp3,
           importBody(ids.lenderA, { content: logContent }),
         );
-        const batchId = (staged.json() as { batch?: { id?: string } }).batch?.id ?? '';
+        const batchId = staged.json<{ batch?: { id?: string } }>().batch?.id ?? '';
         await send('POST', `/v1/lender/imports/${batchId}/commit`, ids.aOp4, {});
         await send(
           'POST',
