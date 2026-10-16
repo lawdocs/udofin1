@@ -180,6 +180,8 @@ describe.skipIf(!enabled)('lender servicing over HTTP', () => {
     aSync: randomUUID(), // loan.read + servicing.sync.manage
     aDocs: randomUUID(), // loan.read + servicing.document.issue
     aDocs2: randomUUID(),
+    aDocs3: randomUUID(),
+    aDocs4: randomUUID(),
     bOp: randomUUID(),
     cOp: randomUUID(),
     dOp: randomUUID(),
@@ -195,6 +197,10 @@ describe.skipIf(!enabled)('lender servicing over HTTP', () => {
   let nextOp = 0;
   /** Imports are limited per person; the tests rotate over four operators of the same lender. */
   const rotateOp = () => aOps[nextOp++ % aOps.length] ?? ids.aOp;
+  const aDocUsers = [ids.aDocs, ids.aDocs2, ids.aDocs3, ids.aDocs4];
+  let nextDocUser = 0;
+  /** Uploads are limited per person; where the identity does not matter the tests rotate over four people who may issue. */
+  const docUser = () => aDocUsers[nextDocUser++ % aDocUsers.length] ?? ids.aDocs;
 
   const borrower = { b1: '', b2: '' };
   const apps: Record<string, string> = {};
@@ -351,6 +357,8 @@ describe.skipIf(!enabled)('lender servicing over HTTP', () => {
       ids.aSync,
       ids.aDocs,
       ids.aDocs2,
+      ids.aDocs3,
+      ids.aDocs4,
       ids.bOp,
       ids.cOp,
       ids.dOp,
@@ -421,10 +429,15 @@ describe.skipIf(!enabled)('lender servicing over HTTP', () => {
       'loan.read',
       'servicing.document.issue',
     ]);
-    await memberWithPermissions(ids.lenderA, ids.aDocs2, 'ls_document_issue_only_two', [
-      'loan.read',
-      'servicing.document.issue',
-    ]);
+    for (const [user, key] of [
+      [ids.aDocs2, 'ls_document_issue_only_two'],
+      [ids.aDocs3, 'ls_document_issue_only_three'],
+      [ids.aDocs4, 'ls_document_issue_only_four'],
+    ] as const)
+      await memberWithPermissions(ids.lenderA, user, key, [
+        'loan.read',
+        'servicing.document.issue',
+      ]);
     await member(ids.lenderB, ids.bOp, 'lender', 'servicing_operator');
     await member(ids.lenderC, ids.cOp, 'lender', 'servicing_operator');
     await member(ids.lenderD, ids.dOp, 'lender', 'servicing_operator');
@@ -1360,6 +1373,7 @@ describe.skipIf(!enabled)('lender servicing over HTTP', () => {
         ['an empty list', '[]', 'json', 'empty_file', null, 0],
       ];
       for (const [label, content, format, expectedCode, field, row] of cases) {
+        const before = (await audit('servicing.import.file_rejected', sha256(content))).length;
         const res = await stage(rotateOp(), { content, fileFormat: format, kind: 'receipt' });
         expect([label, res.statusCode]).toEqual([label, 200]);
         const outcome = out(res);
@@ -1367,7 +1381,7 @@ describe.skipIf(!enabled)('lender servicing over HTTP', () => {
         expect(outcome.errors[0]).toMatchObject({ rowNo: row, errorCodes: [expectedCode] });
         if (field) expect(outcome.errors[0]?.fieldNames).toEqual([field]);
         const rows = await audit('servicing.import.file_rejected', sha256(content));
-        expect([label, rows.length]).toEqual([label, 1]);
+        expect([label, rows.length]).toEqual([label, before + 1]);
       }
     });
 
@@ -2219,5 +2233,1458 @@ describe.skipIf(!enabled)('lender servicing over HTTP', () => {
     });
   });
 
-  // @@MORE@@
+  // ================================================================================================================
+  // Lender-issued documents
+  // ================================================================================================================
+  describe('lender-issued documents', () => {
+    const docs: Record<string, string> = {};
+    const bytes1 = pdf(`statement one ${RUN}`);
+    const ref1 = `STMT-${RUN}-1`;
+    const A1 = () => loan.A1 ?? '';
+    const upload = (
+      user: string,
+      loanId: string,
+      reference: string,
+      over: Record<string, unknown> = {},
+      options: Parameters<typeof call>[4] = {},
+    ) => post(`/v1/lender/loans/${loanId}/documents`, user, uploadBody(reference, over), options);
+    const documentRows = (reference: string) =>
+      q<{
+        id: string;
+        kind: string;
+        sha256: string;
+        size_bytes: string;
+        mime_type: string;
+        source: string;
+        uploaded_by: string;
+        loan_account_id: string;
+        storage_key: string;
+      }>(
+        `select id, kind, sha256, size_bytes::text, mime_type, source, uploaded_by::text, loan_account_id::text, storage_key
+           from servicing.loan_documents where lender_reference = $1`,
+        [reference],
+      );
+    const accessCount = async (documentId: string) =>
+      Number(
+        await scalar<string>(
+          `select count(*)::text as v from servicing.loan_document_access where document_id = $1`,
+          [documentId],
+        ),
+      );
+
+    it("registers the lender's own signed PDF: the database accepts first, the bytes are stored under an opaque key, the hash and size are recorded", async () => {
+      const key = `it-doc-${randomUUID()}`;
+      // One request body, sent twice: the time of issue is part of the request, so a replay must repeat it exactly.
+      const payload = uploadBody(ref1, { contentBase64: bytes1.toString('base64') });
+      const res = await post(`/v1/lender/loans/${A1()}/documents`, ids.aDocs, payload, { key });
+      expect(res.statusCode).toBe(201);
+      const body = res.json<{ documentId: string; existing: boolean }>();
+      expect(body.existing).toBe(false);
+      docs.one = body.documentId;
+      expect(storeFiles()).toHaveLength(1);
+      const rows = await documentRows(ref1);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        id: docs.one,
+        kind: 'statement',
+        sha256: sha256(bytes1),
+        size_bytes: String(bytes1.length),
+        mime_type: 'application/pdf',
+        source: 'lender_upload',
+        uploaded_by: ids.aDocs,
+        loan_account_id: loan.A1,
+      });
+      const storageKey = rows[0]?.storage_key ?? '';
+      expect(storageKey).toMatch(/^servicing\/[0-9a-f-]{36}$/);
+      expect(fs.readFileSync(path.join(storeRoot, storageKey)).equals(bytes1)).toBe(true);
+      // The key, the hash and the person never come back; only the document's id.
+      expect(res.body).not.toContain('servicing/');
+      expect(res.body).not.toContain(sha256(bytes1));
+      // Audited without the key, the hash or the lender's reference.
+      const events = await q<{ metadata: Record<string, unknown> }>(
+        `select metadata from audit.events where action = 'servicing.loan_document.registered' and entity_id = $1`,
+        [docs.one],
+      );
+      expect(events).toHaveLength(1);
+      const text = JSON.stringify(events[0]?.metadata);
+      for (const secret of [storageKey, sha256(bytes1), ref1]) expect(text).not.toContain(secret);
+      // The same request with the same key is a replay.
+      const replay = await post(`/v1/lender/loans/${A1()}/documents`, ids.aDocs, payload, { key });
+      expect(replay.headers['idempotent-replayed']).toBe('true');
+      expect(replay.json()).toEqual(body);
+      expect(storeFiles()).toHaveLength(1);
+    });
+
+    it('treats the same reference with the same bytes as the same document, and the same reference with other bytes as a conflict; neither stores anything new', async () => {
+      const same = await upload(docUser(), A1(), ref1, {
+        contentBase64: bytes1.toString('base64'),
+      });
+      expect(same.statusCode).toBe(200);
+      expect(same.json()).toEqual({ documentId: docs.one, existing: true });
+      const other = await upload(docUser(), A1(), ref1, {
+        contentBase64: pdf(`another ${RUN}`).toString('base64'),
+      });
+      expect([other.statusCode, code(other)]).toEqual([409, 'lender_reference_reused']);
+      expect(storeFiles()).toHaveLength(1);
+      expect(await documentRows(ref1)).toHaveLength(1);
+    });
+
+    it('refuses what is not a flat PDF, what is too large and what is not base64, and stores nothing', async () => {
+      const before = storeFiles().length;
+      const withScript = Buffer.from(
+        '%PDF-1.4\n1 0 obj\n<< /S /JavaScript /JS (app.alert(1)) >>\nendobj\n%%EOF\n',
+      );
+      const cases: [string, Record<string, unknown>, number, string][] = [
+        [
+          'active content',
+          { contentBase64: withScript.toString('base64') },
+          422,
+          'document_type_mismatch',
+        ],
+        [
+          'not a PDF',
+          { contentBase64: Buffer.from('hello, this is text').toString('base64') },
+          422,
+          'document_type_mismatch',
+        ],
+        [
+          'too large',
+          {
+            contentBase64: Buffer.concat([
+              Buffer.from('%PDF-1.4\n'),
+              Buffer.alloc(8 * 1024 * 1024),
+            ]).toString('base64'),
+          },
+          413,
+          'document_too_large',
+        ],
+        ['not base64', { contentBase64: 'not base64 at all!!' }, 422, 'validation_failed'],
+        ['truncated base64', { contentBase64: 'JVBERi0xLjQ' }, 422, 'validation_failed'],
+        ['another media type', { mimeType: 'image/png' }, 422, 'validation_failed'],
+        ['an unknown kind', { kind: 'invoice' }, 422, 'validation_failed'],
+        ['a reference with a space', { lenderReference: 'has a space' }, 422, 'validation_failed'],
+        ['an unknown field', { extra: 1 }, 422, 'validation_failed'],
+      ];
+      for (const [label, over, status, expectedCode] of cases) {
+        const res = await upload(docUser(), A1(), `REFUSED-${RUN}-${label.length}`, over);
+        expect([label, res.statusCode, code(res)]).toEqual([label, status, expectedCode]);
+      }
+      expect(storeFiles()).toHaveLength(before);
+      expect(
+        await scalar<string>(
+          `select count(*)::text as v from servicing.loan_documents where lender_reference like $1`,
+          [`REFUSED-${RUN}-%`],
+        ),
+      ).toBe('0');
+    });
+
+    it('lets the database refuse a bad period, kind or time before any byte is stored', async () => {
+      const before = storeFiles().length;
+      const cases: [string, string, Record<string, unknown>, string][] = [
+        [
+          'a statement without a period',
+          'P1',
+          { periodFrom: undefined, periodTo: undefined },
+          'period_invalid',
+        ],
+        [
+          'a period in the future',
+          'P2',
+          { periodFrom: dateOnly(1), periodTo: dateOnly(-30) },
+          'period_invalid',
+        ],
+        [
+          'a period that ends before it starts',
+          'P3',
+          { periodFrom: dateOnly(10), periodTo: dateOnly(40) },
+          'period_invalid',
+        ],
+        ['a period on a notice', 'P4', { kind: 'noc' }, 'period_not_allowed'],
+        ['an issue time in the future', 'P5', { issuedAt: iso(-48) }, 'issued_at_invalid'],
+        [
+          'a supersession of nothing',
+          'P6',
+          { supersedesDocumentId: randomUUID() },
+          'supersedes_invalid',
+        ],
+      ];
+      for (const [label, suffix, over, expectedCode] of cases) {
+        const res = await upload(docUser(), A1(), `BAD-${RUN}-${suffix}`, over);
+        expect([label, res.statusCode, code(res)]).toEqual([label, 422, expectedCode]);
+      }
+      expect(storeFiles()).toHaveLength(before);
+    });
+
+    it('needs servicing.document.issue: nobody else registers, and a refusal stores nothing and records nothing', async () => {
+      const before = storeFiles().length;
+      const reference = `DENIED-${RUN}`;
+      for (const [label, user, status] of [
+        ['viewer', ids.aViewer, 403],
+        ['manual entry only', ids.aManual, 403],
+        ['sync.manage only', ids.aSync, 403],
+        ['platform auditor', ids.pAud, 403],
+        ['no loan.read at all', ids.aNoRead, 404],
+        ['another lender', ids.bOp, 404],
+        ['the lender with every switch off', ids.cOp, 404],
+      ] as const) {
+        const res = await upload(user, A1(), reference);
+        expect([label, res.statusCode]).toEqual([label, status]);
+      }
+      expect(storeFiles()).toHaveLength(before);
+      expect(await documentRows(reference)).toHaveLength(0);
+      expect((await upload(docUser(), randomUUID(), reference)).statusCode).toBe(404);
+      expect(
+        (await post('/v1/lender/loans/not-a-uuid/documents', ids.aDocs, uploadBody(reference)))
+          .statusCode,
+      ).toBe(422);
+    });
+
+    it('answers feature_disabled while the statements_noc switch is off, and stores nothing', async () => {
+      const before = storeFiles().length;
+      const res = await upload(ids.cOp, loan.C1 ?? '', `OFF-${RUN}`);
+      expect([res.statusCode, code(res)]).toEqual([409, 'feature_disabled']);
+      expect(storeFiles()).toHaveLength(before);
+      expect(await documentRows(`OFF-${RUN}`)).toHaveLength(0);
+    });
+
+    it('answers 503 without a configured store, for uploads and for retrieval, and registers nothing', async () => {
+      const reference = `NOSTORE-${RUN}`;
+      const res = await upload(docUser(), A1(), reference, {}, { on: appNoStore });
+      expect([res.statusCode, code(res)]).toEqual([503, 'document_store_unavailable']);
+      expect(await documentRows(reference)).toHaveLength(0);
+      const open = await get(
+        `/v1/lender/loans/${A1()}/documents/${docs.one ?? ''}/content`,
+        ids.aViewer,
+        {
+          on: appNoStore,
+        },
+      );
+      expect([open.statusCode, code(open)]).toEqual([503, 'document_store_unavailable']);
+      expect(await accessCount(docs.one ?? '')).toBe(0);
+    });
+
+    it('leaves no record behind when the store fails after the database accepted: the registration rolls back with the request', async () => {
+      const failing: DocumentStore = {
+        ...store,
+        put: () => Promise.reject(new Error('disk full')),
+      };
+      const config = loadConfig({ APP_ENV: 'test' });
+      const broken = await buildApp(config, {
+        auth: { verifier: fakeVerifier, context: createUserContext(apiPool) },
+        documents: failing,
+      });
+      try {
+        const reference = `BROKEN-${RUN}`;
+        const res = await upload(docUser(), loan.A3 ?? '', reference, {}, { on: broken });
+        expect(res.statusCode).toBe(500);
+        expect(await documentRows(reference)).toHaveLength(0);
+        expect(res.body).not.toContain('disk full');
+      } finally {
+        await broken.close();
+      }
+    });
+
+    it('lists the documents of a loan with their metadata and never the storage key', async () => {
+      const res = await get(`/v1/lender/loans/${A1()}/documents`, ids.aViewer);
+      expect(res.statusCode).toBe(200);
+      const list = LsDocumentList.parse(res.json());
+      const one = list.items.find((i) => i.documentId === docs.one);
+      expect(one).toMatchObject({
+        kind: 'statement',
+        issuer: 'lender',
+        lenderReference: ref1,
+        sizeBytes: bytes1.length,
+        sha256: sha256(bytes1),
+        source: 'lender_upload',
+        supersededById: null,
+        periodFrom: dateOnly(60),
+        periodTo: dateOnly(30),
+      });
+      expect(res.body).not.toContain('servicing/');
+      expect(res.body).not.toMatch(/storage/i);
+      for (const [label, user] of [
+        ['another lender', ids.bOp],
+        ['no loan.read', ids.aNoRead],
+        ['switch-off lender', ids.cOp],
+      ] as const) {
+        const denied = await get(`/v1/lender/loans/${A1()}/documents`, user);
+        expect([label, denied.statusCode, code(denied)]).toEqual([label, 404, 'not_found']);
+      }
+      expect(
+        (await get(`/v1/lender/loans/${randomUUID()}/documents`, ids.aViewer)).statusCode,
+      ).toBe(404);
+    });
+
+    it('opens the exact file for a reader of the lender, records the access, compares the hash and never caches', async () => {
+      const url = `/v1/lender/loans/${A1()}/documents/${docs.one ?? ''}/content`;
+      const res = await get(`${url}?purpose=download`, ids.aViewer);
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['cache-control']).toBe('no-store');
+      const content = LsDocumentContent.parse(res.json());
+      expect(Buffer.from(content.contentBase64, 'base64').equals(bytes1)).toBe(true);
+      expect(content).toMatchObject({
+        documentId: docs.one,
+        kind: 'statement',
+        mimeType: 'application/pdf',
+        sha256: sha256(bytes1),
+        sizeBytes: bytes1.length,
+        lenderReference: ref1,
+      });
+      const viewed = await get(url, ids.aOp);
+      expect(viewed.statusCode).toBe(200);
+      const access = await q<{ actor_type: string; actor_user_id: string; purpose: string }>(
+        `select actor_type, actor_user_id::text, purpose from servicing.loan_document_access where document_id = $1 order by accessed_at`,
+        [docs.one],
+      );
+      expect(access).toEqual([
+        { actor_type: 'lender', actor_user_id: ids.aViewer, purpose: 'download' },
+        { actor_type: 'lender', actor_user_id: ids.aOp, purpose: 'view' },
+      ]);
+      expect((await get(`${url}?purpose=edit`, ids.aViewer)).statusCode).toBe(422);
+      expect((await get(`${url}?extra=1`, ids.aViewer)).statusCode).toBe(422);
+    });
+
+    it('opens nothing for the wrong loan, another lender, platform staff or someone who cannot read; and records no access', async () => {
+      const wrongLoan = `/v1/lender/loans/${loan.A3 ?? ''}/documents/${docs.one ?? ''}/content`;
+      const right = `/v1/lender/loans/${A1()}/documents/${docs.one ?? ''}/content`;
+      const before = await accessCount(docs.one ?? '');
+      const wrong = await get(wrongLoan, ids.aViewer);
+      expect([wrong.statusCode, code(wrong)]).toEqual([404, 'not_found']);
+      for (const [label, user] of [
+        ['another lender', ids.bOp],
+        ['platform auditor', ids.pAud],
+        ['no loan.read', ids.aNoRead],
+        ['switch-off lender', ids.cOp],
+      ] as const) {
+        const res = await get(right, user);
+        expect([label, res.statusCode, code(res)]).toEqual([label, 404, 'not_found']);
+      }
+      expect(
+        (await get(`/v1/lender/loans/${A1()}/documents/${randomUUID()}/content`, ids.aViewer))
+          .statusCode,
+      ).toBe(404);
+      expect(await accessCount(docs.one ?? '')).toBe(before);
+    });
+
+    it('fails closed when the stored bytes do not match the recorded hash, or are gone, and records no access for a failed read', async () => {
+      const url = `/v1/lender/loans/${A1()}/documents/${docs.one ?? ''}/content`;
+      const storageKey = (await documentRows(ref1))[0]?.storage_key ?? '';
+      const file = path.join(storeRoot, storageKey);
+      const before = await accessCount(docs.one ?? '');
+      fs.writeFileSync(file, pdf(`tampered ${RUN}`));
+      try {
+        const tampered = await get(url, ids.aViewer);
+        expect(tampered.statusCode).toBe(500);
+        expect(tampered.body).not.toContain('contentBase64');
+        expect(tampered.body).not.toContain(sha256(bytes1));
+        expect(await accessCount(docs.one ?? '')).toBe(before);
+        fs.rmSync(file);
+        const gone = await get(url, ids.aViewer);
+        expect([gone.statusCode, code(gone)]).toEqual([404, 'not_found']);
+        expect(await accessCount(docs.one ?? '')).toBe(before);
+      } finally {
+        fs.writeFileSync(file, bytes1);
+      }
+      expect((await get(url, ids.aViewer)).statusCode).toBe(200);
+    });
+
+    it("fulfils a borrower's open request when the matching document is registered, and checks kind and period", async () => {
+      // A request for a quotation is not answered by a statement; a statement must cover the period asked for.
+      const kind = await upload(docUser(), A1(), `MISMATCH-${RUN}-1`, {
+        requestId: apps['REQ-QUOTE-A1'],
+      });
+      expect([kind.statusCode, code(kind)]).toEqual([409, 'request_kind_mismatch']);
+      const narrow = await upload(docUser(), A1(), `MISMATCH-${RUN}-2`, {
+        requestId: apps['REQ-STMT-A1'],
+        periodFrom: dateOnly(50),
+        periodTo: dateOnly(30),
+      });
+      expect([narrow.statusCode, code(narrow)]).toEqual([409, 'period_does_not_cover_request']);
+      const unknown = await upload(docUser(), A1(), `MISMATCH-${RUN}-3`, {
+        requestId: randomUUID(),
+      });
+      expect([unknown.statusCode, code(unknown)]).toEqual([409, 'request_not_open']);
+      expect(await documentRows(`MISMATCH-${RUN}-1`)).toHaveLength(0);
+
+      const ok = await upload(docUser(), A1(), `STMT-${RUN}-2`, {
+        requestId: apps['REQ-STMT-A1'],
+        periodFrom: dateOnly(61),
+        periodTo: dateOnly(29),
+      });
+      expect(ok.statusCode).toBe(201);
+      docs.two = ok.json<{ documentId: string }>().documentId;
+      const list = LsDocumentRequestPage.parse(
+        (
+          await get(`/v1/lender/document-requests?loanAccountId=${A1()}&limit=100`, ids.aViewer)
+        ).json(),
+      );
+      const fulfilled = list.items.find((i) => i.id === apps['REQ-STMT-A1']);
+      expect(fulfilled).toMatchObject({
+        kind: 'statement',
+        status: 'fulfilled',
+        fulfilledDocumentId: docs.two,
+        fulfilledQuoteId: null,
+        lenderId: ids.lenderA,
+      });
+      expect(fulfilled?.decidedAt).not.toBeNull();
+      // Once fulfilled, the request is closed.
+      const again = await upload(docUser(), A1(), `STMT-${RUN}-2b`, {
+        requestId: apps['REQ-STMT-A1'],
+        periodFrom: dateOnly(61),
+        periodTo: dateOnly(29),
+      });
+      expect([again.statusCode, code(again)]).toEqual([409, 'request_not_open']);
+    });
+
+    it('registers a no-dues certificate against a closed loan, answers its request, and the closure record shows it', async () => {
+      const res = await upload(docUser(), loan.A2 ?? '', `NOC-${RUN}`, {
+        kind: 'noc',
+        periodFrom: undefined,
+        periodTo: undefined,
+        requestId: apps['REQ-NOC-A2'],
+      });
+      expect(res.statusCode).toBe(201);
+      docs.noc = res.json<{ documentId: string }>().documentId;
+      const closures = LsClosurePage.parse(
+        (await get('/v1/lender/closures?limit=100', ids.aViewer)).json(),
+      );
+      const closure = closures.items.find((c) => c.loanAccountId === loan.A2);
+      expect(closure).toMatchObject({
+        closureKind: 'closed',
+        lenderId: ids.lenderA,
+        nocDocumentId: docs.noc,
+      });
+      expect(closure?.nocIssuedAt).not.toBeNull();
+      const request = LsDocumentRequestPage.parse(
+        (
+          await get(`/v1/lender/document-requests?loanAccountId=${loan.A2 ?? ''}`, ids.aViewer)
+        ).json(),
+      ).items.find((i) => i.id === apps['REQ-NOC-A2']);
+      expect(request).toMatchObject({ status: 'fulfilled', fulfilledDocumentId: docs.noc });
+    });
+
+    it('supersedes a document once, on the same loan and kind only', async () => {
+      const res = await upload(docUser(), A1(), `STMT-${RUN}-3`, {
+        supersedesDocumentId: docs.one,
+        contentBase64: pdf(`corrected ${RUN}`).toString('base64'),
+      });
+      expect(res.statusCode).toBe(201);
+      docs.three = res.json<{ documentId: string }>().documentId;
+      const list = LsDocumentList.parse(
+        (await get(`/v1/lender/loans/${A1()}/documents`, ids.aViewer)).json(),
+      );
+      expect(list.items.find((i) => i.documentId === docs.one)?.supersededById).toBe(docs.three);
+      const twice = await upload(docUser(), A1(), `STMT-${RUN}-4`, {
+        supersedesDocumentId: docs.one,
+        contentBase64: pdf(`again ${RUN}`).toString('base64'),
+      });
+      expect([twice.statusCode, code(twice)]).toEqual([409, 'already_superseded']);
+      const crossLoan = await upload(docUser(), loan.A3 ?? '', `STMT-${RUN}-5`, {
+        supersedesDocumentId: docs.one,
+        contentBase64: pdf(`cross ${RUN}`).toString('base64'),
+      });
+      expect([crossLoan.statusCode, code(crossLoan)]).toEqual([422, 'supersedes_invalid']);
+      const otherKind = await upload(docUser(), A1(), `STMT-${RUN}-6`, {
+        kind: 'noc',
+        periodFrom: undefined,
+        periodTo: undefined,
+        supersedesDocumentId: docs.three,
+        contentBase64: pdf(`kind ${RUN}`).toString('base64'),
+      });
+      expect([otherKind.statusCode, code(otherKind)]).toEqual([422, 'supersedes_invalid']);
+    });
+
+    it('lists the requests of the lender only, filters them and pages through them', async () => {
+      const a = LsDocumentRequestPage.parse(
+        (await get('/v1/lender/document-requests?limit=100', ids.aViewer)).json(),
+      );
+      expect(new Set(a.items.map((i) => i.lenderId))).toEqual(new Set([ids.lenderA]));
+      expect(a.items.map((i) => i.id)).toEqual(
+        expect.arrayContaining([apps['REQ-QUOTE-A1'], apps['REQ-DECL-A3']]),
+      );
+      expect(a.items.map((i) => i.id)).not.toContain(apps['REQ-STMT-B1']);
+      const open = LsDocumentRequestPage.parse(
+        (
+          await get(
+            '/v1/lender/document-requests?status=requested&kind=foreclosure_quote&limit=100',
+            ids.aOp,
+          )
+        ).json(),
+      );
+      expect(
+        open.items.every((i) => i.status === 'requested' && i.kind === 'foreclosure_quote'),
+      ).toBe(true);
+      expect(open.items.map((i) => i.id)).toContain(apps['REQ-QUOTE-A1']);
+      const b = LsDocumentRequestPage.parse(
+        (await get('/v1/lender/document-requests?limit=100', ids.bOp)).json(),
+      );
+      expect(b.items.map((i) => i.id)).toEqual([apps['REQ-STMT-B1']]);
+      const walked: string[] = [];
+      let cursor: string | null = null;
+      for (let guard = 0; guard < 30; guard += 1) {
+        const res: Res = await get(
+          `/v1/lender/document-requests?limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+          ids.aOp,
+        );
+        const page = LsDocumentRequestPage.parse(res.json());
+        walked.push(...page.items.map((i) => i.id));
+        cursor = page.nextCursor;
+        if (!cursor) break;
+      }
+      expect(new Set(walked).size).toBe(a.items.length);
+      expect(
+        (await get(`/v1/lender/document-requests?lenderId=${ids.lenderB}`, ids.aOp)).statusCode,
+      ).toBe(403);
+      // The borrower who asked is never named.
+      for (const body of seen.slice(-6)) {
+        expect(body).not.toContain(ids.b1);
+        expect(body).not.toContain(borrower.b1);
+      }
+    });
+
+    it('declines an open request with a reason the borrower can read; a reason with personal data is refused', async () => {
+      const url = `/v1/lender/document-requests/${apps['REQ-DECL-A3'] ?? ''}/decline`;
+      const note = 'We cannot issue this statement yet; please ask again next month.';
+      for (const [label, user, status] of [
+        ['viewer', ids.aViewer, 403],
+        ['manual entry only', ids.aManual, 403],
+        ['platform auditor', ids.pAud, 403],
+        ['another lender', ids.bOp, 404],
+        ['no loan.read', ids.aNoRead, 404],
+      ] as const) {
+        const res = await post(url, user, { note });
+        expect([label, res.statusCode]).toEqual([label, status]);
+      }
+      const personal = await post(url, ids.aDocs, {
+        note: `Write to ${CANARY.email} for details please.`,
+      });
+      expect([personal.statusCode, code(personal)]).toEqual([422, 'note_invalid']);
+      expect(personal.body).not.toContain(CANARY.email);
+      expect((await post(url, ids.aDocs, { note: 'short' })).statusCode).toBe(422);
+      const key = `it-decline-${randomUUID()}`;
+      const ok = await post(url, ids.aDocs, { note }, { key });
+      expect([ok.statusCode, ok.json()]).toEqual([
+        200,
+        { id: apps['REQ-DECL-A3'], status: 'declined' },
+      ]);
+      expect((await post(url, ids.aDocs, { note }, { key })).headers['idempotent-replayed']).toBe(
+        'true',
+      );
+      const again = await post(url, ids.aDocs2, { note });
+      expect([again.statusCode, code(again)]).toEqual([409, 'request_not_open']);
+      const shown = LsDocumentRequestPage.parse(
+        (
+          await get(
+            `/v1/lender/document-requests?status=declined&loanAccountId=${loan.A3 ?? ''}`,
+            ids.aViewer,
+          )
+        ).json(),
+      ).items[0];
+      expect(shown).toMatchObject({ status: 'declined', lenderNote: note });
+      // The switch-off lender cannot decline either.
+      const off = await post(
+        `/v1/lender/document-requests/${apps['REQ-STMT-C1'] ?? ''}/decline`,
+        ids.cOp,
+        { note },
+      );
+      expect([off.statusCode, code(off)]).toEqual([409, 'feature_disabled']);
+      expect(
+        (await post(`/v1/lender/document-requests/${randomUUID()}/decline`, ids.aDocs, { note }))
+          .statusCode,
+      ).toBe(404);
+    });
+  });
+
+  // ================================================================================================================
+  // Foreclosure quotations
+  // ================================================================================================================
+  describe('foreclosure quotations', () => {
+    const A1 = () => loan.A1 ?? '';
+    const quoteBody = (reference: string, over: Record<string, unknown> = {}) => ({
+      lenderQuoteRef: reference,
+      asOf: iso(1),
+      validUntil: iso(-24),
+      principalMinor: 1_000_000,
+      interestMinor: 50_000,
+      chargesMinor: 10_000,
+      prepaymentChargeMinor: 20_000,
+      totalMinor: 1_080_000,
+      ...over,
+    });
+    const record = (
+      user: string,
+      loanId: string,
+      body: unknown,
+      options: Parameters<typeof call>[4] = {},
+    ) => post(`/v1/lender/loans/${loanId}/foreclosure-quotes`, user, body, options);
+    const ids2: Record<string, string> = {};
+    const firstQuote = quoteBody(`FQ-${RUN}-1`);
+
+    it('records the quotation exactly as the lender issued it, in integer paise', async () => {
+      const key = `it-quote-${randomUUID()}`;
+      const res = await record(ids.aDocs, A1(), firstQuote, { key });
+      expect(res.statusCode).toBe(201);
+      const result = LsQuoteResult.parse(res.json());
+      expect(result.existing).toBe(false);
+      expect(result.quote).toMatchObject({
+        lenderId: ids.lenderA,
+        loanAccountId: loan.A1,
+        lenderQuoteRef: `FQ-${RUN}-1`,
+        principalMinor: 1_000_000,
+        interestMinor: 50_000,
+        chargesMinor: 10_000,
+        prepaymentChargeMinor: 20_000,
+        totalMinor: 1_080_000,
+        totalMismatch: false,
+        source: 'lender_portal',
+        letterDocumentId: null,
+      });
+      ids2.one = result.quote.id;
+      const stored = await q<Record<string, string>>(
+        `select principal_minor::text as p, interest_minor::text as i, charges_minor::text as c, prepayment_charge_minor::text as pp, total_minor::text as t,
+                reported_by::text as who, total_mismatch::text as flagged
+           from servicing.foreclosure_quotes where id = $1`,
+        [ids2.one],
+      );
+      expect(stored[0]).toEqual({
+        p: '1000000',
+        i: '50000',
+        c: '10000',
+        pp: '20000',
+        t: '1080000',
+        who: ids.aDocs,
+        flagged: 'false',
+      });
+      const replay = await record(ids.aDocs, A1(), firstQuote, { key });
+      expect(replay.headers['idempotent-replayed']).toBe('true');
+      expect(replay.json()).toEqual(res.json());
+    });
+
+    it('answers the same quotation for the same reference and figures, and refuses the same reference with other figures', async () => {
+      const first = await record(
+        ids.aDocs,
+        A1(),
+        quoteBody(`FQ-${RUN}-1`, { asOf: undefined, validUntil: undefined }),
+      );
+      // The times are part of the figures: a repeat with other times is a different quotation under the same reference.
+      expect([first.statusCode, code(first)]).toEqual([422, 'validation_failed']);
+      const stored = await q<{ as_of: Date; valid_until: Date }>(
+        `select as_of, valid_until from servicing.foreclosure_quotes where id = $1`,
+        [ids2.one],
+      );
+      const same = await record(
+        ids.aDocs2,
+        A1(),
+        quoteBody(`FQ-${RUN}-1`, {
+          asOf: stored[0]?.as_of.toISOString(),
+          validUntil: stored[0]?.valid_until.toISOString(),
+        }),
+      );
+      expect(same.statusCode).toBe(200);
+      expect(LsQuoteResult.parse(same.json())).toMatchObject({
+        existing: true,
+        quote: { id: ids2.one },
+      });
+      const other = await record(
+        ids.aDocs,
+        A1(),
+        quoteBody(`FQ-${RUN}-1`, { totalMinor: 1_090_000 }),
+      );
+      expect([other.statusCode, code(other)]).toEqual([409, 'quote_ref_reused']);
+    });
+
+    it('stores a quotation whose parts do not add up to its total FLAGGED, never corrected', async () => {
+      const res = await record(
+        ids.aDocs,
+        A1(),
+        quoteBody(`FQ-${RUN}-2`, { totalMinor: 1_000_000 }),
+      );
+      expect(res.statusCode).toBe(201);
+      const quote = LsQuoteResult.parse(res.json()).quote;
+      expect(quote.totalMismatch).toBe(true);
+      expect(quote.totalMinor).toBe(1_000_000);
+      expect(
+        quote.principalMinor +
+          quote.interestMinor +
+          quote.chargesMinor +
+          quote.prepaymentChargeMinor,
+      ).toBe(1_080_000);
+      ids2.flagged = quote.id;
+      const row = await scalar<string>(
+        `select total_mismatch::text as v from servicing.foreclosure_quotes where id = $1`,
+        [quote.id],
+      );
+      expect(row).toBe('true');
+    });
+
+    it('refuses what the database refuses: validity order, a time in the future, a bad reference, a wrong letter, money that is not paise', async () => {
+      const cases: [string, Record<string, unknown>, number, string][] = [
+        ['validity not after the as-of time', { validUntil: iso(2) }, 422, 'validity_order'],
+        [
+          'an as-of time in the future',
+          { asOf: iso(-48), validUntil: iso(-72) },
+          422,
+          'as_of_invalid',
+        ],
+        ['a reference with a space', { lenderQuoteRef: 'has a space' }, 422, 'reference_invalid'],
+        [
+          'a letter that is not a quotation document',
+          { letterDocumentId: randomUUID() },
+          422,
+          'letter_invalid',
+        ],
+        ['a request that is not open', { requestId: randomUUID() }, 409, 'request_not_open'],
+        ['money with a fraction', { totalMinor: 10.5 }, 422, 'validation_failed'],
+        ['negative money', { principalMinor: -1 }, 422, 'validation_failed'],
+        ['money as text', { interestMinor: '500' }, 422, 'validation_failed'],
+        ['money above the limit', { chargesMinor: 100_000_000_000_001 }, 422, 'validation_failed'],
+        ['a missing figure', { totalMinor: undefined }, 422, 'validation_failed'],
+        ['an unknown field', { total: 1 }, 422, 'validation_failed'],
+        ['a time without an offset', { asOf: '2026-10-01T10:00:00' }, 422, 'validation_failed'],
+      ];
+      for (const [label, over, status, expectedCode] of cases) {
+        const res = await record(
+          ids.aDocs,
+          A1(),
+          quoteBody(`FQ-${RUN}-X${String(label.length)}`, over),
+        );
+        expect([label, res.statusCode, code(res)]).toEqual([label, status, expectedCode]);
+      }
+      expect(
+        await scalar<string>(
+          `select count(*)::text as v from servicing.foreclosure_quotes where lender_quote_ref like $1`,
+          [`FQ-${RUN}-X%`],
+        ),
+      ).toBe('0');
+    });
+
+    it("links the lender's own quotation letter, and answers the borrower's open request only with a quotation that is still valid", async () => {
+      const letter = await post(
+        `/v1/lender/loans/${A1()}/documents`,
+        docUser(),
+        uploadBody(`LETTER-${RUN}`, {
+          kind: 'foreclosure_quote',
+          periodFrom: undefined,
+          periodTo: undefined,
+        }),
+      );
+      expect(letter.statusCode).toBe(201);
+      const letterId = letter.json<{ documentId: string }>().documentId;
+      // An expired quotation may be recorded as history but cannot answer a request.
+      const expired = await record(
+        ids.aDocs,
+        A1(),
+        quoteBody(`FQ-${RUN}-OLD`, {
+          asOf: iso(5),
+          validUntil: iso(1),
+          requestId: apps['REQ-QUOTE-A1'],
+        }),
+      );
+      expect([expired.statusCode, code(expired)]).toEqual([409, 'quote_already_expired']);
+      const res = await record(
+        ids.aDocs,
+        A1(),
+        quoteBody(`FQ-${RUN}-3`, { requestId: apps['REQ-QUOTE-A1'], letterDocumentId: letterId }),
+      );
+      expect(res.statusCode).toBe(201);
+      const quote = LsQuoteResult.parse(res.json()).quote;
+      expect(quote.letterDocumentId).toBe(letterId);
+      const request = LsDocumentRequestPage.parse(
+        (
+          await get(
+            `/v1/lender/document-requests?kind=foreclosure_quote&loanAccountId=${A1()}`,
+            ids.aViewer,
+          )
+        ).json(),
+      ).items.find((i) => i.id === apps['REQ-QUOTE-A1']);
+      expect(request).toMatchObject({
+        status: 'fulfilled',
+        fulfilledQuoteId: quote.id,
+        fulfilledDocumentId: null,
+      });
+    });
+
+    it('lists the quotations of a loan newest first, flagged ones included, and only for a reader of the lender', async () => {
+      const res = await get(`/v1/lender/loans/${A1()}/foreclosure-quotes?limit=100`, ids.aViewer);
+      expect(res.statusCode).toBe(200);
+      const page = LsQuotePage.parse(res.json());
+      expect(page.items.map((i) => i.lenderQuoteRef)).toEqual([
+        `FQ-${RUN}-3`,
+        `FQ-${RUN}-2`,
+        `FQ-${RUN}-1`,
+      ]);
+      expect(page.items.map((i) => i.totalMismatch)).toEqual([false, true, false]);
+      const first = LsQuotePage.parse(
+        (await get(`/v1/lender/loans/${A1()}/foreclosure-quotes?limit=2`, ids.aViewer)).json(),
+      );
+      expect(first.items).toHaveLength(2);
+      const second = LsQuotePage.parse(
+        (
+          await get(
+            `/v1/lender/loans/${A1()}/foreclosure-quotes?limit=2&cursor=${encodeURIComponent(first.nextCursor ?? '')}`,
+            ids.aViewer,
+          )
+        ).json(),
+      );
+      expect(second.items.map((i) => i.lenderQuoteRef)).toEqual([`FQ-${RUN}-1`]);
+      expect(second.nextCursor).toBeNull();
+      for (const [label, user, status] of [
+        ['another lender', ids.bOp, 404],
+        ['no loan.read', ids.aNoRead, 403],
+        ['switch-off lender', ids.cOp, 404],
+      ] as const) {
+        const denied = await get(`/v1/lender/loans/${A1()}/foreclosure-quotes`, user);
+        expect([label, denied.statusCode]).toEqual([label, status]);
+      }
+      expect(
+        (await get(`/v1/lender/loans/${randomUUID()}/foreclosure-quotes`, ids.aViewer)).statusCode,
+      ).toBe(404);
+    });
+
+    it('needs servicing.document.issue and the statements_noc switch: nothing is recorded otherwise', async () => {
+      const before = await scalar<string>(
+        `select count(*)::text as v from servicing.foreclosure_quotes`,
+      );
+      for (const [label, user, loanId, status, expectedCode] of [
+        ['viewer', ids.aViewer, A1(), 403, 'forbidden'],
+        ['manual entry only', ids.aManual, A1(), 403, 'forbidden'],
+        ['sync.manage only', ids.aSync, A1(), 403, 'forbidden'],
+        ['platform auditor', ids.pAud, A1(), 403, 'forbidden'],
+        ['no loan.read', ids.aNoRead, A1(), 404, 'not_found'],
+        ['another lender', ids.bOp, A1(), 404, 'not_found'],
+        ['switch off', ids.cOp, loan.C1 ?? '', 409, 'feature_disabled'],
+      ] as const) {
+        const res = await record(user, loanId, quoteBody(`FQ-${RUN}-DENIED`));
+        expect([label, res.statusCode, code(res)]).toEqual([label, status, expectedCode]);
+      }
+      expect(
+        await scalar<string>(`select count(*)::text as v from servicing.foreclosure_quotes`),
+      ).toBe(before);
+      expect((await record(ids.aDocs, randomUUID(), quoteBody(`FQ-${RUN}-NONE`))).statusCode).toBe(
+        404,
+      );
+    });
+  });
+
+  // ================================================================================================================
+  // Closure and security release
+  // ================================================================================================================
+  describe('closure and security release', () => {
+    const A2 = () => loan.A2 ?? '';
+    const open = (user: string, loanId: string, collateralTypes: unknown) =>
+      post(`/v1/lender/loans/${loanId}/security-release-tasks`, user, { collateralTypes });
+    const tasks = async (user = ids.aViewer, lenderId?: string) => {
+      const page = LsClosurePage.parse(
+        (
+          await get(`/v1/lender/closures?limit=100${lenderId ? `&lenderId=${lenderId}` : ''}`, user)
+        ).json(),
+      );
+      return page.items.find((c) => c.loanAccountId === A2())?.tasks ?? [];
+    };
+    const taskIds: Record<string, string> = {};
+
+    it("shows the loans the lender reported closed, opened once by the database, with nobody else's", async () => {
+      const page = LsClosurePage.parse(
+        (await get('/v1/lender/closures?limit=100', ids.aViewer)).json(),
+      );
+      const closure = page.items.find((c) => c.loanAccountId === A2());
+      expect(closure).toMatchObject({ lenderId: ids.lenderA, closureKind: 'closed', tasks: [] });
+      // No approved rule resolves in the test database: the due date is empty, never invented.
+      expect(closure?.nocDueBy).toBeNull();
+      expect(new Set(page.items.map((c) => c.lenderId))).toEqual(new Set([ids.lenderA]));
+      expect(
+        await scalar<string>(
+          `select count(*)::text as v from servicing.closure_records where loan_account_id = $1`,
+          [A2()],
+        ),
+      ).toBe('1');
+      const b = LsClosurePage.parse((await get('/v1/lender/closures?limit=100', ids.bOp)).json());
+      expect(b.items.map((c) => c.loanAccountId)).not.toContain(A2());
+      expect((await get(`/v1/lender/closures?lenderId=${ids.lenderA}`, ids.bOp)).statusCode).toBe(
+        403,
+      );
+      // Page size and cursor.
+      const one = LsClosurePage.parse(
+        (await get('/v1/lender/closures?limit=1', ids.aViewer)).json(),
+      );
+      expect(one.items.length).toBeLessThanOrEqual(1);
+    });
+
+    it('records the collateral the lender holds on a closed loan, once per type, and refuses an open loan', async () => {
+      const res = await open(ids.aDocs, A2(), ['mutual_fund_lien', 'demat_pledge']);
+      expect([res.statusCode, res.json()]).toEqual([200, { created: 2 }]);
+      const again = await open(ids.aDocs, A2(), ['mutual_fund_lien', 'demat_pledge']);
+      expect(again.json()).toEqual({ created: 0 });
+      const more = await open(ids.aDocs2, A2(), ['other']);
+      expect(more.json()).toEqual({ created: 1 });
+      const list = await tasks();
+      expect(list.map((t) => t.collateralType).sort()).toEqual([
+        'demat_pledge',
+        'mutual_fund_lien',
+        'other',
+      ]);
+      for (const t of list) {
+        expect(t).toMatchObject({
+          status: 'open',
+          dueBy: null,
+          delayReason: null,
+          lenderConfirmationRef: null,
+          confirmedAt: null,
+        });
+        taskIds[t.collateralType] = t.id;
+      }
+      const active = await open(ids.aDocs, loan.A1 ?? '', ['mutual_fund_lien']);
+      expect([active.statusCode, code(active)]).toEqual([409, 'loan_not_closed']);
+      const dup = await open(ids.aDocs, A2(), ['other', 'other']);
+      expect([dup.statusCode, code(dup)]).toEqual([422, 'collateral_types_invalid']);
+      for (const bad of [
+        [],
+        ['gold'],
+        [
+          'other',
+          'mutual_fund_lien',
+          'demat_pledge',
+          'property_documents',
+          'vehicle_hypothecation',
+          'other',
+        ],
+        'other',
+      ]) {
+        expect([JSON.stringify(bad), (await open(ids.aDocs, A2(), bad)).statusCode]).toEqual([
+          JSON.stringify(bad),
+          422,
+        ]);
+      }
+      for (const type of LS_COLLATERAL_TYPES) expect(typeof type).toBe('string');
+    });
+
+    it('needs servicing.document.issue and the statements_noc switch to record collateral', async () => {
+      for (const [label, user, loanId, status, expectedCode] of [
+        ['viewer', ids.aViewer, A2(), 403, 'forbidden'],
+        ['manual entry only', ids.aManual, A2(), 403, 'forbidden'],
+        ['sync.manage only', ids.aSync, A2(), 403, 'forbidden'],
+        ['platform auditor', ids.pAud, A2(), 403, 'forbidden'],
+        ['no loan.read', ids.aNoRead, A2(), 404, 'not_found'],
+        ['another lender', ids.bOp, A2(), 404, 'not_found'],
+        ['switch off', ids.cOp, loan.C1 ?? '', 409, 'feature_disabled'],
+      ] as const) {
+        const res = await open(user, loanId, ['property_documents']);
+        expect([label, res.statusCode, code(res)]).toEqual([label, status, expectedCode]);
+      }
+      expect((await tasks()).map((t) => t.collateralType)).not.toContain('property_documents');
+    });
+
+    it("records why a release is late, in the lender's own words, without personal data", async () => {
+      const url = `/v1/lender/security-release/${taskIds.mutual_fund_lien ?? ''}/delay-reason`;
+      const reason = 'The depository has not yet acknowledged the release request.';
+      for (const [label, user, status] of [
+        ['viewer', ids.aViewer, 403],
+        ['manual entry only', ids.aManual, 403],
+        ['platform auditor', ids.pAud, 403],
+        ['another lender', ids.bOp, 404],
+        ['no loan.read', ids.aNoRead, 404],
+      ] as const) {
+        const res = await post(url, user, { reason });
+        expect([label, res.statusCode]).toEqual([label, status]);
+      }
+      const personal = await post(url, ids.aDocs, {
+        reason: `Call ${CANARY.email} about it please.`,
+      });
+      expect([personal.statusCode, code(personal)]).toEqual([422, 'reason_invalid']);
+      expect(personal.body).not.toContain(CANARY.email);
+      expect((await post(url, ids.aDocs, { reason: 'late' })).statusCode).toBe(422);
+      const ok = await post(url, ids.aDocs, { reason });
+      expect([ok.statusCode, ok.json()]).toEqual([
+        200,
+        { id: taskIds.mutual_fund_lien, outcome: 'recorded' },
+      ]);
+      const task = (await tasks()).find((t) => t.id === taskIds.mutual_fund_lien);
+      expect(task).toMatchObject({ delayReason: reason, status: 'open' });
+      expect(task?.delayReasonAt).not.toBeNull();
+      expect(
+        (
+          await post(`/v1/lender/security-release/${randomUUID()}/delay-reason`, ids.aDocs, {
+            reason,
+          })
+        ).statusCode,
+      ).toBe(404);
+    });
+
+    it("lets only a lender user confirm a release, with the lender's own reference; Udofin staff and other lenders cannot", async () => {
+      const url = `/v1/lender/security-release/${taskIds.mutual_fund_lien ?? ''}/confirm`;
+      const body = { confirmationRef: `REL-${RUN}-1` };
+      for (const [label, user, status, expectedCode] of [
+        ['viewer', ids.aViewer, 403, 'forbidden'],
+        ['manual entry only', ids.aManual, 403, 'forbidden'],
+        ['sync.manage only', ids.aSync, 403, 'forbidden'],
+        ['platform auditor (reads, never confirms)', ids.pAud, 403, 'forbidden'],
+        ['platform features admin', ids.pFeatures, 404, 'not_found'],
+        ['another lender', ids.bOp, 404, 'not_found'],
+        ['no loan.read', ids.aNoRead, 404, 'not_found'],
+      ] as const) {
+        const res = await post(url, user, body);
+        expect([label, res.statusCode, code(res)].slice(0, 3)).toEqual([
+          label,
+          status,
+          expectedCode,
+        ]);
+      }
+      expect((await tasks()).find((t) => t.id === taskIds.mutual_fund_lien)?.status).toBe('open');
+      for (const bad of [
+        { confirmationRef: 'x y' },
+        { confirmationRef: 'ab' },
+        { confirmationRef: 'has space here' },
+      ]) {
+        const res = await post(url, ids.aDocs, bad);
+        expect(res.statusCode).toBe(422);
+      }
+      const key = `it-confirm-${randomUUID()}`;
+      const ok = await post(url, ids.aDocs, body, { key });
+      expect([ok.statusCode, ok.json()]).toEqual([
+        200,
+        { id: taskIds.mutual_fund_lien, outcome: 'confirmed_by_lender' },
+      ]);
+      expect((await post(url, ids.aDocs, body, { key })).headers['idempotent-replayed']).toBe(
+        'true',
+      );
+      const task = (await tasks()).find((t) => t.id === taskIds.mutual_fund_lien);
+      expect(task).toMatchObject({
+        status: 'confirmed_by_lender',
+        lenderConfirmationRef: `REL-${RUN}-1`,
+      });
+      expect(task?.confirmedAt).not.toBeNull();
+      // The database recorded who; the response never names them.
+      expect(
+        await scalar<string>(
+          `select confirmed_by::text as v from servicing.security_release_tasks where id = $1`,
+          [taskIds.mutual_fund_lien],
+        ),
+      ).toBe(ids.aDocs);
+      const again = await post(url, ids.aDocs2, body);
+      expect([again.statusCode, code(again)]).toEqual([409, 'already_confirmed']);
+      const late = await post(
+        `/v1/lender/security-release/${taskIds.mutual_fund_lien ?? ''}/delay-reason`,
+        ids.aDocs,
+        {
+          reason: 'A reason added after the release was confirmed.',
+        },
+      );
+      expect([late.statusCode, code(late)]).toEqual([409, 'already_confirmed']);
+      // The other tasks stay open: nothing is confirmed on anyone's behalf.
+      expect((await tasks()).filter((t) => t.status === 'open')).toHaveLength(2);
+      expect(
+        (await post(`/v1/lender/security-release/not-a-uuid/confirm`, ids.aDocs, body)).statusCode,
+      ).toBe(422);
+      expect(
+        (await post(`/v1/lender/security-release/${randomUUID()}/confirm`, ids.aDocs, body))
+          .statusCode,
+      ).toBe(404);
+    });
+
+    it('answers feature_disabled for a lender whose switch is off, when it has a task', async () => {
+      // Lender C reported no closure; a task id of another lender is simply not found for it.
+      const res = await post(
+        `/v1/lender/security-release/${taskIds.demat_pledge ?? ''}/confirm`,
+        ids.cOp,
+        {
+          confirmationRef: `REL-${RUN}-C`,
+        },
+      );
+      expect([res.statusCode, code(res)]).toEqual([404, 'not_found']);
+    });
+  });
+
+  // ================================================================================================================
+  // The kill switch
+  // ================================================================================================================
+  describe('the kill switch', () => {
+    it('hides the feature at once: writes and openings answer feature_disabled, reading history stays possible', async () => {
+      const D1 = loan.D1 ?? '';
+      // While both switches are on, lender D can do everything.
+      const before = await post(
+        `/v1/lender/loans/${D1}/documents`,
+        ids.dOp,
+        uploadBody(`KILL-${RUN}-1`),
+      );
+      expect(before.statusCode).toBe(201);
+      const documentId = before.json<{ documentId: string }>().documentId;
+      const url = `/v1/lender/loans/${D1}/documents/${documentId}/content`;
+      expect((await get(url, ids.dOp)).statusCode).toBe(200);
+      const connect = {
+        lenderId: ids.lenderD,
+        kind: 'file_import',
+        status: 'active',
+      };
+      expect((await post('/v1/lender/lms-connection', ids.dOp, connect)).statusCode).toBe(200);
+      const stagedBefore = await post(
+        '/v1/lender/imports',
+        ids.dOp,
+        importBody(ids.lenderD, {
+          content: JSON.stringify([
+            loanRecord({
+              loanRef: `LS-KILL-${RUN}`,
+              appRef: appRef('D1'),
+              srid: `SRC-KILL-${RUN}`,
+              hoursAgo: 4,
+            }),
+          ]),
+        }),
+      );
+      expect(stagedBefore.statusCode).toBe(201);
+      const batchId = LsImportOutcome.parse(stagedBefore.json()).batch?.id ?? '';
+
+      // One platform person turns both switches off (a real, lasting change).
+      for (const feature of ['statements_noc', 'servicing_sync'])
+        await asUserCommit(ids.pFeatures, 'select servicing.kill_feature($1::uuid, $2, $3, $4)', [
+          ids.lenderD,
+          feature,
+          'Test: emergency stop of the feature for this lender.',
+          `it-kill-${feature}-${RUN}-0001`,
+        ]);
+
+      const upload = await post(
+        `/v1/lender/loans/${D1}/documents`,
+        ids.dOp,
+        uploadBody(`KILL-${RUN}-2`),
+      );
+      expect([upload.statusCode, code(upload)]).toEqual([409, 'feature_disabled']);
+      expect(
+        await scalar<string>(
+          `select count(*)::text as v from servicing.loan_documents where lender_reference = $1`,
+          [`KILL-${RUN}-2`],
+        ),
+      ).toBe('0');
+      const open = await get(url, ids.dOp);
+      expect([open.statusCode, code(open)]).toEqual([409, 'feature_disabled']);
+      const quote = await post(`/v1/lender/loans/${D1}/foreclosure-quotes`, ids.dOp, {
+        lenderQuoteRef: `KQ-${RUN}`,
+        asOf: iso(1),
+        validUntil: iso(-1),
+        principalMinor: 1,
+        interestMinor: 1,
+        chargesMinor: 1,
+        prepaymentChargeMinor: 1,
+        totalMinor: 4,
+      });
+      expect([quote.statusCode, code(quote)]).toEqual([409, 'feature_disabled']);
+      const connection = await post('/v1/lender/lms-connection', ids.dOp, connect);
+      expect([connection.statusCode, code(connection)]).toEqual([409, 'feature_disabled']);
+      const commit = await post(`/v1/lender/imports/${batchId}/commit`, ids.dOp, {});
+      expect([commit.statusCode, code(commit)]).toEqual([409, 'feature_disabled']);
+      const reject = await post(`/v1/lender/imports/${batchId}/reject`, ids.dOp, {
+        reason: 'Switched off, discarding the preview.',
+      });
+      expect([reject.statusCode, code(reject)]).toEqual([409, 'feature_disabled']);
+      const stage = await post(
+        '/v1/lender/imports',
+        ids.dOp,
+        importBody(ids.lenderD, {
+          content: JSON.stringify([
+            loanRecord({
+              loanRef: `LS-KILL2-${RUN}`,
+              appRef: appRef('D1'),
+              srid: `SRC-KILL2-${RUN}`,
+              hoursAgo: 4,
+            }),
+          ]),
+        }),
+      );
+      expect([stage.statusCode, code(stage)]).toEqual([409, 'feature_disabled']);
+      // History is never hidden: the lender still reads its loans, its documents' metadata and its batches.
+      const loans = LsLoanPage.parse((await get('/v1/lender/loans', ids.dOp)).json());
+      expect(loans.items.map((i) => i.id)).toContain(loan.D1);
+      expect((await get(`/v1/lender/loans/${D1}/documents`, ids.dOp)).statusCode).toBe(200);
+      expect((await get(`/v1/lender/imports/${batchId}`, ids.dOp)).statusCode).toBe(200);
+      // And the other lenders are not affected.
+      expect(
+        (
+          await post(
+            `/v1/lender/loans/${loan.A3 ?? ''}/documents`,
+            docUser(),
+            uploadBody(`KILL-${RUN}-A`),
+          )
+        ).statusCode,
+      ).toBe(201);
+    });
+  });
+
+  // ================================================================================================================
+  // Nothing personal leaves the API
+  // ================================================================================================================
+  describe('data minimisation', () => {
+    it('returns no borrower, user, application, hash-of-record, key or secret in any response of this file', () => {
+      const everything = seen.join('\n');
+      expect(everything.length).toBeGreaterThan(10_000);
+      const values: [string, string][] = [
+        ['borrower phone 1', CANARY.phoneB1],
+        ['borrower phone 2', CANARY.phoneB2],
+        ['account-shaped value', CANARY.account],
+        ['phone-shaped reference', CANARY.phoneRef.replace('+', '')],
+        ['secret name', CANARY.secretRef],
+        ['e-mail address', CANARY.email],
+        ['borrower id 1', borrower.b1],
+        ['borrower id 2', borrower.b2],
+        ['borrower user 1', ids.b1],
+        ['borrower user 2', ids.b2],
+        ['storage key prefix', '"servicing/'],
+        ...Object.entries(apps)
+          .filter(([label]) => !label.startsWith('REQ-'))
+          .map(([label, id]): [string, string] => [`application ${label}`, id]),
+        ...[
+          ids.aOp,
+          ids.aOp2,
+          ids.aViewer,
+          ids.aManual,
+          ids.aSync,
+          ids.aDocs,
+          ids.aDocs2,
+          ids.bOp,
+          ids.cOp,
+          ids.dOp,
+          ids.pAud,
+          ids.pFeatures,
+        ].map((id, n): [string, string] => [`staff user ${String(n)}`, id]),
+      ];
+      for (const [label, value] of values)
+        expect([label, everything.includes(value)]).toEqual([label, false]);
+      // And by field name: nothing the database keeps for itself is a key of any response.
+      for (const name of [
+        'storage_key',
+        'storageKey',
+        'content_sha256',
+        'contentSha256',
+        'secret_ref',
+        'secretRef',
+        'idempotency_key',
+        'idempotencyKey',
+        'borrower_id',
+        'borrowerId',
+        'application_id',
+        'applicationId',
+        'uploaded_by',
+        'uploadedBy',
+        'requested_by',
+        'requestedBy',
+        'confirmed_by',
+        'confirmedBy',
+        'decided_by',
+        'recorded_by',
+        'reported_by',
+        'incoming_report',
+        'incomingReport',
+        'normalised',
+        'row_sha256',
+        'accountNumber',
+        'phone',
+      ])
+        expect([name, everything.includes(`"${name}"`)]).toEqual([name, false]);
+    });
+
+    it('writes none of it to the request log either, whatever the outcome', async () => {
+      // A second app, built the way a deployed process is built (real serializers and redaction), with its log output captured.
+      const captured: string[] = [];
+      const realWriteSync = fs.writeSync.bind(fs);
+      const realWrite = fs.write.bind(fs);
+      vi.spyOn(fs, 'writeSync').mockImplementation(
+        (fd: number, data: unknown, ...rest: unknown[]) => {
+          if (fd === 1) {
+            captured.push(String(data));
+            return String(data).length;
+          }
+          return (realWriteSync as (...a: unknown[]) => number)(fd, data, ...rest);
+        },
+      );
+      vi.spyOn(fs, 'write').mockImplementation((fd: number, data: unknown, ...rest: unknown[]) => {
+        if (fd === 1) {
+          captured.push(String(data));
+          const done = rest.at(-1);
+          if (typeof done === 'function')
+            (done as (e: null, n: number) => void)(null, String(data).length);
+          return;
+        }
+        (realWrite as (...a: unknown[]) => void)(fd, data, ...rest);
+      });
+      const logged = await buildApp(loadConfig({ APP_ENV: 'local', LOG_LEVEL: 'trace' }), {
+        auth: { verifier: fakeVerifier, context: createUserContext(apiPool) },
+        documents: store,
+      });
+      const logContent = JSON.stringify([
+        loanRecord({
+          loanRef: `LS-LOG-${RUN}`,
+          appRef: appRef('LOGA'),
+          srid: `${CANARY.logToken}-SRC`,
+          hoursAgo: 3,
+        }),
+      ]);
+      const pdfBytes = pdf(`log canary ${RUN}`);
+      try {
+        const send = (method: 'GET' | 'POST', url: string, user: string, payload?: unknown) =>
+          logged.inject({
+            method,
+            url,
+            remoteAddress: freshAddress(),
+            headers: {
+              authorization: `Bearer test.${user}.aal2`,
+              ...(method === 'POST' ? { 'idempotency-key': `it-${randomUUID()}` } : {}),
+            },
+            ...(payload === undefined ? {} : { payload: payload as object }),
+          });
+        await send('GET', `/v1/lender/loans?lenderId=${ids.lenderA}&status=active`, ids.aViewer);
+        await send('GET', `/v1/lender/loans/${loan.A1 ?? ''}`, ids.bOp);
+        // A file with an account-number-shaped reference, a file the database will take, and the commit of that one.
+        await send(
+          'POST',
+          '/v1/lender/imports',
+          ids.aOp3,
+          importBody(ids.lenderA, {
+            content: JSON.stringify([
+              loanRecord({
+                loanRef: `LS-LOG0-${RUN}`,
+                appRef: CANARY.account,
+                srid: `${CANARY.logToken}-BAD`,
+                hoursAgo: 3,
+                extra: { sanctioned_amount: CANARY.amountText },
+              }),
+            ]),
+          }),
+        );
+        const staged = await send(
+          'POST',
+          '/v1/lender/imports',
+          ids.aOp3,
+          importBody(ids.lenderA, { content: logContent }),
+        );
+        const batchId = (staged.json() as { batch?: { id?: string } }).batch?.id ?? '';
+        await send('POST', `/v1/lender/imports/${batchId}/commit`, ids.aOp4, {});
+        await send(
+          'POST',
+          `/v1/lender/loans/${loan.A1 ?? ''}/documents`,
+          ids.aDocs,
+          uploadBody(`${CANARY.logToken}-DOC`, { contentBase64: pdfBytes.toString('base64') }),
+        );
+        await send(
+          'POST',
+          `/v1/lender/loans/${loan.A1 ?? ''}/documents`,
+          ids.bOp,
+          uploadBody(`${CANARY.logToken}-DENIED`),
+        );
+        await send('POST', `/v1/lender/loans/${loan.A1 ?? ''}/foreclosure-quotes`, ids.aDocs, {
+          lenderQuoteRef: `${CANARY.logToken}-Q`,
+          asOf: iso(1),
+          validUntil: iso(-1),
+          principalMinor: 1,
+          interestMinor: 1,
+          chargesMinor: 1,
+          prepaymentChargeMinor: 1,
+          totalMinor: 4,
+        });
+        await send('POST', `/v1/lender/sync/conflicts/${randomUUID()}/resolve`, ids.aSync, {
+          confirmedVersion: 'existing',
+          note: `Reviewed by ${CANARY.email} last week.`,
+          evidence: { reviewer: CANARY.email },
+        });
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      } finally {
+        await logged.close();
+        vi.restoreAllMocks();
+      }
+      const log = captured.join('');
+      expect(log).toContain('request completed');
+      for (const value of [
+        CANARY.account,
+        CANARY.phoneB1,
+        CANARY.phoneB2,
+        CANARY.logToken,
+        CANARY.amountText,
+        CANARY.secretRef,
+        CANARY.email,
+        borrower.b1,
+        borrower.b2,
+        sha256(logContent),
+        sha256(pdfBytes),
+        pdfBytes.toString('base64').slice(0, 24),
+        `LS-LOG-${RUN}`,
+        appRef('LOGA'),
+        'servicing/',
+        'contentBase64',
+      ])
+        expect([value, log.includes(value)]).toEqual([value, false]);
+      // The path is logged; the query string and the body are not.
+      expect(log).not.toContain('lenderId=');
+      expect(log).not.toContain('"content"');
+    });
+  });
+
+  // ================================================================================================================
+  // The declared contract
+  // ================================================================================================================
+  describe('contract', () => {
+    it('declares every route in the OpenAPI document', async () => {
+      const res = await app.inject({ method: 'GET', url: '/v1/openapi.json' });
+      expect(res.statusCode).toBe(200);
+      const paths = Object.keys(res.json<{ paths: Record<string, unknown> }>().paths);
+      for (const path of [
+        '/v1/lender/loans',
+        '/v1/lender/loans/{id}',
+        '/v1/lender/sync/status',
+        '/v1/lender/lms-connection',
+        '/v1/lender/sync/anomalies',
+        '/v1/lender/sync/conflicts',
+        '/v1/lender/sync/conflicts/{id}/acknowledge',
+        '/v1/lender/sync/conflicts/{id}/resolve',
+        '/v1/lender/imports',
+        '/v1/lender/imports/{id}',
+        '/v1/lender/imports/{id}/commit',
+        '/v1/lender/imports/{id}/reject',
+        '/v1/lender/loans/{id}/documents',
+        '/v1/lender/loans/{id}/documents/{docId}/content',
+        '/v1/lender/document-requests',
+        '/v1/lender/document-requests/{id}/decline',
+        '/v1/lender/loans/{id}/foreclosure-quotes',
+        '/v1/lender/closures',
+        '/v1/lender/loans/{id}/security-release-tasks',
+        '/v1/lender/security-release/{taskId}/confirm',
+        '/v1/lender/security-release/{taskId}/delay-reason',
+      ])
+        expect(paths).toContain(path);
+    });
+
+    it('mirrors the database vocabularies: a constant that drifts from a check constraint or an enum fails here', async () => {
+      const checkValues = async (table: string, column: string): Promise<string[]> => {
+        const rows = await q<{ def: string }>(
+          `select pg_get_constraintdef(c.oid) as def from pg_constraint c
+             join pg_class t on t.oid = c.conrelid join pg_namespace n on n.oid = t.relnamespace
+            where n.nspname = 'servicing' and t.relname = $1 and c.conname = $2`,
+          [table, `${table}_${column}_check`],
+        );
+        const def = rows[0]?.def ?? '';
+        expect([table, column, def.length > 0]).toEqual([table, column, true]);
+        return [...def.matchAll(/'([a-z_]+)'::text/g)].map((m) => m[1] ?? '').sort();
+      };
+      const same = (actual: string[], expected: readonly string[]) =>
+        expect([...actual].sort()).toEqual([...expected].sort());
+      same(
+        await scalar<string[]>(`select enum_range(null::servicing.loan_status)::text[] as v`),
+        LS_LOAN_STATUSES,
+      );
+      same(await checkValues('import_batches', 'status'), LS_BATCH_STATUSES);
+      same(await checkValues('sync_anomalies', 'kind'), LS_ANOMALY_KINDS);
+      same(await checkValues('sync_conflicts', 'conflict_reason'), LS_CONFLICT_REASONS);
+      same(await checkValues('document_requests', 'kind'), LS_DOCUMENT_KINDS);
+      same(await checkValues('security_release_tasks', 'collateral_type'), LS_COLLATERAL_TYPES);
+      for (const key of LS_CAPABILITY_KEYS) {
+        expect(
+          await scalar<boolean>(
+            `select private.servicing_capabilities_ok(jsonb_build_object($1::text, true)) as v`,
+            [key],
+          ),
+        ).toBe(true);
+      }
+      expect(
+        await scalar<boolean>(
+          `select private.servicing_capabilities_ok('{"telepathy": true}'::jsonb) as v`,
+        ),
+      ).toBe(false);
+    });
+  });
 });
