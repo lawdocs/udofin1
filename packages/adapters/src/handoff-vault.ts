@@ -42,7 +42,16 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const NONCE_BYTES = 12;
 const TAG_BYTES = 16;
 /** A link is a URL the provider's flow understands: the hosted page (https) or a UPI intent (upi). No whitespace or control characters. */
-const LINK = /^(https:\/\/|upi:\/\/)[^\s\u0000-\u001f\u007f]{4,4000}$/;
+const LINK = /^(https:\/\/|upi:\/\/)\S{4,4000}$/;
+/** `\S` excludes whitespace; this rejects the remaining ASCII control characters (kept out of the regular expression on purpose). */
+function hasControlCharacter(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+const isPlainLink = (value: string): boolean => LINK.test(value) && !hasControlCharacter(value);
 /** The same bounds as the database check on `payments.handoff_links.ciphertext`. */
 export const HANDOFF_MIN_CIPHERTEXT_BYTES = 29;
 export const HANDOFF_MAX_CIPHERTEXT_BYTES = 8192;
@@ -105,7 +114,7 @@ export function sealHandoffLink(
   ctx: HandoffContext,
   link: string,
 ): { keyVersion: string; ciphertext: Buffer } {
-  if (!LINK.test(link)) throw new HandoffVaultError('link_invalid');
+  if (!isPlainLink(link)) throw new HandoffVaultError('link_invalid');
   const key = keyring.keys.get(keyring.activeVersion);
   if (!key) throw new HandoffVaultError('config');
   const nonce = randomBytes(NONCE_BYTES);
@@ -147,7 +156,7 @@ export function openHandoffLink(
     decipher.setAuthTag(tag);
     const link = Buffer.concat([decipher.update(body), decipher.final()]).toString('utf8');
     // A stored value that no longer looks like a link is never handed on.
-    if (!LINK.test(link)) throw new HandoffVaultError('cannot_open');
+    if (!isPlainLink(link)) throw new HandoffVaultError('cannot_open');
     return link;
   } catch (error) {
     if (error instanceof HandoffVaultError) throw error;

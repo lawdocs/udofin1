@@ -103,26 +103,6 @@ create function pg_temp.integrity(p_borrower text, p_level text) returns void la
   insert into identity.device_attestations (borrower_id, level, provider, verified_at, expires_at) values (p_borrower::uuid, p_level, 'sample_attest', clock_timestamp(), clock_timestamp() + interval '1 hour')
 $fn$;
 -- Helpers specific to this file ------------------------------------------------------------------------------------------------
--- Switch a lender feature on or off the way a fixture must (triggers skipped); the caller's role is reset to the owner.
-create function pg_temp.feature(p_lender uuid, p_feature text, p_on boolean) returns void language plpgsql as $fn$
-begin
-  execute 'reset role';
-  perform set_config('request.jwt.claims', '', true);
-  perform set_config('session_replication_role', 'replica', true);
-  update servicing.lender_features set enabled = p_on where lender_org_id = p_lender and feature = p_feature;
-  perform set_config('session_replication_role', 'origin', true);
-end
-$fn$;
--- Change one row column-wise with triggers skipped (fixtures only), as the owner.
-create function pg_temp.force(p_sql text) returns void language plpgsql as $fn$
-begin
-  execute 'reset role';
-  perform set_config('request.jwt.claims', '', true);
-  perform set_config('session_replication_role', 'replica', true);
-  execute p_sql;
-  perform set_config('session_replication_role', 'origin', true);
-end
-$fn$;
 create function pg_temp.opts(p_fn text, p_loan uuid) returns jsonb language plpgsql as $fn$
 declare v jsonb;
 begin
@@ -340,12 +320,21 @@ select pg_temp.as_owner();
 select is((select (count(*), min(key_version), min(octet_length(ciphertext)), min(read_count))::text from payments.handoff_links), '(1,k2,48,0)', 'still one row, with the new key version and the new blob');
 select is(pg_temp.err($$update payments.handoff_links set ciphertext = pg_temp.bytes(40)$$), 'P0001|', 'a stored link can only be read, never changed');
 select is((select count(*) from audit.events where action = 'payments.handoff.stored' and metadata::text !~ 'abab|ciphertext|link'), 2::bigint, 'the audit events of both stores name the key version and carry no ciphertext');
-select pg_temp.feature(pg_temp.lx(), 'payments', false);
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+update servicing.lender_features set enabled = false where lender_org_id = pg_temp.lx() and feature = 'payments';
+set local session_replication_role = origin;
 select pg_temp.as_user(pg_temp.u(1));
 select is(pg_temp.err(format($$select * from payments.take_handoff_link('payment_intent', %L)$$, pg_temp.got('i2'))), 'P0002|link_unavailable', 'a lender whose payments switch is off hands out no link');
 select is(pg_temp.err(format($$select * from payments.my_payment_detail(%L)$$, pg_temp.got('i2'))), 'P0002|', 'and shows no payment');
-select pg_temp.feature(pg_temp.lx(), 'payments', true);
-select pg_temp.force(format($$update payments.handoff_links set created_at = now() - interval '2 hours', expires_at = now() - interval '1 minute'$$));
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+update servicing.lender_features set enabled = true where lender_org_id = pg_temp.lx() and feature = 'payments';
+set local session_replication_role = origin;
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+update payments.handoff_links set created_at = now() - interval '2 hours', expires_at = now() - interval '1 minute';
+set local session_replication_role = origin;
 select pg_temp.as_user(pg_temp.u(1));
 select is(pg_temp.err(format($$select * from payments.take_handoff_link('payment_intent', %L)$$, pg_temp.got('i2'))), 'P0002|link_unavailable', 'an expired link is not handed out');
 select is((select link_available from payments.my_payment_detail(pg_temp.got('i2')::uuid)), false, 'and the payment detail says so');
@@ -354,7 +343,10 @@ select is(pg_temp.err($$select payments.purge_handoff_links()$$), '42501|', 'a b
 select pg_temp.as_system();
 select is(payments.purge_handoff_links(), 1, 'the purge deletes the expired link');
 select is(payments.store_handoff_link('payment_intent', pg_temp.got('i2')::uuid, 'k3', pg_temp.bytes(40), now() + interval '1 hour'), 'stored', 'a fresh link is stored');
-select pg_temp.force(format($$update payments.payment_intents set status = 'failed' where id = %L$$, pg_temp.got('i2')));
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+update payments.payment_intents set status = 'failed' where id = pg_temp.got('i2')::uuid;
+set local session_replication_role = origin;
 select pg_temp.as_user(pg_temp.u(1));
 select is(pg_temp.err(format($$select * from payments.take_handoff_link('payment_intent', %L)$$, pg_temp.got('i2'))), 'P0002|link_unavailable', 'once the payment is no longer pending its link is not handed out');
 select pg_temp.as_system();
@@ -379,10 +371,16 @@ select pg_temp.as_user(pg_temp.u(3));
 select is(pg_temp.err(format($$select pg_temp.opts('payments.my_mandate_options', %L)$$, pg_temp.lid(1))), 'P0002|', 'a lender user is not a borrower: not found');
 select pg_temp.as_anon();
 select is(pg_temp.err(format($$select pg_temp.opts('payments.my_mandate_options', %L)$$, pg_temp.lid(1))), '42501|', 'anon is refused');
-select pg_temp.feature(pg_temp.lz(), 'mandates', false);
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+update servicing.lender_features set enabled = false where lender_org_id = pg_temp.lz() and feature = 'mandates';
+set local session_replication_role = origin;
 select pg_temp.as_user(pg_temp.u(1));
 select is(pg_temp.err(format($$select pg_temp.opts('payments.my_mandate_options', %L)$$, pg_temp.lid(5))), 'P0002|', 'when the lender''s mandates switch is off the loan reports nothing');
-select pg_temp.feature(pg_temp.lz(), 'mandates', true);
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+update servicing.lender_features set enabled = true where lender_org_id = pg_temp.lz() and feature = 'mandates';
+set local session_replication_role = origin;
 
 -- ============================================================================================================================
 -- 6. A mandate: draft, hand-off, its link
@@ -406,7 +404,10 @@ select pg_temp.as_user(pg_temp.u(2));
 select is(pg_temp.err(format($$select * from payments.take_handoff_link('mandate', %L)$$, pg_temp.mid(1))), 'P0002|link_unavailable', 'another borrower gets nothing');
 select pg_temp.as_system();
 select is(payments.purge_handoff_links(), 0, 'the purge keeps the link of a mandate that is still waiting for the borrower');
-select pg_temp.force(format($$update payments.mandates set status = 'active' where id = %L$$, pg_temp.mid(1)));
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+update payments.mandates set status = 'active' where id = pg_temp.mid(1);
+set local session_replication_role = origin;
 select pg_temp.as_user(pg_temp.u(1));
 select is(pg_temp.err(format($$select * from payments.take_handoff_link('mandate', %L)$$, pg_temp.mid(1))), 'P0002|link_unavailable', 'once the mandate is active its link is not handed out');
 select pg_temp.as_system();
@@ -437,7 +438,10 @@ insert into servicing.sync_conflicts (lender_org_id, loan_account_id, record_typ
 values (pg_temp.lx(), pg_temp.lid(1), 'schedule', 'same_record_different_content', 'SRC-SCHED-2', pg_temp.sha('c3'), now() - interval '2 hours', pg_temp.sha('c4'), now() - interval '1 hour', '{}'::jsonb, 'file_import');
 select pg_temp.as_user(pg_temp.u(1));
 select is((select count(*) from servicing.my_loan_schedule(pg_temp.lid(1))), 0::bigint, 'an open conflict about the SCHEDULE withholds it: the borrower sees nothing rather than a disputed schedule');
-select pg_temp.force(format($$delete from servicing.sync_conflicts where loan_account_id = %L$$, pg_temp.lid(1)));
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+delete from servicing.sync_conflicts where loan_account_id = pg_temp.lid(1);
+set local session_replication_role = origin;
 select pg_temp.as_owner();
 with s as (insert into servicing.schedule_snapshots (lender_org_id, loan_account_id, version, reported_as_of, content_sha256, source, source_record_id)
            values (pg_temp.lx(), pg_temp.lid(1), 3, clock_timestamp(), pg_temp.sha('sched-3'), 'mock_lms', 'SRC-SCHED-3') returning id)
@@ -449,10 +453,16 @@ select is((select min(schedule_version) from servicing.my_loan_schedule(pg_temp.
 select set_config('udofin.allow_mock_providers', 'on', true);
 select is(pg_temp.err(format($$select * from servicing.my_loan_schedule(%L)$$, pg_temp.lid(2))), 'P0002|', 'another borrower''s loan is not found');
 select is(pg_temp.err(format($$select * from servicing.my_loan_schedule(%L)$$, gen_random_uuid())), 'P0002|', 'nor is an unknown one');
-select pg_temp.feature(pg_temp.lz(), 'servicing_sync', false);
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+update servicing.lender_features set enabled = false where lender_org_id = pg_temp.lz() and feature = 'servicing_sync';
+set local session_replication_role = origin;
 select pg_temp.as_user(pg_temp.u(1));
 select is(pg_temp.err(format($$select * from servicing.my_loan_schedule(%L)$$, pg_temp.lid(5))), 'P0002|', 'when the lender''s servicing_sync switch is off the schedule is not available');
-select pg_temp.feature(pg_temp.lz(), 'servicing_sync', true);
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+update servicing.lender_features set enabled = true where lender_org_id = pg_temp.lz() and feature = 'servicing_sync';
+set local session_replication_role = origin;
 select pg_temp.as_user(pg_temp.u(3));
 select is(pg_temp.err(format($$select * from servicing.my_loan_schedule(%L)$$, pg_temp.lid(1))), 'P0002|', 'a lender user is not a borrower: not found');
 select pg_temp.as_anon();
@@ -473,11 +483,16 @@ select pg_temp.as_user(pg_temp.u(1));
 select pg_temp.keep('i3', payments.request_payment(pg_temp.lid(1), 'installment', 475000, 'f23-pay-key-000000003')::text);
 select pg_temp.as_system();
 select is(payments.record_order_created(pg_temp.got('i3')::uuid, 'SAMPLE-ORDER-I3', now() + interval '1 hour'), 'pending', 'fixture: a third payment is pending');
-select pg_temp.force(format($$insert into payments.provider_payments (lender_org_id, config_id, provider, provider_payment_ref, order_ref, intent_id, loan_account_id, status, rank, amount_minor, currency, captured_at, first_event_id, last_event_id)
-  values (%L, %L, 'mock_gateway', 'SAMPLE-PAY-I3', 'SAMPLE-ORDER-I3', %L, %L, 'captured', 30, 475000, 'INR', now(), gen_random_uuid(), gen_random_uuid())$$,
-  pg_temp.lx(), pg_temp.cfg(pg_temp.lx()), pg_temp.got('i3'), pg_temp.lid(1)));
-select pg_temp.force(format($$insert into payments.payment_adjustments (lender_org_id, provider_payment_id, kind, object_ref, amount_minor, source_event_id, occurred_at)
-  select %L, id, 'refund', 'SAMPLE-REFUND-1', 100000, gen_random_uuid(), now() + interval '1 minute' from payments.provider_payments where provider_payment_ref = 'SAMPLE-PAY-I3'$$, pg_temp.lx()));
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+insert into payments.provider_payments (lender_org_id, config_id, provider, provider_payment_ref, order_ref, intent_id, loan_account_id, status, rank, amount_minor, currency, captured_at, first_event_id, last_event_id)
+  values (pg_temp.lx(), pg_temp.cfg(pg_temp.lx()), 'mock_gateway', 'SAMPLE-PAY-I3', 'SAMPLE-ORDER-I3', pg_temp.got('i3')::uuid, pg_temp.lid(1), 'captured', 30, 475000, 'INR', now(), gen_random_uuid(), gen_random_uuid());
+set local session_replication_role = origin;
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+insert into payments.payment_adjustments (lender_org_id, provider_payment_id, kind, object_ref, amount_minor, source_event_id, occurred_at)
+  select pg_temp.lx(), id, 'refund', 'SAMPLE-REFUND-1', 100000, gen_random_uuid(), now() + interval '1 minute' from payments.provider_payments where provider_payment_ref = 'SAMPLE-PAY-I3';
+set local session_replication_role = origin;
 select pg_temp.as_user(pg_temp.u(1));
 select is((select array_agg(entry_kind) from servicing.my_loan_activity(pg_temp.lid(1))),
   array['payment_adjustment', 'payment_attempt', 'payment_attempt', 'payment_attempt', 'lender_receipt', 'lender_reversal', 'lender_receipt', 'lender_receipt'],
@@ -502,20 +517,44 @@ select is(pg_temp.err(format($$select * from servicing.my_loan_activity(%L, null
 select set_config('udofin.allow_mock_providers', 'off', true);
 select is((select count(*) from servicing.my_loan_activity(pg_temp.lid(1)) where entry_kind = 'lender_receipt'), 2::bigint, 'where mock providers are not allowed a mock-source receipt is hidden');
 select set_config('udofin.allow_mock_providers', 'on', true);
-select pg_temp.feature(pg_temp.lx(), 'payments', false);
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+update servicing.lender_features set enabled = false where lender_org_id = pg_temp.lx() and feature = 'payments';
+set local session_replication_role = origin;
 select pg_temp.as_user(pg_temp.u(1));
 select is((select array_agg(distinct entry_kind) from servicing.my_loan_activity(pg_temp.lid(1))), array['lender_receipt', 'lender_reversal'], 'with the payments switch off only the lender''s receipts remain');
-select pg_temp.feature(pg_temp.lx(), 'payments', true);
-select pg_temp.feature(pg_temp.lx(), 'servicing_sync', false);
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+update servicing.lender_features set enabled = true where lender_org_id = pg_temp.lx() and feature = 'payments';
+set local session_replication_role = origin;
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+update servicing.lender_features set enabled = false where lender_org_id = pg_temp.lx() and feature = 'servicing_sync';
+set local session_replication_role = origin;
 select pg_temp.as_user(pg_temp.u(1));
 select is((select array_agg(distinct entry_kind) from servicing.my_loan_activity(pg_temp.lid(1))), array['payment_adjustment', 'payment_attempt'], 'and with servicing_sync off only the payments remain');
-select pg_temp.feature(pg_temp.lz(), 'payments', false);
-select pg_temp.feature(pg_temp.lz(), 'servicing_sync', false);
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+update servicing.lender_features set enabled = false where lender_org_id = pg_temp.lz() and feature = 'payments';
+set local session_replication_role = origin;
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+update servicing.lender_features set enabled = false where lender_org_id = pg_temp.lz() and feature = 'servicing_sync';
+set local session_replication_role = origin;
 select pg_temp.as_user(pg_temp.u(1));
 select is(pg_temp.err(format($$select * from servicing.my_loan_activity(%L)$$, pg_temp.lid(5))), 'P0002|', 'with both switches off the loan reports nothing');
-select pg_temp.feature(pg_temp.lz(), 'payments', true);
-select pg_temp.feature(pg_temp.lz(), 'servicing_sync', true);
-select pg_temp.feature(pg_temp.lx(), 'servicing_sync', true);
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+update servicing.lender_features set enabled = true where lender_org_id = pg_temp.lz() and feature = 'payments';
+set local session_replication_role = origin;
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+update servicing.lender_features set enabled = true where lender_org_id = pg_temp.lz() and feature = 'servicing_sync';
+set local session_replication_role = origin;
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+update servicing.lender_features set enabled = true where lender_org_id = pg_temp.lx() and feature = 'servicing_sync';
+set local session_replication_role = origin;
 select pg_temp.as_user(pg_temp.u(2));
 select is((select count(*) from servicing.my_loan_activity(pg_temp.lid(2))), 0::bigint, 'another borrower with no activity sees an empty list on their own loan');
 select is(pg_temp.err(format($$select * from servicing.my_loan_activity(%L)$$, pg_temp.lid(1))), 'P0002|', 'and cannot read borrower 1''s loan');
@@ -543,9 +582,11 @@ select is((select (o ->> 'penal_charge', o ->> 'penal_charge_text_missing', json
            from (select pg_temp.opts('payments.my_payment_options', pg_temp.lid(1)) o) x), '(,false,1,t,pending)', 'nothing is overdue so no penal-charge text is needed; the open payment is listed');
 select is((select (o ->> 'penal_charge_text_missing', o ->> 'penal_charge', o #>> '{purposes,1,purpose}', o #>> '{purposes,1,amount_minor}')::text from (select pg_temp.opts('payments.my_payment_options', pg_temp.lid(3)) o) x),
   '(true,,overdue,600000)', 'loan 3 is overdue: the reported 6,000.00 is offered and, with no approved penal-charge text, the answer says it is missing (the app shows nothing in its place)');
-select pg_temp.force(format($$insert into servicing.penal_charge_texts (lender_org_id, version, status, charge_kind, flat_amount_minor, separate_from_interest, not_compounded, reason, sentence_en, drafted_by, approved_by, approved_at)
-  values (%L, 1, 'approved', 'flat', 50000, true, true, 'Charge as per the loan agreement', 'A separate penal charge applies to the overdue amount as per your loan agreement.', %L, %L, now())$$,
-  pg_temp.lx(), pg_temp.u(3), pg_temp.u(4)));
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+insert into servicing.penal_charge_texts (lender_org_id, version, status, charge_kind, flat_amount_minor, separate_from_interest, not_compounded, reason, sentence_en, drafted_by, approved_by, approved_at)
+  values (pg_temp.lx(), 1, 'approved', 'flat', 50000, true, true, 'Charge as per the loan agreement', 'A separate penal charge applies to the overdue amount as per your loan agreement.', pg_temp.u(3), pg_temp.u(4), now());
+set local session_replication_role = origin;
 select pg_temp.as_user(pg_temp.u(1));
 select is((select (o ->> 'penal_charge_text_missing', o #>> '{penal_charge,version}', o #>> '{penal_charge,sentence_en}', o #>> '{penal_charge,sentence_hi}')::text from (select pg_temp.opts('payments.my_payment_options', pg_temp.lid(3)) o) x),
   '(false,1,"A separate penal charge applies to the overdue amount as per your loan agreement.",)', 'with the lender''s approved sentence the app shows exactly that sentence (no Hindi text was approved, so none is offered)');
@@ -554,25 +595,40 @@ select is((select (o #>> '{purposes,3,purpose}', o #>> '{purposes,3,amount_minor
 select is((select (o ->> 'unavailable_key', o ->> 'destination_masked_ref', jsonb_array_length(o -> 'purposes'))::text from (select pg_temp.opts('payments.my_payment_options', pg_temp.lid(4)) o) x), '(,XXXXXX2222,1)',
   'lender Y has its own destination account and, with no policy, only the exact installment (no partial amount)');
 select is((select o #>> '{purposes,0,min_minor}' from (select pg_temp.opts('payments.my_payment_options', pg_temp.lid(4)) o) x), '475000', 'whose minimum equals its maximum');
-select pg_temp.force(format($$update servicing.balance_snapshots set reported_as_of = now() - interval '3 days' where loan_account_id = %L$$, pg_temp.lid(2)));
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+update servicing.balance_snapshots set reported_as_of = now() - interval '3 days' where loan_account_id = pg_temp.lid(2);
+set local session_replication_role = origin;
 select pg_temp.as_user(pg_temp.u(2));
 select is((select (o ->> 'available', o ->> 'figures_available', o ->> 'stale', jsonb_array_length(o -> 'purposes'))::text from (select pg_temp.opts('payments.my_payment_options', pg_temp.lid(2)) o) x), '(true,true,true,0)',
   'figures older than the staleness threshold are flagged and no amount-dependent purpose is offered');
-select pg_temp.force(format($$update servicing.loan_accounts set status = 'closed' where id = %L$$, pg_temp.lid(3)));
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+update servicing.loan_accounts set status = 'closed' where id = pg_temp.lid(3);
+set local session_replication_role = origin;
 select pg_temp.as_user(pg_temp.u(1));
 select is((select (o ->> 'available', o ->> 'unavailable_key', o ->> 'destination_masked_ref', jsonb_array_length(o -> 'purposes'))::text from (select pg_temp.opts('payments.my_payment_options', pg_temp.lid(3)) o) x),
   '(false,loan_not_active,,0)', 'a closed loan offers nothing');
-select pg_temp.force(format($$update servicing.loan_accounts set status = 'active' where id = %L$$, pg_temp.lid(3)));
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+update servicing.loan_accounts set status = 'active' where id = pg_temp.lid(3);
+set local session_replication_role = origin;
 select pg_temp.as_user(pg_temp.u(2));
 select is(pg_temp.err(format($$select pg_temp.opts('payments.my_payment_options', %L)$$, pg_temp.lid(1))), 'P0002|', 'another borrower''s loan is not found');
 select pg_temp.as_user(pg_temp.u(3));
 select is(pg_temp.err(format($$select pg_temp.opts('payments.my_payment_options', %L)$$, pg_temp.lid(1))), 'P0002|', 'a lender user is not a borrower: not found');
 select pg_temp.as_anon();
 select is(pg_temp.err(format($$select pg_temp.opts('payments.my_payment_options', %L)$$, pg_temp.lid(1))), '42501|', 'anon is refused');
-select pg_temp.feature(pg_temp.lx(), 'payments', false);
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+update servicing.lender_features set enabled = false where lender_org_id = pg_temp.lx() and feature = 'payments';
+set local session_replication_role = origin;
 select pg_temp.as_user(pg_temp.u(1));
 select is(pg_temp.err(format($$select pg_temp.opts('payments.my_payment_options', %L)$$, pg_temp.lid(1))), 'P0002|', 'with the lender''s payments switch off the loan offers nothing');
-select pg_temp.feature(pg_temp.lx(), 'payments', true);
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+update servicing.lender_features set enabled = true where lender_org_id = pg_temp.lx() and feature = 'payments';
+set local session_replication_role = origin;
 select pg_temp.as_user(pg_temp.u(1));
 select is((select count(*) from (select jsonb_object_keys(pg_temp.opts('payments.my_payment_options', pg_temp.lid(1))) k) x where k ~* 'fingerprint|account_number|ifsc|secret|token|link'), 0::bigint,
   'the answer has no key that could carry an account number, a fingerprint, a secret or a link');
@@ -580,15 +636,20 @@ select is((select count(*) from (select jsonb_object_keys(pg_temp.opts('payments
 -- ============================================================================================================================
 -- 10. Debits of a mandate
 -- ============================================================================================================================
-select pg_temp.force(format($$insert into payments.mandate_debits (lender_org_id, mandate_id, loan_account_id, planned, schedule_snapshot_id, installment_seq, scheduled_on, amount_minor, status, provider_debit_ref, return_code, return_class)
-  select %1$L, %2$L, %3$L, v.planned, case when v.planned then (select id from servicing.schedule_snapshots where loan_account_id = %3$L and version = 1) end, v.seq, v.on_date, 475000, v.status, v.ref, v.code, v.class
-  from (values (true, 1, %4$L::date + 3, 'notified', null, null, null), (true, 2, %4$L::date + 33, 'scheduled', null, null, null),
-               (false, null::integer, %4$L::date - 30, 'returned', 'SAMPLE-DEBIT-1', 'R01', 'insufficient_funds'), (false, null::integer, %4$L::date - 60, 'settled', 'SAMPLE-DEBIT-0', null, null)) v (planned, seq, on_date, status, ref, code, class)$$,
-  pg_temp.lx(), pg_temp.mid(1), pg_temp.lid(1), pg_temp.d()));
-select pg_temp.force(format($$insert into payments.pre_debit_notices (lender_org_id, debit_id, mandate_id, borrower_id, notice_due_at, status, delivery_state, sent_at)
-  select %1$L, d.id, d.mandate_id, %2$L, now() + interval '1 day', case when d.installment_seq = 1 then 'sent' else 'planned' end,
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+insert into payments.mandate_debits (lender_org_id, mandate_id, loan_account_id, planned, schedule_snapshot_id, installment_seq, scheduled_on, amount_minor, status, provider_debit_ref, return_code, return_class)
+  select pg_temp.lx(), pg_temp.mid(1), pg_temp.lid(1), v.planned, case when v.planned then (select id from servicing.schedule_snapshots where loan_account_id = pg_temp.lid(1) and version = 1) end, v.seq, v.on_date, 475000, v.status, v.ref, v.code, v.class
+  from (values (true, 1, pg_temp.d()::date + 3, 'notified', null, null, null), (true, 2, pg_temp.d()::date + 33, 'scheduled', null, null, null),
+               (false, null::integer, pg_temp.d()::date - 30, 'returned', 'SAMPLE-DEBIT-1', 'R01', 'insufficient_funds'), (false, null::integer, pg_temp.d()::date - 60, 'settled', 'SAMPLE-DEBIT-0', null, null)) v (planned, seq, on_date, status, ref, code, class);
+set local session_replication_role = origin;
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+insert into payments.pre_debit_notices (lender_org_id, debit_id, mandate_id, borrower_id, notice_due_at, status, delivery_state, sent_at)
+  select pg_temp.lx(), d.id, d.mandate_id, pg_temp.got('b1')::uuid, now() + interval '1 day', case when d.installment_seq = 1 then 'sent' else 'planned' end,
          case when d.installment_seq = 1 then 'accepted' end, case when d.installment_seq = 1 then now() - interval '1 hour' end
-  from payments.mandate_debits d where d.planned and d.mandate_id = %3$L$$, pg_temp.lx(), pg_temp.got('b1'), pg_temp.mid(1)));
+  from payments.mandate_debits d where d.planned and d.mandate_id = pg_temp.mid(1);
+set local session_replication_role = origin;
 select pg_temp.as_user(pg_temp.u(1));
 select is((select array_agg(status) from payments.my_mandate_debits(pg_temp.mid(1))), array['scheduled', 'notified', 'returned', 'settled'], 'the mandate''s debits, newest first, with their status');
 select is((select array_agg(coalesce(notice_status, '-')) from payments.my_mandate_debits(pg_temp.mid(1))), array['planned', 'sent', '-', '-'], 'and the state of each pre-debit notice');
@@ -602,15 +663,24 @@ select pg_temp.as_anon();
 select is(pg_temp.err(format($$select * from payments.my_mandate_debits(%L)$$, pg_temp.mid(1))), '42501|', 'anon is refused');
 select pg_temp.as_user(pg_temp.u(1));
 select is(pg_temp.err(format($$select * from payments.my_mandate_debits(%L)$$, gen_random_uuid())), 'P0002|', 'an unknown mandate is not found');
-select pg_temp.feature(pg_temp.lx(), 'mandates', false);
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+update servicing.lender_features set enabled = false where lender_org_id = pg_temp.lx() and feature = 'mandates';
+set local session_replication_role = origin;
 select pg_temp.as_user(pg_temp.u(1));
 select is(pg_temp.err(format($$select * from payments.my_mandate_debits(%L)$$, pg_temp.mid(1))), 'P0002|', 'with the lender''s mandates switch off nothing is shown');
-select pg_temp.feature(pg_temp.lx(), 'mandates', true);
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+update servicing.lender_features set enabled = true where lender_org_id = pg_temp.lx() and feature = 'mandates';
+set local session_replication_role = origin;
 
 -- ============================================================================================================================
 -- 11. A configuration that is no longer valid
 -- ============================================================================================================================
-select pg_temp.force($$update tenancy.lender_settlement_accounts set status = 'unverified' where id = 'fce10000-0000-4000-8000-000000000003'$$);
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+update tenancy.lender_settlement_accounts set status = 'unverified' where id = 'fce10000-0000-4000-8000-000000000003';
+set local session_replication_role = origin;
 select pg_temp.as_user(pg_temp.u(1));
 select is((select (o ->> 'available', o ->> 'unavailable_key', o ->> 'destination_masked_ref')::text from (select pg_temp.opts('payments.my_payment_options', pg_temp.lid(5)) o) x), '(false,collection_target_invalid,)',
   'an ACTIVE configuration whose settlement account is no longer verified is not a valid collection target: nothing is offered');
