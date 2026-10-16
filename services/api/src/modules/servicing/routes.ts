@@ -626,8 +626,10 @@ export function servicingRoutes(deps: { documents?: DocumentStore }): RouteDefin
         const meta = DbOpenedDocument.parse(first(opened.rows).r);
         // A document of another loan (even the caller's own) is not found on this path. Throwing rolls the access record back.
         if (meta.loan_account_id !== params.id) throw notFound();
+        // Fail closed, and leave no access record for a read that did not deliver (throwing rolls the record back). Bytes that
+        // are gone answer 404 like every other document route; bytes that were altered are a server fault (500, logged, no detail).
         const object = await store.get(meta.storage_key);
-        if (!object) throw new Error('stored document is missing');
+        if (!object) throw notFound();
         const actual = createHash('sha256').update(object.bytes).digest('hex');
         if (actual !== meta.sha256 || object.bytes.length !== meta.size_bytes)
           throw new Error('stored document does not match its recorded checksum');
