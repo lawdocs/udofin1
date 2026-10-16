@@ -1,3 +1,6 @@
+import { enPayments } from './en.payments';
+import { enServicing } from './en.servicing';
+
 /**
  * English is the source language. Every key must exist in hi.ts (the type and a test enforce it).
  * Strings here are app chrome; consent wording and the loan-purpose labels come from the server so
@@ -536,6 +539,10 @@ export const en = {
   'docerr.signingUnavailable': 'Electronic signing is not available yet.',
   'docerr.wordingNotApproved': 'This wording has not been approved yet.',
   'docerr.sectionsNotShown': 'Open every section first.',
+
+  // Phase 08a: loans, reminders, payments and mandates live in their own files so two screens builders never edit the same lines.
+  ...enServicing,
+  ...enPayments,
 } as const;
 
 export type MessageKey = keyof typeof en;

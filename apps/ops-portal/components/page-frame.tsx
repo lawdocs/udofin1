@@ -24,6 +24,18 @@ function navFor(me: MeResponse, current: string): NavItem[] {
     items.push({ href: '/transactions', label: 'Transactions' });
   }
   if (permissions.has('product.read')) items.push({ href: '/products', label: 'Products' });
+  // Phase 08a: platform-side payment setup. The links are conveniences; the API and the database authorise every call.
+  if (permissions.has('platform.payments.providers.manage'))
+    items.push({ href: '/providers', label: 'Payment providers' });
+  if (
+    permissions.has('platform.accounts.registry.manage') ||
+    permissions.has('platform.accounts.registry.verify')
+  )
+    items.push({ href: '/accounts', label: 'Account registry' });
+  if (permissions.has('platform.features.manage'))
+    items.push({ href: '/features', label: 'Feature switches' });
+  if (permissions.has('platform.payments.providers.manage'))
+    items.push({ href: '/exceptions', label: 'Platform exceptions' });
   return items.map((item) => ({ ...item, current: item.href === current }));
 }
 

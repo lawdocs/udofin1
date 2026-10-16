@@ -19,6 +19,21 @@ function navFor(me: MeResponse, current: string): NavItem[] {
   if (permissions.has('application.read'))
     items.push({ href: '/applications', label: 'Applications' });
   if (permissions.has('product.read')) items.push({ href: '/products', label: 'Products' });
+  // Phase 08a: servicing, payments, reconciliation and reminders. The links are conveniences; the API and the database authorise every call.
+  if (permissions.has('loan.read')) {
+    items.push({ href: '/loans', label: 'Loans' });
+    items.push({ href: '/imports', label: 'Imports and sync' });
+  }
+  if (permissions.has('payment.read')) {
+    items.push({ href: '/payments', label: 'Payments' });
+    items.push({ href: '/mandates', label: 'Mandates' });
+  }
+  if (permissions.has('payment.read') || permissions.has('payment.reconcile'))
+    items.push({ href: '/reconciliation', label: 'Reconciliation' });
+  if (permissions.has('reminder.policy.manage') || permissions.has('reminder.template.approve'))
+    items.push({ href: '/reminders', label: 'Reminders' });
+  if (permissions.has('payment.configure') || permissions.has('payment.config.approve'))
+    items.push({ href: '/payment-setup', label: 'Payment setup' });
   return items.map((item) => ({ ...item, current: item.href === current }));
 }
 

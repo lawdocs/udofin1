@@ -12,3 +12,7 @@ export * from './applications/data.js';
 export * from './applications/views.js';
 export * from './documents/data.js';
 export * from './documents/views.js';
+export * from './servicing/index.js';
+export * from './payments/index.js';
+export * from './reminders/index.js';
+export * from './accounts/index.js';

@@ -54,7 +54,7 @@ describe('catalogues', () => {
       const text = readFileSync(file, 'utf8');
       for (const m of text.matchAll(/\bt\(\s*'([a-zA-Z0-9_.]+)'/g)) used.add(m[1] ?? '');
       for (const m of text.matchAll(
-        /'((?:common|error|signin|otp|home|profile|language|consent|request|requests|settings|delete|stepup|lenders|stage|check|apps|offers)\.[a-zA-Z0-9_.]+)'/g,
+        /'((?:common|error|signin|otp|home|profile|language|consent|request|requests|settings|delete|stepup|lenders|stage|check|apps|offers|loans|reminders|pay|mandate)\.[a-zA-Z0-9_.]+)'/g,
       ))
         used.add(m[1] ?? '');
     }

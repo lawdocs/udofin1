@@ -1,4 +1,6 @@
 import { type Messages } from './en';
+import { hiPayments } from './hi.payments';
+import { hiServicing } from './hi.servicing';
 
 /**
  * Hindi app text. DRAFT: not yet reviewed by a native speaker or by legal counsel (open decision
@@ -530,4 +532,6 @@ export const hi: Messages = {
   'docerr.signingUnavailable': 'इलेक्ट्रॉनिक हस्ताक्षर अभी उपलब्ध नहीं है।',
   'docerr.wordingNotApproved': 'यह पाठ अभी अनुमोदित नहीं है।',
   'docerr.sectionsNotShown': 'पहले हर भाग खोलें।',
+  ...hiServicing,
+  ...hiPayments,
 };
