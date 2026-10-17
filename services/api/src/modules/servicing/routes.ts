@@ -64,6 +64,16 @@ function bytes(value: string): number {
 
 const notFound = () => new ApiError(404, 'not_found', 'Not Found');
 
+/**
+ * The API documents an Idempotency-Key of 16 to 128 characters; servicing.request_document takes 8 to 100. A key that is too long
+ * for the function is handed on as its SHA-256 (64 hex characters), the same key always giving the same digest, so a retry still
+ * finds its request and the documented range never answers 422 for its length alone. Shorter keys are passed unchanged.
+ */
+const databaseKey = (key: string | undefined): string | null => {
+  if (key === undefined) return null;
+  return key.length <= 100 ? key : createHash('sha256').update(key).digest('hex');
+};
+
 const first = <T>(rows: T[]): T => {
   const row = rows[0];
   if (row === undefined) throw new Error('database function returned nothing');
@@ -458,7 +468,7 @@ export function servicingRoutes(deps: { documents?: DocumentStore }): RouteDefin
   ) {
     const created = await tx.query<{ id: string }>(
       'select servicing.request_document($1::uuid, $2, $3, $4::date, $5::date) as id',
-      [loanId, kind, key ?? null, period.from ?? null, period.to ?? null],
+      [loanId, kind, databaseKey(key), period.from ?? null, period.to ?? null],
     );
     return readRequest(tx, loanId, first(created.rows).id);
   }
