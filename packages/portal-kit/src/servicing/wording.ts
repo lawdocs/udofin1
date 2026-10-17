@@ -284,7 +284,7 @@ const CLOSURE_KIND: Readonly<Record<string, string>> = {
   closed: 'Closed',
   foreclosed: 'Foreclosed',
 };
-export const closureKindWords = (kind: string): string => lookup(CLOSURE_KIND, kind, 'Closed');
+export const closureKindWords = (kind: string): string => lookup(CLOSURE_KIND, kind, 'Closure');
 
 const RELEASE_STATUS: Readonly<Record<string, string>> = {
   open: 'Open: not yet confirmed by your organisation',
