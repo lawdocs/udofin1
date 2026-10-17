@@ -27,6 +27,7 @@ export {
   loadSyncStatus as loadServicingSyncStatus,
   loadImports as loadServicingImports,
   loadImport as loadServicingImport,
+  loadCorrectableImports as loadServicingCorrections,
   loadConflicts as loadServicingConflicts,
   loadAnomalies as loadServicingAnomalies,
   loadClosures as loadServicingClosures,

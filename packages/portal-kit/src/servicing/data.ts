@@ -12,6 +12,7 @@ import {
   LsLoanPage,
   LsQuotePage,
   LsSyncStatus,
+  type LsImportBatch,
   type LsImportOutcome,
 } from '@udofin/contracts';
 import { type OnboardingApi } from '../onboarding/api.js';
@@ -175,6 +176,18 @@ export const loadImports = (api: OnboardingApi, query: ListQuery) =>
     `/v1/lender/imports${qs({ limit: 25, cursor: query.cursor, lenderId: query.lenderId, kind: query.kind, status: query.status })}`,
     LsImportBatchPage,
   );
+
+/** Earlier files a new upload may correct: the invalid, discarded and failed ones, newest first. */
+export async function loadCorrectableImports(api: OnboardingApi): Promise<LsImportBatch[]> {
+  const pages = await Promise.all(
+    ['invalid', 'rejected', 'failed'].map((status) =>
+      api.get(`/v1/lender/imports${qs({ limit: 25, status })}`, LsImportBatchPage),
+    ),
+  );
+  return pages
+    .flatMap((page) => (page.ok ? page.data.items : []))
+    .sort((a, b) => Date.parse(b.uploadedAt) - Date.parse(a.uploadedAt));
+}
 
 export const loadImport = (api: OnboardingApi, id: string) =>
   api.get(`/v1/lender/imports/${id}`, LsImportDetail);

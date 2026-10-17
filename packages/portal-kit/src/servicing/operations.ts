@@ -345,19 +345,27 @@ export const SERVICING_OPERATIONS: Readonly<Record<string, ServicingOperation>> 
 export type ServicingOutcome = { ok: true; stage?: StageState } | { ok: false; code: string };
 
 const KEY = /^[A-Za-z0-9._:-]{16,128}$/;
+const STAGE_OPERATION = 'servicing.import.stage';
 
-/** Runs the operation a form names. Unknown operations are refused without any call to the API. */
+/**
+ * Runs the operation a form names. Unknown operations are refused without any call to the API. A caller that serves one
+ * kind of form only (the file upload) passes `only`, and then the form's own `op` field is ignored.
+ */
 export async function runServicingOperation(
   api: OnboardingApi,
   form: FormData,
+  only?: string,
 ): Promise<ServicingOutcome> {
-  const name = form.get('op');
+  const name = only ?? form.get('op');
   const key = form.get('key');
   const operation =
     typeof name === 'string' && Object.hasOwn(SERVICING_OPERATIONS, name)
       ? SERVICING_OPERATIONS[name]
       : undefined;
   if (!operation) return { ok: false, code: 'path_not_allowed' };
+  // Staging a file has its own entry point, which shows a refused file's problems; the general one does not serve it.
+  if (name === STAGE_OPERATION && only !== STAGE_OPERATION)
+    return { ok: false, code: 'path_not_allowed' };
   if (typeof key !== 'string' || !KEY.test(key)) return { ok: false, code: 'validation_failed' };
   const result = await operation.run(api, form, key);
   if (!result.ok) return { ok: false, code: safeErrorCode(result.code) };

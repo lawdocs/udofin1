@@ -25,11 +25,7 @@ import {
   withoutCursor,
   type ListQuery,
 } from './data.js';
-import {
-  formatCount,
-  formatIst,
-  formatRupees,
-} from './format.js';
+import { formatCount, formatIst, formatRupees } from './format.js';
 import { RowErrorsTable } from './import-errors.js';
 import {
   type LsAnomaly,
@@ -244,6 +240,7 @@ function SyncCard({ item, ctx }: { item: LsSyncStatus['items'][number]; ctx: Ser
 export function SyncPage({
   status,
   imports,
+  corrections,
   query,
   ctx,
   stageAction,
@@ -253,6 +250,8 @@ export function SyncPage({
 }: {
   status: Loaded<LsSyncStatus>;
   imports: Loaded<LsImportBatchPage>;
+  /** Earlier invalid, discarded or failed files, which a new upload may correct. */
+  corrections: readonly LsImportBatch[];
   query: ListQuery;
   ctx: ServicingContext;
   stageAction: StageAction;
@@ -300,7 +299,7 @@ export function SyncPage({
             <ImportStageForm
               action={stageAction}
               lenders={uploaders.map((g) => ({ id: g.lenderId, name: g.name }))}
-              corrections={imports.ok ? correctionOptions(imports.data.items) : []}
+              corrections={correctionOptions(corrections)}
               correctionOf={correctionOf}
             />
           </>
