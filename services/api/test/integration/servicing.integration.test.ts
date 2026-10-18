@@ -294,6 +294,8 @@ describe.skipIf(!enabled)('borrower servicing over HTTP', () => {
       supersedes?: string;
       request?: string;
       issuedMsAgo?: number;
+      /** A size to record that is NOT the size of the stored file (the hash stays the real one). */
+      recordedSize?: number;
     } = {},
   ) {
     const bytes = pdf(`${label} ${RUN}`);
@@ -308,7 +310,7 @@ describe.skipIf(!enabled)('borrower servicing over HTTP', () => {
         kind,
         key,
         sha256(bytes),
-        bytes.length,
+        o.recordedSize ?? bytes.length,
         reference,
         new Date(Date.now() - (o.issuedMsAgo ?? HOUR)).toISOString(),
         o.from ?? null,
@@ -1877,6 +1879,27 @@ describe.skipIf(!enabled)('borrower servicing over HTTP', () => {
       const restored = await get(url, ids.b1);
       expect(restored.statusCode).toBe(200);
       expect((await accessRows(docs.stmt1?.id ?? '')).length).toBe(before + 1);
+    });
+
+    it('fails closed when the recorded size is not the size of the stored file, even though the hash matches', async () => {
+      const real = pdf(`sizelie ${RUN}`);
+      const lie = await registerDocument(ids.aOp, ls('A5'), 'statement', 'sizelie', {
+        from: istDate(Date.now() - 60 * DAY),
+        to: istDate(Date.now() - 30 * DAY),
+        recordedSize: real.length + 7,
+        issuedMsAgo: 6 * HOUR,
+      });
+      const url = `/v1/loans/${ls('A5')}/documents/${lie.id}/content`;
+      const res = await get(url, ids.b1);
+      expect(res.statusCode).toBe(500);
+      expect(code(res)).toBe('internal_error');
+      expect(res.body).not.toContain('contentBase64');
+      expect(await accessRows(lie.id)).toEqual([]);
+      // The list still shows the document (metadata only): it is the content that is refused.
+      const list = SvcLoanDocumentList.parse(
+        (await get(`/v1/loans/${ls('A5')}/documents`, ids.b1)).json(),
+      );
+      expect(list.items.map((i) => i.documentId)).toContain(lie.id);
     });
 
     it('answers 503 without a configured store and records no access', async () => {
