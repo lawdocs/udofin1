@@ -668,7 +668,8 @@ set local session_replication_role = replica;
 update servicing.lender_features set enabled = false where lender_org_id = pg_temp.lx() and feature = 'mandates';
 set local session_replication_role = origin;
 select pg_temp.as_user(pg_temp.u(1));
-select is(pg_temp.err(format($$select * from payments.my_mandate_debits(%L)$$, pg_temp.mid(1))), 'P0002|', 'with the lender''s mandates switch off nothing is shown');
+-- A mandate that is not over stays readable to its borrower when the lender's switch is off (decision U9 of the review fixes); a finished one is hidden.
+select is(pg_temp.err(format($$select * from payments.my_mandate_debits(%L)$$, pg_temp.mid(1))), 'ok', 'with the lender''s mandates switch off a live mandate stays readable');
 select pg_temp.as_owner();
 set local session_replication_role = replica;
 update servicing.lender_features set enabled = true where lender_org_id = pg_temp.lx() and feature = 'mandates';
