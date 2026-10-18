@@ -6,7 +6,7 @@
 --      shows fewer than four digits and agrees on those is NOT the lender's account: destination_ok stays null, nothing is matched or confirmed, the
 --      platform gets a warning, and the run counts it ("destination unstated") next to the standing line. Zero "settled to non-lender" is evidence
 --      only when a settlement report exists and no batch lacks a verified destination (report.settlement_evidence.zero_is_evidence).
---   2. The standing line is computed from the BATCHES (net amount that moved), not from item gross.
+--   2. The standing line is computed from the BATCHES (their gross; the net paid out is reported beside it), not from the items alone.
 --   3. Batch totals are tied to the items when the report is recorded (items_total_mismatch; a row without the flag is tied from its items when read);
 --      a batch whose items do not add up, or whose own parts do not add up, is never matched to a bank credit and never "bank_confirmed", and opens an
 --      exception for the platform.
@@ -441,8 +441,10 @@ declare
   v_off_batches integer;
   v_off_items integer;
   v_off_minor bigint;
+  v_off_net bigint;
   v_unstated_batches integer;
   v_unstated_minor bigint;
+  v_unstated_net bigint;
   v_na text[] := '{}';
   x record;
 begin
@@ -668,15 +670,16 @@ begin
     v_exc := v_exc + 1;
   end loop;
 
-  -- The standing line: money the provider reported settled somewhere other than the lender's verified account, taken from the BATCHES (what moved), and the
-  -- batches whose destination is not confirmed. Zero is evidence only when a settlement report exists and no batch lacks a verified destination.
+  -- The standing line: money the provider reported settled somewhere other than the lender's verified account, taken from the BATCHES (their gross, as the item
+  -- view alone could miss a batch that lists few or no items; the net that was paid out is reported next to it), and the batches whose destination is not
+  -- confirmed. Zero is evidence only when a settlement report exists and no batch lacks a verified destination.
   select count(*) into v_visible from payments.settlement_batches b where b.lender_org_id = p_lender and b.period_to <= p_date;
-  select count(*), coalesce(sum(b.net_minor), 0) into v_off_batches, v_off_minor
+  select count(*), coalesce(sum(b.gross_minor), 0), coalesce(sum(b.net_minor), 0) into v_off_batches, v_off_minor, v_off_net
     from payments.settlement_batches b where b.lender_org_id = p_lender and b.destination_ok is false and b.period_to <= p_date;
   select count(i.id) into v_off_items
     from payments.settlement_items i join payments.settlement_batches b on b.id = i.batch_id and b.lender_org_id = i.lender_org_id
    where i.lender_org_id = p_lender and b.destination_ok is false and b.period_to <= p_date;
-  select count(*), coalesce(sum(b.net_minor), 0) into v_unstated_batches, v_unstated_minor
+  select count(*), coalesce(sum(b.gross_minor), 0), coalesce(sum(b.net_minor), 0) into v_unstated_batches, v_unstated_minor, v_unstated_net
     from payments.settlement_batches b where b.lender_org_id = p_lender and b.destination_ok is null and b.period_to <= p_date;
 
   update payments.reconciliation_runs set
@@ -690,8 +693,10 @@ begin
       'settlement_evidence', jsonb_build_object(
         'settlement_report_exists', v_visible > 0,
         'off_account_batches', v_off_batches,
+        'off_account_net_minor', v_off_net,
         'destination_unstated_batches', v_unstated_batches,
         'destination_unstated_minor', v_unstated_minor,
+        'destination_unstated_net_minor', v_unstated_net,
         'zero_is_evidence', v_visible > 0 and v_off_batches = 0 and v_unstated_batches = 0),
       'settings', jsonb_build_object('settlement_lag_days', v_lag, 'receipt_lag_hours', v_rlag, 'above_platform_default', v_lag > 3 or v_rlag > 72))
    where id = v_run.id;
@@ -702,7 +707,7 @@ begin
 end
 $$;
 comment on function payments.run_reconciliation(uuid, date) is
-  'System only (a daily worker, after the provider cut-off). Reconciles a lender up to a date: exact matches of provider payments to settlement items, settlement batches to bank credits (UTR, net amount, the configured settlement account, a destination confirmed by its last four digits, items and parts that add up, a UTR no other batch carries) and provider payments to the lender''s own receipts ON THE PAYMENT''S LOAN ACCOUNT; one match per payment, item, credit, batch and receipt. Exceptions for what differs, repeats or stays missing beyond the waiting times (amount_mismatch, duplicate_payment for a payment settled or posted twice, provider_success_no_settlement, settlement_no_intent, late_settlement, settlement_account_mismatch (platform-owned, amount and account judged independently), lender_receipt_missing, lender_receipt_no_intent (also a receipt on another loan), event_payload_conflict for a provider report that does not add up or a UTR carried twice), each raised once per subject and raised again if the condition recurred after a person resolved it. An input source that does not exist is listed as not reconcilable, never as reconciled. Idempotent: a run on unchanged inputs returns the same run; changed inputs make a new run number. It never changes a payment, an intent, a receipt or any other money row. The report carries the standing line settled_to_non_lender (items in, and net minor of, batches whose destination is not the lender''s account) and settlement_evidence: zero is evidence only when zero_is_evidence is true (a settlement report exists and no batch lacks a verified destination).';
+  'System only (a daily worker, after the provider cut-off). Reconciles a lender up to a date: exact matches of provider payments to settlement items, settlement batches to bank credits (UTR, net amount, the configured settlement account, a destination confirmed by its last four digits, items and parts that add up, a UTR no other batch carries) and provider payments to the lender''s own receipts ON THE PAYMENT''S LOAN ACCOUNT; one match per payment, item, credit, batch and receipt. Exceptions for what differs, repeats or stays missing beyond the waiting times (amount_mismatch, duplicate_payment for a payment settled or posted twice, provider_success_no_settlement, settlement_no_intent, late_settlement, settlement_account_mismatch (platform-owned, amount and account judged independently), lender_receipt_missing, lender_receipt_no_intent (also a receipt on another loan), event_payload_conflict for a provider report that does not add up or a UTR carried twice), each raised once per subject and raised again if the condition recurred after a person resolved it. An input source that does not exist is listed as not reconcilable, never as reconciled. Idempotent: a run on unchanged inputs returns the same run; changed inputs make a new run number. It never changes a payment, an intent, a receipt or any other money row. The report carries the standing line settled_to_non_lender (items in, and gross minor of, the BATCHES whose destination is not the lender''s account, so a batch that lists few or no items still counts) and settlement_evidence (batches and net amount off-account, batches and amounts whose destination is not stated): zero is evidence only when zero_is_evidence is true (a settlement report exists and no batch lacks a verified destination).';
 
 -- ---------------------------------------------------------------------------------------------
 -- 7. The derived stage of each payment (runs with the caller's rights)

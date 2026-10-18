@@ -3,7 +3,7 @@
 -- without it). Synthetic data only (labelled SAMPLE). Error codes are reported as SQLSTATE|hint.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(150);
+select plan(151);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -474,7 +474,7 @@ select is(pg_temp.exc_for('provider_success_no_settlement', 'provider_payment_id
 -- U15 and A44: the standing line and the evidence flag.
 select is((select report -> 'settled_to_non_lender' from payments.reconciliation_runs where id = pg_temp.got('run1')::uuid), '{"items": 0, "minor": 0}'::jsonb, 'the standing line is zero for lender X');
 select is((select report -> 'settlement_evidence' from payments.reconciliation_runs where id = pg_temp.got('run1')::uuid),
-  '{"zero_is_evidence": false, "off_account_batches": 0, "destination_unstated_batches": 1, "destination_unstated_minor": 475000, "settlement_report_exists": true}'::jsonb,
+  '{"zero_is_evidence": false, "off_account_batches": 0, "off_account_net_minor": 0, "destination_unstated_batches": 1, "destination_unstated_minor": 475000, "destination_unstated_net_minor": 475000, "settlement_report_exists": true}'::jsonb,
   'A44, U15: but zero is NOT evidence: one batch of 4,750.00 has no stated destination');
 select is((select report -> 'settings' from payments.reconciliation_runs where id = pg_temp.got('run1')::uuid), '{"receipt_lag_hours": 72, "settlement_lag_days": 3, "above_platform_default": false}'::jsonb,
   'U25: the run reports the waiting times it used and that they are not above the platform defaults');
@@ -588,12 +588,12 @@ select is(pg_temp.val($$select pg_temp.report_z(jsonb_build_array(pg_temp.batch(
 select pg_temp.keep('rz1', pg_temp.run_z() ->> 'run_id');
 select is((select count(*)::text || '/' || coalesce(max(destination_ok::text), 'null') from payments.settlement_batches where batch_ref = 'ZB1'), '1/true', 'A44: destinations are compared by their last four digits: ****3333 is XXXXXX3333');
 select is((select status from payments.lender_payment_configs where id = pg_temp.got('cfgz')::uuid), 'active', 'A44: so the configuration is not suspended by a padding difference');
-select is(pg_temp.report_of(jsonb_build_object('run_id', pg_temp.got('rz1'))) -> 'settlement_evidence', '{"zero_is_evidence": true, "off_account_batches": 0, "destination_unstated_batches": 0, "destination_unstated_minor": 0, "settlement_report_exists": true}'::jsonb,
+select is(pg_temp.report_of(jsonb_build_object('run_id', pg_temp.got('rz1'))) -> 'settlement_evidence', '{"zero_is_evidence": true, "off_account_batches": 0, "off_account_net_minor": 0, "destination_unstated_batches": 0, "destination_unstated_minor": 0, "destination_unstated_net_minor": 0, "settlement_report_exists": true}'::jsonb,
   'A44: with a settlement report whose destinations are all verified, zero IS evidence');
 -- A batch with no destination.
 select pg_temp.val($$select pg_temp.report_z(jsonb_build_array(pg_temp.batch('ZB2', pg_temp.utr(202), 3, 125000, jsonb_build_array(pg_temp.item('PAY-ZB2', 125000)), null)))$$);
 select pg_temp.keep('rz2', pg_temp.run_z() ->> 'run_id');
-select is(pg_temp.report_of(jsonb_build_object('run_id', pg_temp.got('rz2'))) -> 'settlement_evidence', '{"zero_is_evidence": false, "off_account_batches": 0, "destination_unstated_batches": 1, "destination_unstated_minor": 125000, "settlement_report_exists": true}'::jsonb,
+select is(pg_temp.report_of(jsonb_build_object('run_id', pg_temp.got('rz2'))) -> 'settlement_evidence', '{"zero_is_evidence": false, "off_account_batches": 0, "off_account_net_minor": 0, "destination_unstated_batches": 1, "destination_unstated_minor": 125000, "destination_unstated_net_minor": 125000, "settlement_report_exists": true}'::jsonb,
   'A44, U15: a batch with no stated destination is counted, and zero is no longer evidence');
 select is(pg_temp.report_of(jsonb_build_object('run_id', pg_temp.got('rz2'))) -> 'settled_to_non_lender', '{"items": 0, "minor": 0}'::jsonb, 'while the standing line itself stays zero');
 -- Too few digits to compare, and an unreadable destination (it must not refuse the report, and it must not be stored).
@@ -613,11 +613,12 @@ select is((select count(*)::text || '/' || coalesce(max(destination_ok::text), '
 select is((select status from payments.lender_payment_configs where id = pg_temp.got('cfgz')::uuid), 'suspended', 'and the configuration is suspended at once');
 -- U12: off-account batches with no items, and with fewer items than their total.
 select pg_temp.val($$select pg_temp.report_z(jsonb_build_array(pg_temp.batch('OFF1', pg_temp.utr(211), 2, 300000, '[]'::jsonb, 'XXXXXX9999'),
-                                          pg_temp.batch('OFF2', pg_temp.utr(212), 2, 900000, jsonb_build_array(pg_temp.item('PAY-OFF2', 10000)), 'XXXXXX9999')))$$);
+                                          jsonb_set(jsonb_set(pg_temp.batch('OFF2', pg_temp.utr(212), 2, 900000, jsonb_build_array(pg_temp.item('PAY-OFF2', 10000)), 'XXXXXX9999'), '{feeMinor}', '"9000"'), '{netMinor}', '"891000"')))$$);
 select pg_temp.keep('rz4', pg_temp.run_z() ->> 'run_id');
 select is(pg_temp.report_of(jsonb_build_object('run_id', pg_temp.got('rz4'))) -> 'settled_to_non_lender', '{"items": 2, "minor": 1450000}'::jsonb,
-  'U12: the standing line counts the BATCHES that went elsewhere: 2,500.00 + 3,000.00 + 9,000.00 = 14,500.00, not the 1,000.00 + 2,500.00 of the items that happen to be listed');
+  'U12: the standing line counts the BATCHES that went elsewhere: 2,500.00 + 3,000.00 + 9,000.00 = 14,500.00 gross, not the 1,000.00 + 2,500.00 of the items that happen to be listed');
 select is(pg_temp.report_of(jsonb_build_object('run_id', pg_temp.got('rz4'))) -> 'settlement_evidence' ->> 'off_account_batches', '3', 'U12: three batches went to another account');
+select is(pg_temp.report_of(jsonb_build_object('run_id', pg_temp.got('rz4'))) -> 'settlement_evidence' ->> 'off_account_net_minor', '1441000', 'U12: and the net that was paid out (batch 2 kept 90.00 in fees) is reported beside the gross');
 select is(pg_temp.report_of(jsonb_build_object('run_id', pg_temp.got('rz4'))) -> 'settlement_evidence' ->> 'zero_is_evidence', 'false', 'and zero is of course not evidence');
 
 -- ============================================================================================================================
