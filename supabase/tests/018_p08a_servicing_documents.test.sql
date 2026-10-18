@@ -239,8 +239,8 @@ select is((select count(*) from pg_proc p join pg_namespace n on n.oid = p.prona
            where n.nspname in ('servicing', 'documents', 'private') and p.proname ~* '(generate|render|compose|draft)_(statement|quote|quotation|noc|closure|letter)'), 0::bigint,
   'no function generates or renders a statement, quotation, NOC or closure letter: Udofin issues none of them');
 select is((select array_agg(rule_key || ':' || approval_status || ':' || evidence_status order by rule_key) from documents.applicability_rules where rule_key like 'servicing.%' and rule_key !~ '^servicing\.(reminder|suppress)'),
-  array['servicing.noc_sla_days_default:draft:unverified', 'servicing.security_release_sla_days:draft:confirmed', 'servicing.statement_sla_days_default:draft:unverified'],
-  'the three servicing rules are seeded as draft with their evidence label (NOC and statement defaults unverified platform settings; security release confirmed in text)');
+  array['servicing.noc_sla_days_default:draft:unverified', 'servicing.security_release_sla_days:draft:likely', 'servicing.statement_sla_days_default:draft:unverified'],
+  'the three servicing rules are seeded as draft with their evidence label (NOC and statement defaults unverified platform settings; security release likely: the text is confirmed, its application to the product categories is not, fix wave U44)');
 select is((select paragraph_refs from documents.applicability_rules where rule_key = 'servicing.security_release_sla_days'), array['35', '36'], 'the security-release rule cites RBC paras 35 and 36');
 select ok((select direction_ref like '%NOT a regulatory deadline%' and exclusions like '%PLATFORM SETTING, NOT A REGULATORY CLAIM%' from documents.applicability_rules where rule_key = 'servicing.noc_sla_days_default'),
   'the NOC default says in its citation that it is a platform setting and not a regulatory deadline');
@@ -725,7 +725,8 @@ select is(pg_temp.err(format($$delete from servicing.closure_records where loan_
 -- The NOC: requests, issuing, the closure record learns the reference once.
 select pg_temp.as_user('ea000000-0000-4000-8000-000000000005');
 select pg_temp.keep('rn1', servicing.request_document(pg_temp.lid('SAMPLE-LN-4'), 'noc', 'sample-key-0030')::text);
-select is(pg_temp.q(format($$select (due_by - requested_at = interval '30 days')::text from servicing.document_requests where id = %L$$, pg_temp.got('rn1'))), 'true', 'a NOC request is due after the days of the approved NOC rule');
+select is(pg_temp.q(format($$select (r.due_by = c.noc_due_by and r.due_by - c.closed_at = interval '30 days')::text from servicing.document_requests r join servicing.closure_records c on c.loan_account_id = r.loan_account_id where r.id = %L$$, pg_temp.got('rn1'))), 'true',
+  'a NOC request is due on the closure record''s due date: the approved NOC rule counts from the recorded closure, not from the request (fix wave M14)');
 select is(pg_temp.err(format($$select servicing.request_document(%L, 'foreclosure_quote', 'sample-key-0031')$$, pg_temp.lid('SAMPLE-LN-4'))), '55000|loan_not_active', 'a quotation cannot be requested for a closed loan');
 select is((select noc_status || ':' || noc_prompt_key from (select servicing.my_closure(pg_temp.lid('SAMPLE-LN-4')) j) s, jsonb_to_record(s.j) as x (noc_status text, noc_prompt_key text)),
   'pending:closure.noc.lender_to_issue', 'before the lender issues anything the closure screen says the lender is to issue the NOC');
@@ -811,7 +812,9 @@ update documents.applicability_rules set approval_status = 'approved', reviewer_
   approved_at = now(), proposed_by = 'ea000000-0000-4000-8000-000000000009'
  where rule_key = 'servicing.security_release_sla_days';
 select pg_temp.as_system();
-select is(servicing.open_security_release_tasks(pg_temp.lid('SAMPLE-LN-4'), array['other']), 1, 'the system role may open tasks from the collateral types the lender reported');
+select pg_temp.keep('mockon3', set_config('udofin.allow_mock_providers', 'on', true));
+select is(servicing.open_security_release_tasks(pg_temp.lid('SAMPLE-LN-4'), array['other']), 1, 'the system role may open tasks from the collateral types the lender reported (an active mock feed, a session that allows mock providers)');
+select pg_temp.keep('mockoff3', set_config('udofin.allow_mock_providers', 'off', true));
 select pg_temp.as_owner();
 select is((select (due_by - (select closed_at from servicing.closure_records where loan_account_id = pg_temp.lid('SAMPLE-LN-4')) = interval '30 days')::text
            from servicing.security_release_tasks where loan_account_id = pg_temp.lid('SAMPLE-LN-4') and collateral_type = 'other'), 'true',
@@ -867,7 +870,7 @@ select is((select string_agg(t ->> 'collateral_type' || ':' || (t ->> 'status') 
 select ok(servicing.my_closure(pg_temp.lid('SAMPLE-LN-4'))::text !~* 'released' and servicing.my_closure(pg_temp.lid('SAMPLE-LN-4'))::text !~* 'confirmed_by_lender',
   'and the closure answer never contains the word released or a confirmed status while nothing is confirmed');
 select is((servicing.my_closure(pg_temp.lid('SAMPLE-LN-4')) -> 'security_release_tasks' -> 2 -> 'due_basis' ->> 'rule_key'), 'servicing.security_release_sla_days', 'the due date of a task carries the rule it came from');
-select is((servicing.my_closure(pg_temp.lid('SAMPLE-LN-4')) -> 'security_release_tasks' -> 2 -> 'due_basis' ->> 'evidence_status'), 'confirmed', 'and its evidence label');
+select is((servicing.my_closure(pg_temp.lid('SAMPLE-LN-4')) -> 'security_release_tasks' -> 2 -> 'due_basis' ->> 'evidence_status'), 'likely', 'and its evidence label (likely: fix wave U44)');
 select is(servicing.my_closure(pg_temp.lid('SAMPLE-LN-4')) ->> 'lender_display_name', 'Docs X', 'the prompt names the lender');
 select pg_temp.as_user('ea000000-0000-4000-8000-000000000002');
 select is(servicing.set_security_release_delay_reason(pg_temp.got('t_mf')::uuid, 'Waiting for the depository to process the lien request'), 'recorded', 'the lender records a delay reason');

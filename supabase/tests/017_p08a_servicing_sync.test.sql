@@ -4,7 +4,7 @@
 -- Error codes are reported as SQLSTATE|hint.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(553);
+select plan(556);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -872,7 +872,7 @@ select is((select figures_available from servicing.my_loan(pg_temp.lid('LX1'))),
 select pg_temp.as_user('e9000000-0000-4000-8000-000000000011');
 select is((select count(*) from (select servicing.acknowledge_sync_conflict(id) from servicing.sync_conflicts where status = 'open') x), 2::bigint, 'the remaining two are acknowledged');
 select pg_temp.as_user('e9000000-0000-4000-8000-000000000013');
-select is((select count(*) from (select servicing.resolve_sync_conflict(id, 'incoming', 'The lender confirmed the newer figure by ticket', '{"lender_ticket":"SAMPLE-T-3"}') from servicing.sync_conflicts where status = 'acknowledged') x), 2::bigint, 'and resolved (confirming the incoming version still adds nothing: a correction arrives as a newer report)');
+select is((select count(*) from (select servicing.resolve_sync_conflict(id, 'existing', 'The lender confirmed the stored figure by ticket', '{"lender_ticket":"SAMPLE-T-3"}') from servicing.sync_conflicts where status = 'acknowledged') x), 2::bigint, 'and resolved (confirming the incoming version needs a newer stored report: tested in 029)');
 select is(pg_temp.snaps('LX1'), 2::bigint, 'LX1 has the same two snapshots');
 select pg_temp.as_user('e9000000-0000-4000-8000-000000000006');
 select is((select figures_available from servicing.my_loan(pg_temp.lid('LX1'))), true, 'with every conflict resolved the borrower sees the reported figures again');
@@ -1038,9 +1038,22 @@ select is(pg_temp.err($$select servicing.apply_lms_report('e9b00000-0000-4000-80
 select is(pg_temp.err($$select servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', '{"report_type":"loan","source_system":"telepathy"}')$$), '22023|source_system_invalid', 'and a known source system');
 select is(pg_temp.err($$select servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', '{"report_type":"loan","source_system":"mock_lms"}')$$), '55000|connection_not_active', 'a mock source needs a mock connection');
 select is(pg_temp.err($$select servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', '{"report_type":"loan","source_system":"finbyx"}')$$), '55000|connection_not_active', 'a finbyx source can never be active');
-select is(pg_temp.err(format($$select servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', '{"report_type":"loan","source_system":"file_import"}', %L)$$, pg_temp.got('f1_id'))), '55000|batch_invalid', 'a batch that is not open (already committed) cannot be used');
+select is(pg_temp.err($$select servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', '{"report_type":"loan","source_system":"file_import"}')$$), '42501|source_system_invalid',
+  'the system role cannot apply a file import: such records come only from stage_import and commit_import by a signed-in person (fix wave M10)');
+select is(pg_temp.err($$select servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', '{"report_type":"loan","source_system":"manual_import"}')$$), '42501|source_system_invalid',
+  'nor a manual import');
+select is(pg_temp.err(format($$select servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', '{"report_type":"loan","source_system":"file_import"}', %L)$$, pg_temp.got('f1_id'))), '42501|source_system_invalid',
+  'not even with the id of a batch');
 
-select pg_temp.keep('ls1', pg_temp.loan('LS1', 'e9200000-0000-4000-8000-000000000007', 'SRC-LS1-1', 2, '{"report_type":"loan","source_system":"file_import","sequence":"1"}')::text);
+-- The rest of this section drives the single apply function through a MOCK connection (the only machine source that can be active), in a session that
+-- allows mock providers. The file connection is restored at the end of the section.
+select pg_temp.as_owner();
+select set_config('udofin.allow_mock_providers', 'on', true);
+update servicing.lms_connections set kind = 'mock', provider_mode = 'mock' where lender_org_id = 'e9b00000-0000-4000-8000-000000000001';
+select pg_temp.as_system();
+select is(pg_temp.err(format($$select servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', '{"report_type":"loan","source_system":"mock_lms"}', %L)$$, pg_temp.got('f1_id'))), '55000|batch_invalid', 'a batch that is not open (already committed) cannot be used');
+
+select pg_temp.keep('ls1', pg_temp.loan('LS1', 'e9200000-0000-4000-8000-000000000007', 'SRC-LS1-1', 2, '{"report_type":"loan","source_system":"mock_lms","sequence":"1"}')::text);
 select pg_temp.keep('ls1_res', servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', pg_temp.got('ls1')::jsonb)::text);
 select is((pg_temp.got('ls1_res')::jsonb) ->> 'outcome', 'new', 'a first report with complete disbursement evidence for a matching application creates the loan');
 select is((pg_temp.got('ls1_res')::jsonb) ->> 'created', 'true', 'and says it created the account');
@@ -1051,36 +1064,34 @@ select is((servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', (p
 select is((servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', (pg_temp.got('ls1')::jsonb) || jsonb_build_object('content_sha256', repeat('0', 64)))) -> 'error_codes', '["content_hash_mismatch"]'::jsonb,
   'one that does not match is refused as an error result');
 select is((select count(*) from servicing.balance_snapshots s join servicing.loan_accounts l on l.id = s.loan_account_id where l.lms_loan_ref = 'LS1'), 1::bigint, 'one snapshot only');
-select pg_temp.keep('bad', servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', pg_temp.loan('LS2', 'e9200000-0000-4000-8000-000000000008', 'SRC-LS2-1', 2, '{"report_type":"loan","source_system":"file_import","sanctioned_amount":"abc","customer_name":"Asha Rao"}'))::text);
+select pg_temp.keep('bad', servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', pg_temp.loan('LS2', 'e9200000-0000-4000-8000-000000000008', 'SRC-LS2-1', 2, '{"report_type":"loan","source_system":"mock_lms","sanctioned_amount":"abc","customer_name":"Asha Rao"}'))::text);
 select is((pg_temp.got('bad')::jsonb) ->> 'outcome', 'error', 'an invalid report is returned as an error result, not raised (a worker can park it)');
 select is((pg_temp.got('bad')::jsonb) -> 'error_codes', '["invalid_amount", "unknown_field"]'::jsonb, 'with the error classes');
 select is(pg_temp.got('bad') !~* 'abc|asha|rao', true, 'and never the offending values');
-select is((servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', pg_temp.loan('LS3', 'SAMPLE-APP-NOPE', 'SRC-LS3-1', 2, '{"report_type":"loan","source_system":"file_import"}'))) ->> 'outcome', 'quarantined', 'a report for an unknown application is quarantined');
-select is((select (reason_code, record_type, source_system::text, lms_loan_ref)::text from servicing.sync_quarantine), '(application_not_found,loan,file_import,LS3)', 'with its reason and provenance');
-select is((servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', pg_temp.loan('LS3', 'SAMPLE-APP-NOPE', 'SRC-LS3-1', 2, '{"report_type":"loan","source_system":"file_import"}'))) ->> 'outcome', 'quarantined', 'again');
+select is((servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', pg_temp.loan('LS3', 'SAMPLE-APP-NOPE', 'SRC-LS3-1', 2, '{"report_type":"loan","source_system":"mock_lms"}'))) ->> 'outcome', 'quarantined', 'a report for an unknown application is quarantined');
+select is((select (reason_code, record_type, source_system::text, lms_loan_ref)::text from servicing.sync_quarantine), '(application_not_found,loan,mock_lms,LS3)', 'with its reason and provenance');
+select is((servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', pg_temp.loan('LS3', 'SAMPLE-APP-NOPE', 'SRC-LS3-1', 2, '{"report_type":"loan","source_system":"mock_lms"}'))) ->> 'outcome', 'quarantined', 'again');
 select is((select count(*) from servicing.sync_quarantine), 1::bigint, 'it is quarantined once, however often it is sent');
-select is((servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', pg_temp.receipt('NOPE', 'RS1', '1.00', 1, '{"report_type":"receipt","source_system":"file_import"}'))) ->> 'reason', 'unknown_loan', 'a receipt for an unknown loan is quarantined');
-select is((servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', pg_temp.loan('LS4', 'e9200000-0000-4000-8000-000000000007', 'SRC-LS4-1', 2, '{"report_type":"loan","source_system":"file_import"}'))) ->> 'reason', 'application_already_linked', 'a second loan for the same application is quarantined');
-select is((servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', pg_temp.loan('LS5', 'e9200000-0000-4000-8000-000000000004', 'SRC-LS5-1', 2, '{"report_type":"loan","source_system":"file_import"}'))) ->> 'reason', 'application_not_ready', 'an application that is not ready is quarantined');
-select is((servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', pg_temp.receipt('LX1', 'RS2', '12.00', 1, '{"report_type":"receipt","source_system":"file_import"}'))) ->> 'outcome', 'new', 'a receipt for a known loan is stored');
-select is((servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', pg_temp.sched('LX5', 'SRC-SCH-5', 1, '{"report_type":"schedule","source_system":"file_import"}'))) ->> 'outcome', 'new', 'and a schedule');
+select is((servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', pg_temp.receipt('NOPE', 'RS1', '1.00', 1, '{"report_type":"receipt","source_system":"mock_lms"}'))) ->> 'reason', 'unknown_loan', 'a receipt for an unknown loan is quarantined');
+select is((servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', pg_temp.loan('LS4', 'e9200000-0000-4000-8000-000000000007', 'SRC-LS4-1', 2, '{"report_type":"loan","source_system":"mock_lms"}'))) ->> 'reason', 'application_already_linked', 'a second loan for the same application is quarantined');
+select is((servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', pg_temp.loan('LS5', 'e9200000-0000-4000-8000-000000000004', 'SRC-LS5-1', 2, '{"report_type":"loan","source_system":"mock_lms"}'))) ->> 'reason', 'application_not_ready', 'an application that is not ready is quarantined');
+select is((servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', pg_temp.receipt('LX1', 'RS2', '12.00', 1, '{"report_type":"receipt","source_system":"mock_lms"}'))) ->> 'outcome', 'new', 'a receipt for a known loan is stored');
+select is((servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', pg_temp.sched('LX5', 'SRC-SCH-5', 1, '{"report_type":"schedule","source_system":"mock_lms"}'))) ->> 'outcome', 'new', 'and a schedule');
 select is((select count(*) from servicing.sync_quarantine where content_sha256 !~ '^[0-9a-f]{64}$' or lms_loan_ref is null), 0::bigint, 'quarantine rows hold references, class and hash');
 select pg_temp.as_owner();
 select is((select (status::text, (select count(*) from servicing.loan_accounts l where l.application_id = a.id and l.lms_loan_ref = 'LS1'))::text from lending.applications a where a.id = 'e9200000-0000-4000-8000-000000000007'), '(disbursed,1)',
   'the system path takes the application all the way to disbursed through the existing evidence rule');
-select is((select (s.source_system::text, s.import_batch_id is null, s.recorded_by is null)::text from servicing.balance_snapshots s join servicing.loan_accounts l on l.id = s.loan_account_id where l.lms_loan_ref = 'LS1'), '(file_import,t,t)',
+select is((select (s.source_system::text, s.import_batch_id is null, s.recorded_by is null)::text from servicing.balance_snapshots s join servicing.loan_accounts l on l.id = s.loan_account_id where l.lms_loan_ref = 'LS1'), '(mock_lms,t,t)',
   'a system-applied snapshot has no batch and no person, only its source');
-select is((select count(*) from servicing.loan_account_events where actor = 'system' and event_type = 'created' and source_system = 'file_import'), 1::bigint, 'and the loan history names the system as actor');
+select is((select count(*) from servicing.loan_account_events where actor = 'system' and event_type = 'created' and source_system = 'mock_lms'), 1::bigint, 'and the loan history names the system as actor');
 select is((select last_success_at is not null from servicing.lms_connections where lender_org_id = 'e9b00000-0000-4000-8000-000000000001'), true, 'the connection records its last success');
 
 -- The mock source: only where the session allows mock providers; never otherwise.
-select set_config('udofin.allow_mock_providers', 'on', true);
-update servicing.lms_connections set kind = 'mock', provider_mode = 'mock' where lender_org_id = 'e9b00000-0000-4000-8000-000000000001';
 select pg_temp.as_system();
 select is((servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', pg_temp.loan('LX5', 'SAMPLE-APP-X5', 'SRC-LX5-M1', 1, '{"report_type":"loan","source_system":"mock_lms","sequence":"9"}'))) ->> 'outcome', 'changed',
   'in a session that allows mock providers a mock connection works');
 select is((select source_system::text from servicing.balance_snapshots where source_record_id = 'SRC-LX5-M1'), 'mock_lms', 'and its snapshot is labelled mock_lms');
-select is(pg_temp.err($$select servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', '{"report_type":"loan","source_system":"file_import"}')$$), '55000|connection_not_active', 'a file report is refused on a mock connection');
+select is(pg_temp.err($$select servicing.apply_lms_report('e9b00000-0000-4000-8000-000000000001', '{"report_type":"loan","source_system":"file_import"}')$$), '42501|source_system_invalid', 'a file report is refused outright (and a mock connection would not carry it)');
 select pg_temp.as_owner();
 select set_config('udofin.allow_mock_providers', '', true);
 select pg_temp.as_system();
