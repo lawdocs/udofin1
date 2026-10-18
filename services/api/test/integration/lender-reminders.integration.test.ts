@@ -85,6 +85,9 @@ interface Problem {
 // ---------------------------------------------------------------------------------------------------------------------------
 // The lender's words used in the tests (all synthetic, all plain service text)
 // ---------------------------------------------------------------------------------------------------------------------------
+/** A plain sentence of exactly 200 characters: the longest hold note the table accepts (A11). */
+const HOLD_NOTE_200 = `${'Complaint closed after review. '.repeat(7).slice(0, 199)}.`;
+
 const POLICY_OK = {
   offsetsDays: [-3, 0, 1, 7],
   overdueWeekly: true,
@@ -2256,10 +2259,16 @@ describe.skipIf(!enabled)('lender reminders over HTTP', () => {
         422,
         'validation_failed',
       ]);
+      // The note is 10 to 200 characters in the contract, as in the table: a note outside it never reaches the database (A11).
+      for (const note of ['Short', HOLD_NOTE_200 + 'a', 'a'.repeat(1000)]) {
+        expect([
+          note.length,
+          ...outcome(await place(ids.aAdmin, loans.a4, { reason: 'legal', note })),
+        ]).toEqual([note.length, 422, 'validation_failed']);
+      }
       for (const note of [
         `Customer phone ${CANARY.phone} was noted for the file`,
         `See ${CANARY.link} for the case notes`,
-        'Short',
         `Special offer reward for ${CANARY.marker} customers`,
       ]) {
         refused(note);
@@ -2374,8 +2383,16 @@ describe.skipIf(!enabled)('lender reminders over HTTP', () => {
       });
       refused(`Reached ${CANARY.phone} again`);
       expect(outcome(bad)).toEqual([422, 'hold_invalid']);
+      // A note over 200 characters is refused in the contract (it would fail the table check), and the hold stays active (A11).
+      const tooLong = await post(
+        `/v1/lender/communication-holds/${art.holdA}/release`,
+        ids.aAdmin,
+        { note: HOLD_NOTE_200 + 'a' },
+      );
+      expect(outcome(tooLong)).toEqual([422, 'validation_failed']);
+      // Exactly 200 characters is the longest the table accepts.
       const res = await post(`/v1/lender/communication-holds/${art.holdA}/release`, ids.aAdmin, {
-        note: 'The complaint was closed by the lender',
+        note: HOLD_NOTE_200,
       });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ id: art.holdA, active: false });
@@ -2387,7 +2404,7 @@ describe.skipIf(!enabled)('lender reminders over HTTP', () => {
       )[0];
       expect(stored).toEqual({
         released_by: ids.aAdmin,
-        release_note: 'The complaint was closed by the lender',
+        release_note: HOLD_NOTE_200,
       });
       expect(
         outcome(await post(`/v1/lender/communication-holds/${art.holdA}/release`, ids.aAdmin, {})),
@@ -2413,7 +2430,7 @@ describe.skipIf(!enabled)('lender reminders over HTTP', () => {
           id: art.holdA,
           active: false,
           releasedBy: ids.aAdmin,
-          releaseNote: 'The complaint was closed by the lender',
+          releaseNote: HOLD_NOTE_200,
         },
       ]);
       expect(

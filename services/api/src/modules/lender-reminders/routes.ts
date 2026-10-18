@@ -847,7 +847,7 @@ export function lenderRemindersRoutes(_deps: Record<string, never>): RouteDefini
       operationId: 'placeLenderCommunicationHold',
       summary: 'Pause reminders for one loan',
       description:
-        'Needs reminder.policy.manage of the lender that owns the loan and a second factor. The reason is one of complaint, hardship, dispute, lender_instruction, borrower_request or legal; the optional note is checked as plain service text (hold_invalid, 422). The messages still planned for the loan are suppressed (hold); the borrower can still pay. One active hold per loan (hold_active, 409). `lenderId` is optional: the loan decides the lender, and when it is sent it must be that lender (otherwise 404). A loan of another lender, an unknown loan and a loan the caller has no permission over all answer 404.',
+        'Needs reminder.policy.manage of the lender that owns the loan and a second factor. The reason is one of complaint, hardship, dispute, lender_instruction, borrower_request or legal; the optional note is 10 to 200 characters (longer or shorter is validation_failed, 422) and is checked as plain service text (hold_invalid, 422). The messages still planned for the loan are suppressed (hold); the borrower can still pay. One active hold per loan (hold_active, 409). `lenderId` is optional: the loan decides the lender, and when it is sent it must be that lender (otherwise 404). A loan of another lender, an unknown loan and a loan the caller has no permission over all answer 404.',
       tags: ['Reminders (lender)'],
       auth: 'staff',
       idempotent: true,
@@ -881,7 +881,7 @@ export function lenderRemindersRoutes(_deps: Record<string, never>): RouteDefini
       operationId: 'releaseLenderCommunicationHold',
       summary: 'Release a hold',
       description:
-        'Needs reminder.policy.manage of the lender and a second factor. Messages suppressed during the hold stay suppressed; new ones are planned from the next planner run. Send {} when there is no note. A hold already released answers already_released (409); a hold of another lender or an unknown id answers 404.',
+        'Needs reminder.policy.manage of the lender and a second factor. Messages suppressed during the hold stay suppressed; new ones are planned from the next planner run. Send {} when there is no note; a note is 10 to 200 characters. A hold already released answers already_released (409); a hold of another lender or an unknown id answers 404.',
       tags: ['Reminders (lender)'],
       auth: 'staff',
       idempotent: true,
