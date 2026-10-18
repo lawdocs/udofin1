@@ -66,6 +66,20 @@ export function lpLenderFrom(memberships: readonly MembershipLike[]): string | u
   );
 }
 
+/**
+ * The permissions the person holds in the one lender the screens act for. A right in another organisation does not draw a
+ * form for this one (the API would refuse it). Nobody, or no lender, means no permission.
+ */
+export function lpPermissionsIn(
+  memberships: readonly MembershipLike[],
+  lenderId: string | undefined,
+): string[] {
+  if (lenderId === undefined) return [];
+  return memberships
+    .filter((m) => m.organizationId === lenderId)
+    .flatMap((m) => [...m.permissions]);
+}
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 export const lpIsUuid = (value: unknown): value is string =>

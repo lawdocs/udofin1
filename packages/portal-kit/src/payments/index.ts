@@ -6,6 +6,7 @@ export {
   lpIsUuid,
   lpKeepParams,
   lpLenderFrom,
+  lpPermissionsIn,
   lpLoadExceptionDetail,
   lpLoadExceptions,
   lpLoadMandateDebits,

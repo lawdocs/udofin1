@@ -60,6 +60,7 @@ import {
   lpLoadReconSummary,
   lpLoadSettlementItems,
   lpParseRupees,
+  lpPermissionsIn,
   lpQueryString,
   lpRunOperation,
   lpRupees,
@@ -525,6 +526,29 @@ describe('who and what', () => {
     ).toBe(uid(7));
     expect(lpLenderFrom([])).toBeUndefined();
   });
+
+  it('counts only the rights held in the lender the screens act for', () => {
+    const memberships = [
+      { organizationId: uid(6), organizationKind: 'lender', permissions: ['payment.read'] },
+      {
+        organizationId: uid(7),
+        organizationKind: 'lender',
+        permissions: ['payment.read', 'payment.configure', 'payment.reconcile'],
+      },
+    ];
+    // The first lender with a payment right is the one acted for; rights held elsewhere draw no form here.
+    const lender = lpLenderFrom(memberships);
+    expect(lender).toBe(uid(6));
+    expect(lpPermissionsIn(memberships, lender)).toEqual(['payment.read']);
+    expect(lpCapabilitiesFrom(lpPermissionsIn(memberships, lender))).toEqual({
+      read: true,
+      configure: false,
+      reconcile: false,
+    });
+    expect(lpPermissionsIn(memberships, uid(7))).toContain('payment.configure');
+    expect(lpPermissionsIn(memberships, undefined)).toEqual([]);
+    expect(lpPermissionsIn(memberships, uid(99))).toEqual([]);
+  });
 });
 
 describe('list queries', () => {
@@ -720,6 +744,26 @@ describe('operations: policies and settings', () => {
         minPartPrepaymentMinor: null,
         linkValidityMinutes: 1440,
       },
+    });
+  });
+
+  it('sends no minimum for a partial payment that is not accepted, whatever was typed', async () => {
+    const { api, calls } = recorder();
+    await lpRunOperation(
+      api,
+      form({
+        ...base,
+        allowPartialPayments: 'false',
+        minPartialAmount: '123',
+        allowPartPrepayment: 'true',
+        minPartPrepayment: '77',
+      }),
+    );
+    expect(calls[0]?.body).toMatchObject({
+      allowPartialPayments: false,
+      minPartialAmountMinor: null,
+      allowPartPrepayment: true,
+      minPartPrepaymentMinor: 7700,
     });
   });
 
@@ -1785,6 +1829,28 @@ describe('reconciliation', () => {
     expect(screen.getByRole('link', { name: 'Show older entries' }).getAttribute('href')).toBe(
       `/reconciliation/settlements/${uid(60)}?cursor=next`,
     );
+  });
+
+  it('raises the critical banner on a batch reported to another account, and only then', () => {
+    const show = (destinationOk: boolean | null) =>
+      render(
+        <LpSettlementBatchView
+          id={uid(60)}
+          batch={ok(batch({ destinationOk }))}
+          items={ok({ items: [], nextCursor: null })}
+          keep={{}}
+        />,
+      );
+    const wrong = show(false);
+    const heading = screen.getByRole('heading', { name: /^Critical:/ });
+    expect(heading.textContent).toContain('not your verified account');
+    expect(text(wrong.container)).toContain('Look at the exception queue');
+    wrong.unmount();
+    for (const destinationOk of [true, null]) {
+      const fine = show(destinationOk);
+      expect(screen.queryByRole('heading', { name: /^Critical:/ })).toBeNull();
+      fine.unmount();
+    }
   });
 
   it('says so when no settlement has been reported', () => {

@@ -4,6 +4,7 @@ import {
   lpCapabilitiesFrom,
   lpKeepParams,
   lpLenderFrom,
+  lpPermissionsIn,
   type LpParams,
   type LpResult,
   type LpViewContext,
@@ -26,13 +27,14 @@ export async function paymentsPage(searchParams: Promise<LpParams>) {
     baseUrl: portalAuth().apiBaseUrl,
     getAccessToken: () => Promise.resolve(session.accessToken),
   });
-  const permissions = session.me.memberships.flatMap((m) => m.permissions);
+  // The lender the screens act for, and what the person may do in that lender (not in any other organisation).
+  const lenderId = lpLenderFrom(session.me.memberships);
   return {
     me: session.me,
     api,
     query,
-    caps: lpCapabilitiesFrom(permissions),
-    lenderId: lpLenderFrom(session.me.memberships),
+    caps: lpCapabilitiesFrom(lpPermissionsIn(session.me.memberships, lenderId)),
+    lenderId,
     userId: session.me.userId,
   } as const;
 }
