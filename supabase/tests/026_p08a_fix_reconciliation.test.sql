@@ -3,7 +3,7 @@
 -- without it). Synthetic data only (labelled SAMPLE). Error codes are reported as SQLSTATE|hint.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(149);
+select plan(150);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -633,10 +633,12 @@ values (pg_temp.lx(), pg_temp.got('cfg')::uuid, 'mock_gateway', 'B-OLD', pg_temp
 insert into payments.settlement_items (batch_id, lender_org_id, provider_payment_ref, gross_minor, fee_minor, tax_minor, net_minor, parts_mismatch)
 select id, lender_org_id, 'PAY-10', 475000, 0, 0, 475000, false from payments.settlement_batches where batch_ref = 'B-LEGACY';
 -- Two more rows written without the function (as a row of an older version, or a direct write, would be): no stated destination, and a tie flag of true.
-insert into payments.settlement_batches (lender_org_id, config_id, provider, batch_ref, settlement_ref, period_from, period_to, destination_masked_ref, destination_ok, gross_minor, fee_minor, tax_minor, net_minor,
+select is(pg_temp.err(format($i$insert into payments.settlement_batches (lender_org_id, config_id, provider, batch_ref, settlement_ref, period_from, period_to, destination_masked_ref, destination_ok, gross_minor, fee_minor, tax_minor, net_minor,
                                          parts_mismatch, item_count, content_sha256, report_date, items_total_mismatch)
-values (pg_temp.lx(), pg_temp.got('cfg')::uuid, 'mock_gateway', 'B-NULLD', pg_temp.utr(97), pg_temp.d() - 4, pg_temp.d() - 4, null, null, 1000, 0, 0, 1000, false, 0, pg_temp.sha('b-nulld'), pg_temp.d(), false),
-       (pg_temp.lx(), pg_temp.got('cfg')::uuid, 'mock_gateway', 'B-BADT', pg_temp.utr(98), pg_temp.d() - 4, pg_temp.d() - 4, 'XXXXXX1111', true, 1000, 0, 0, 1000, false, 0, pg_temp.sha('b-badt'), pg_temp.d(), true);
+  values (%1$L, %2$L, 'mock_gateway', 'B-NULLD', %3$L, %5$L, %5$L, null, null, 1000, 0, 0, 1000, false, 0, %6$L, %7$L, false),
+         (%1$L, %2$L, 'mock_gateway', 'B-BADT', %4$L, %5$L, %5$L, 'XXXXXX1111', true, 1000, 0, 0, 1000, false, 0, %8$L, %7$L, true)$i$,
+  pg_temp.lx(), pg_temp.got('cfg'), pg_temp.utr(97), pg_temp.utr(98), pg_temp.d() - 4, pg_temp.sha('b-nulld'), pg_temp.d(), pg_temp.sha('b-badt'))), 'ok',
+  'fixture: a batch with no stated destination and a batch flagged as not tied, written without the function');
 select pg_temp.as_user(pg_temp.u(3));
 select pg_temp.credits('fde10000-0000-4000-8000-000000000001', format('[{"valueDate":"%1$s","amountMinor":"123456","utr":"%2$s"},{"valueDate":"%1$s","amountMinor":"475000","utr":"%3$s"}]', pg_temp.d() - 3, pg_temp.utr(95), pg_temp.utr(94)));
 select pg_temp.as_system();
