@@ -518,7 +518,7 @@ describe('the answer to staging a file', () => {
 // The allow-listed operations
 // -------------------------------------------------------------------------------------------------------------------
 const PDF = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34, 0x0a]); // "%PDF-1.4\n"
-const pdfFile = (bytes: Uint8Array = PDF) =>
+const pdfFile = (bytes: Uint8Array<ArrayBuffer> = PDF) =>
   new File([bytes], 'x.pdf', { type: 'application/pdf' });
 const csvFile = (text: string) => new File([text], 'x.csv', { type: 'text/csv' });
 const base = { key: KEY };

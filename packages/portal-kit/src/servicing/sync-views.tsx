@@ -183,7 +183,7 @@ function SyncCard({ item, ctx }: { item: LsSyncStatus['items'][number]; ctx: Ser
             <dd>{formatCount(c.stalenessThresholdMinutes)} minutes</dd>
           </div>
           <div>
-            <dt>Last successful import</dt>
+            <dt>Last report or file applied</dt>
             <dd>{c.lastSuccessAt ? formatIst(c.lastSuccessAt) : 'None yet'}</dd>
           </div>
           <div>
