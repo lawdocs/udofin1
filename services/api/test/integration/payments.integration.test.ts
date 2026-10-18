@@ -420,13 +420,17 @@ describe.skipIf(!enabled)('borrower payments and mandates over HTTP', () => {
       // nothing ever copies a stored settlement-account label out. The database now refuses a number in that column by design
       // (trigger unsafe_text_acct), so the screen is switched off for THIS insert only and on again straight after (both inside the
       // fixture transaction, so no other session ever sees the trigger off). No real path can write such a label.
-      await c.query('alter table tenancy.lender_settlement_accounts disable trigger unsafe_text_acct');
+      await c.query(
+        'alter table tenancy.lender_settlement_accounts disable trigger unsafe_text_acct',
+      );
       await c.query(
         `insert into tenancy.lender_settlement_accounts (id, lender_org_id, label, bank_name, masked_account_ref, status, registry_id, verified_by, verified_at)
            values ($1, $2, $3, $4, 'XXXXXX0000', 'verified', $5, $6, now())`,
         [settlement, id, `SAMPLE ${CANARY.account}`, CANARY.bankName, registry, maker],
       );
-      await c.query('alter table tenancy.lender_settlement_accounts enable trigger unsafe_text_acct');
+      await c.query(
+        'alter table tenancy.lender_settlement_accounts enable trigger unsafe_text_acct',
+      );
       await c.query(
         `insert into payments.provider_register (provider, display_name, kind, status, authorisation_evidence_ref)
            values ($1, 'SAMPLE provider (fixture)', 'payment_and_mandate', 'approved', 'SAMPLE-AUTH-EVIDENCE-1') on conflict (provider) do nothing`,
