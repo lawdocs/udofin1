@@ -429,9 +429,9 @@ select throws_ok($$update payments.payment_intents set amount_minor = 1 where id
 select pg_temp.as_system();
 select pg_temp.as_owner();
 select throws_ok(
-  $$insert into payments.provider_events (provider, provider_event_id, event_type, payload_sha256, signature_verified)
-    values ('mock_gateway', 'evt_1', 'payment.captured', repeat('b', 64), true)$$,
-  '23505', null, 'a replayed provider webhook is rejected as a duplicate');
+  $$insert into payments.provider_events (provider, provider_event_id, event_type, lender_org_id, payload_sha256, signature_verified)
+    values ('mock_gateway', 'evt_1', 'payment.captured', 'a1000000-0000-4000-8000-000000000000', repeat('b', 64), true)$$,
+  '23505', null, 'a replayed provider webhook of the same lender is rejected as a duplicate (event ids are unique per provider and lender)');
 select pg_temp.as_system();
 
 -- ============================== Append-only records ==========================================
