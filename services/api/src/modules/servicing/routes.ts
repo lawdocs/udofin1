@@ -64,6 +64,16 @@ function bytes(value: string): number {
 
 const notFound = () => new ApiError(404, 'not_found', 'Not Found');
 
+/**
+ * The API documents an Idempotency-Key of 16 to 128 characters; servicing.request_document takes 8 to 100. A key that is too long
+ * for the function is handed on as its SHA-256 (64 hex characters), the same key always giving the same digest, so a retry still
+ * finds its request and the documented range never answers 422 for its length alone. Shorter keys are passed unchanged.
+ */
+const databaseKey = (key: string | undefined): string | null => {
+  if (key === undefined) return null;
+  return key.length <= 100 ? key : createHash('sha256').update(key).digest('hex');
+};
+
 const first = <T>(rows: T[]): T => {
   const row = rows[0];
   if (row === undefined) throw new Error('database function returned nothing');
@@ -458,7 +468,7 @@ export function servicingRoutes(deps: { documents?: DocumentStore }): RouteDefin
   ) {
     const created = await tx.query<{ id: string }>(
       'select servicing.request_document($1::uuid, $2, $3, $4::date, $5::date) as id',
-      [loanId, kind, key ?? null, period.from ?? null, period.to ?? null],
+      [loanId, kind, databaseKey(key), period.from ?? null, period.to ?? null],
     );
     return readRequest(tx, loanId, first(created.rows).id);
   }
@@ -626,8 +636,10 @@ export function servicingRoutes(deps: { documents?: DocumentStore }): RouteDefin
         const meta = DbOpenedDocument.parse(first(opened.rows).r);
         // A document of another loan (even the caller's own) is not found on this path. Throwing rolls the access record back.
         if (meta.loan_account_id !== params.id) throw notFound();
+        // Fail closed, and leave no access record for a read that did not deliver (throwing rolls the record back). Bytes that
+        // are gone answer 404 like every other document route; bytes that were altered are a server fault (500, logged, no detail).
         const object = await store.get(meta.storage_key);
-        if (!object) throw new Error('stored document is missing');
+        if (!object) throw notFound();
         const actual = createHash('sha256').update(object.bytes).digest('hex');
         if (actual !== meta.sha256 || object.bytes.length !== meta.size_bytes)
           throw new Error('stored document does not match its recorded checksum');
