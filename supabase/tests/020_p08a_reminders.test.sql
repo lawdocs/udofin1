@@ -186,9 +186,9 @@ select ok((select bool_and(not has_table_privilege('authenticated', t, 'insert')
 select ok((select bool_and(not has_function_privilege('anon', f, 'execute'))
            from unnest(array['servicing.draft_reminder_policy(uuid, integer[], boolean, text[], time, time, integer)', 'servicing.approve_reminder_policy(uuid)',
                              'servicing.plan_reminders(interval, integer)', 'servicing.claim_due_reminders(integer, interval)', 'servicing.my_reminders()',
-                             'servicing.record_reminder_attempt(uuid, text, text, text, text)', 'servicing.place_communication_hold(uuid, text, text)']) f), 'anon can execute none of the reminder functions');
+                             'servicing.record_reminder_attempt(uuid, text, text, text, text, integer)', 'servicing.place_communication_hold(uuid, text, text)']) f), 'anon can execute none of the reminder functions');
 select ok((select bool_and(not has_function_privilege('authenticated', f, 'execute'))
-           from unnest(array['servicing.plan_reminders(interval, integer)', 'servicing.claim_due_reminders(integer, interval)', 'servicing.record_reminder_attempt(uuid, text, text, text, text)',
+           from unnest(array['servicing.plan_reminders(interval, integer)', 'servicing.claim_due_reminders(integer, interval)', 'servicing.record_reminder_attempt(uuid, text, text, text, text, integer)',
                              'servicing.suppress_reminders_for_loan(uuid, text)']) f), 'a signed-in user cannot run the system functions');
 select ok((select bool_and(not has_function_privilege('service_role', f, 'execute'))
            from unnest(array['servicing.draft_reminder_policy(uuid, integer[], boolean, text[], time, time, integer)', 'servicing.approve_reminder_template(uuid)',
@@ -551,9 +551,9 @@ from servicing.reminders r cross join (values ('in_app'), ('push')) c (ch)
 where r.loan_account_id = pg_temp.lid(2) and r.offset_days = 10 and r.channel = 'in_app';
 update servicing.reminders set claimed_until = now() - interval '1 minute' where loan_account_id = pg_temp.lid(2) and offset_days = 10 and channel = 'push';
 select pg_temp.as_system();
-select is((select count(*) from servicing.claim_due_reminders(100)), 2::bigint, 'the new messages are claimed; the retried one is not (its sentence was retired)');
-select is((select (status, suppress_reason)::text from servicing.reminders where loan_account_id = pg_temp.lid(2) and offset_days = 10 and channel = 'push'), '(suppressed,penal_text_missing)',
-  'a claimed message whose approved sentence was retired is stopped, not sent with the old text');
+select is((select count(*) from servicing.claim_due_reminders(100)), 3::bigint, 'the new messages are claimed, and so is the retried one (re-frozen below with the lender''s newer sentence)');
+select is((select (status, suppress_reason, penal_text_id = pg_temp.got('pen2')::uuid, language_used)::text from servicing.reminders where loan_account_id = pg_temp.lid(2) and offset_days = 10 and channel = 'push'), '(claimed,,t,hi)',
+  'a claimed message whose approved sentence was replaced by a newer approved one is not sent with the old text and is not stopped: it is frozen again with the current sentence (migration 20261018000923, M36)');
 select is((select (language_used, language_fallback, penal_text_id = pg_temp.got('pen2')::uuid)::text from servicing.reminders where loan_account_id = pg_temp.lid(2) and offset_days = 17 and channel = 'in_app'), '(hi,f,t)',
   'with a Hindi sentence available the Hindi wording is used');
 select is(servicing.record_reminder_attempt(id, 'accepted', 'send'), 'accepted', 'the Hindi in-app message is accepted') from servicing.reminders where loan_account_id = pg_temp.lid(2) and offset_days = 17 and channel = 'in_app';
@@ -614,7 +614,7 @@ select is((select count(*) > 0 from servicing.reminder_deliveries), true, 'and i
 select is((select count(*) from servicing.reminder_policies), 3::bigint, 'and its policy versions');
 select is((select count(*) > 0 from servicing.reminder_summary(pg_temp.lx())), true, 'the summary counts the lender''s reminders by status');
 select is((select count(*) from servicing.reminder_summary(pg_temp.ly())), 0::bigint, 'another lender''s summary is empty');
-select is((select sum(n)::bigint from servicing.reminder_summary(pg_temp.lx()) where suppress_reason = 'penal_text_missing'), 3::bigint, 'the summary shows how many messages the missing penal-charge text stopped');
+select is((select sum(n)::bigint from servicing.reminder_summary(pg_temp.lx()) where suppress_reason = 'penal_text_missing'), 2::bigint, 'the summary shows how many messages the missing penal-charge text stopped (the two first overdue messages; the retried one was re-frozen with the newer sentence)');
 select pg_temp.as_user(pg_temp.u(6));
 select is((select count(*) from servicing.reminders where lender_org_id = pg_temp.lx()), 0::bigint, 'lender Y''s user sees none of lender X''s reminders');
 select is((select count(*) from servicing.reminder_templates where lender_org_id = pg_temp.lx()), 0::bigint, 'nor its wording');
