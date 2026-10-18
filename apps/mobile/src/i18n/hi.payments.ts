@@ -10,7 +10,7 @@ export const hiPayments: Record<keyof typeof enPayments, string> = {
   'pay.intro':
     'आप यहाँ तय करते हैं कि क्या चुकाना है और उसकी पुष्टि करते हैं। भुगतान आप भुगतान प्रदाता के पेज पर करते हैं, इस ऐप में नहीं। राशि {lender} तय करता है।',
   'pay.lender': 'ऋणदाता: {lender}',
-  'pay.destination': '{lender} के खाते {account} में भुगतान',
+  'pay.destination': 'इस ऋण के भुगतान {lender} के खाते {account} में जाते हैं',
   'pay.reportedAsOf': '{lender} द्वारा {date} को बताया गया',
   'pay.stale':
     'ये आँकड़े पुराने हैं। {lender} ने इन्हें आख़िरी बार {date} को बताया था। जब तक {lender} नए आँकड़े नहीं बताता, इन पर निर्भर भुगतान शुरू नहीं किए जा सकते।',

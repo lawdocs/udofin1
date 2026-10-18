@@ -472,7 +472,7 @@ describe('payment options view', () => {
   it('shows the lender, the masked destination and whose figure it is', () => {
     const v = payOptionsView(options({ purposes: [installment] }), enCtx);
     expect(v.lender).toBe(LENDER);
-    expect(text(v.destination)).toBe(`Paid to ${LENDER}'s account XXXXXX1234`);
+    expect(text(v.destination)).toBe(`Payments for this loan go to ${LENDER}'s account XXXXXX1234`);
     expect(text(v.reported)).toContain(`As reported by ${LENDER} on`);
     expect(text(v.reported)).toContain('IST');
     expect(v.notice).toBeNull();
@@ -1026,13 +1026,38 @@ describe('payment status view', () => {
     );
     expect(lines(v)).toContain('Amount: ₹25,000');
     expect(lines(v)).toContain('For: Overdue amount');
-    expect(lines(v)).toContain(`Paid to ${LENDER}'s account XXXXXX1234`);
+    expect(lines(v)).toContain(`Payments for this loan go to ${LENDER}'s account XXXXXX1234`);
     const hidden = paymentStatusView(
       payment({ destinationMaskedRef: '123456789012' }),
       state,
       enCtx,
     );
     expect(lines(hidden).join(' ')).not.toContain('123456789012');
+  });
+
+  it('words the destination the same, and never as paid, at every stage and status in both languages', () => {
+    for (const stage of BP_PAYMENT_STAGES) {
+      for (const status of BP_PAYMENT_STATUSES) {
+        for (const ctx of [enCtx, hiCtx]) {
+          const v = paymentStatusView(payment({ stage, status }), state, ctx);
+          const destination = v.lines
+            .map((l) => text(l, ctx))
+            .find((l) => l.includes('XXXXXX1234'));
+          expect(destination, `${stage}/${status}`).toBeDefined();
+          expect(destination, `${stage}/${status}`).not.toMatch(/\bpaid\b|success|सफल|भुगतान हो/i);
+        }
+      }
+    }
+    // The wording itself: a statement about where payments go, not about this payment.
+    const cancelled = paymentStatusView(payment({ status: 'cancelled' }), state, enCtx);
+    expect(lines(cancelled)).toContain(
+      `Payments for this loan go to ${LENDER}'s account XXXXXX1234`,
+    );
+    expect(lines(cancelled).join(' ')).not.toMatch(/\bpaid to\b/i);
+    const before = payOptionsView(options({ purposes: [installment] }), hiCtx);
+    expect(text(before.destination, hiCtx)).toBe(
+      `इस ऋण के भुगतान ${LENDER} के खाते XXXXXX1234 में जाते हैं`,
+    );
   });
 
   it('knows when a payment is waiting', () => {
@@ -1794,14 +1819,14 @@ describe('payments and mandates wording', () => {
     for (const key of keys) expect(enPayments[key], key).not.toMatch(banned);
   });
 
-  it('never says paid or successful about a stage, status or link', () => {
+  it('never says paid or successful in any pay.* or mandate.* key, in either language', () => {
+    // "cannot be paid" says that paying is not possible; it is the only use of the word and is set aside before the scan.
+    const modalNegative = /\bcannot be paid\b/gi;
+    const hindiClaim =
+      /भुगतान (हो गया|हो चुका|कर दिया|किया जा चुका)|चुका दिया|चुकाया (गया|जा चुका)|सफल/;
     for (const key of keys) {
-      if (
-        /^pay\.(stage|explain|status|link|wait)\./.test(key) ||
-        /^mandate\.(status|explain|link|wait)\./.test(key)
-      ) {
-        expect(enPayments[key], key).not.toMatch(/\bpaid\b|success/i);
-      }
+      expect(enPayments[key].replace(modalNegative, ''), key).not.toMatch(/\bpaid\b|success/i);
+      expect(hiPayments[key], key).not.toMatch(hindiClaim);
     }
   });
 

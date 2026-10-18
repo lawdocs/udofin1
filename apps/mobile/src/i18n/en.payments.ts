@@ -11,7 +11,9 @@ export const enPayments = {
   'pay.intro':
     "You choose what to pay and confirm it here. You then pay on the payment provider's page, not in this app. {lender} sets the amounts.",
   'pay.lender': 'Lender: {lender}',
-  'pay.destination': "Paid to {lender}'s account {account}",
+  // Where payments for this loan go. It is shown before anything is paid and under cancelled, failed and expired payments too,
+  // so it must not read as a statement that this payment was made.
+  'pay.destination': "Payments for this loan go to {lender}'s account {account}",
   'pay.reportedAsOf': 'As reported by {lender} on {date}',
   'pay.stale':
     'These figures are out of date. {lender} last reported them on {date}. Payments that depend on them cannot be started until {lender} reports again.',
