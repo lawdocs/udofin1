@@ -2,7 +2,7 @@ import { createApiClient } from '@udofin/auth-client';
 import { flashIsDone, paymentSetupGrants } from '@udofin/portal-kit';
 import { requireSession } from '@/components/session-gate';
 import { portalAuth } from '@/lib/auth';
-import { successNotice } from '@/lib/flash';
+import { successNotice } from '@/app/_flash';
 
 /**
  * What every payment-setup page needs: the signed-in person (or the explanation to show instead), an API client that speaks as

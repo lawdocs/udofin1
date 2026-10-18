@@ -7,7 +7,7 @@ import {
   type Flash,
 } from '@udofin/portal-kit';
 import { cookies } from 'next/headers';
-import { portalAuth } from './auth';
+import { portalAuth } from '@/lib/auth';
 
 /** Server-only. Whether the portal's cookies are Secure: the same answer as the session cookies (they carry the `__Host-` prefix). */
 const secureCookies = (): boolean => portalAuth().handlers.names.access.startsWith('__Host-');

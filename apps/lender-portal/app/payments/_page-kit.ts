@@ -15,7 +15,7 @@ import {
 import { connection } from 'next/server';
 import { requireSession } from '@/components/session-gate';
 import { portalAuth } from '@/lib/auth';
-import { successNotice } from '@/lib/flash';
+import { successNotice } from '@/app/_flash';
 import { paymentsAction } from './actions';
 
 /**

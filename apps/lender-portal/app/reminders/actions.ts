@@ -9,7 +9,7 @@ import {
 } from '@udofin/portal-kit';
 import { redirect } from 'next/navigation';
 import { currentSession, portalAuth } from '@/lib/auth';
-import { rememberSuccess } from '@/lib/flash';
+import { rememberSuccess } from '@/app/_flash';
 
 async function apiFor() {
   const session = await currentSession();

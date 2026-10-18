@@ -8,7 +8,7 @@ import {
 } from '@udofin/portal-kit';
 import { redirect } from 'next/navigation';
 import { currentSession, portalAuth } from '@/lib/auth';
-import { rememberSuccess } from '@/lib/flash';
+import { rememberSuccess } from '@/app/_flash';
 
 /**
  * Stages one import file (a preview only: nothing is applied). This action serves that one operation and no other, whatever

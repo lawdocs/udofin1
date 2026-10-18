@@ -9,7 +9,7 @@ import {
 } from '@udofin/portal-kit';
 import { redirect } from 'next/navigation';
 import { currentSession, portalAuth } from '@/lib/auth';
-import { rememberSuccess } from '@/lib/flash';
+import { rememberSuccess } from '@/app/_flash';
 
 /**
  * The single entry point for the lender servicing forms. A form names an allow-listed operation (see

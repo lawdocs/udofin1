@@ -11,7 +11,7 @@ import {
 } from '@udofin/portal-kit';
 import { connection } from 'next/server';
 import { PageFrame } from '@/components/page-frame';
-import { successNotice } from '@/lib/flash';
+import { successNotice } from '@/app/_flash';
 import { platformAction, registerAccountAction } from '../actions';
 import { platformSession } from '../platform-session';
 

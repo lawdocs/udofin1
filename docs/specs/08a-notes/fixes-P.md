@@ -43,7 +43,7 @@ The built lender portal (production build of this branch) was started with a fak
 
 - **Earlier pages with the same pattern.** The onboarding, products, transactions and applications pages of both portals (before
   Phase 08a) still read `done=1` from the address (`apps/*/app/onboarding/actions.ts` and nine pages). They were not part of the
-  finding. The same mechanism (`rememberSuccess` / `successNotice` in `apps/*/lib/flash.ts`) would fix them.
+  finding. The same mechanism (`rememberSuccess` / `successNotice` in `apps/*/app/_flash.ts`) would fix them.
 - **Other lists stay across lenders.** The payments, mandates, debits, settlement and exception lists of the lender portal still
   list rows of every lender the person belongs to (each row carries its lender); only the policy and settings pages, the run list
   and the bank-credit accounts were narrowed to one lender, as the finding asked.
