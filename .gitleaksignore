@@ -13,3 +13,7 @@ c75bd76efe9b9e9c33c3aeb7ea6e4c68f7098d6b:services/api/test/lender-accounts.test.
 262c56b299a205a396ac165c9893f2e4c2c0b540:services/api/test/integration/lender-accounts.integration.test.ts:stripe-access-token:1533
 # A fifteen-character Idempotency-Key fixture ("too short" test) that the generic key rule flagged; the value was replaced in the next commit.
 d8c9331493c5af3401a73ebbb92aca22a573b319:services/api/test/integration/payments.integration.test.ts:generic-api-key:954
+# Mobile payments tests (Phase 08a, builder u2): attempt-key fixtures such as 'a-key-one-1234567890' passed to the draft reducers; the generic key rule read the word "key". Not credentials; each fingerprint pins commit, file, rule and line.
+0a85b2715d8227b617587b0c5257a742b4dc47d9:apps/mobile/test/payments.test.ts:generic-api-key:815
+0a85b2715d8227b617587b0c5257a742b4dc47d9:apps/mobile/test/payments.test.ts:generic-api-key:1231
+0a85b2715d8227b617587b0c5257a742b4dc47d9:apps/mobile/test/payments.test.ts:generic-api-key:1235
