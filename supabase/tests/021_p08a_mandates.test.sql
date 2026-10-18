@@ -104,7 +104,7 @@ end
 $fn$;
 
 -- A delivery as the callback receiver hands it over (verified by the verifier).
-create function pg_temp.at(m integer) returns text language sql as $fn$ select to_char((clock_timestamp() + make_interval(mins => m)) at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') $fn$;
+create function pg_temp.at(m integer) returns text language sql as $fn$ select to_char((clock_timestamp() + make_interval(secs => m * 20)) at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') $fn$;
 create function pg_temp.dlv(p_delivery text, p_event text, p_kind text, p_status text, p_obj text, p_order text default null, p_amount bigint default null,
   p_occurred text default '2026-10-15T10:00:00Z', p_provider text default 'mock_gateway', p_merchant text default null) returns jsonb language sql as $fn$
   select jsonb_strip_nulls(jsonb_build_object(
@@ -478,7 +478,7 @@ select is(pg_temp.deliver(pg_temp.lx(), 'SAMPLE-D-022', 'SAMPLE-E-022', 'mandate
 select pg_temp.as_user(pg_temp.u(1));
 select is(pg_temp.err($$select payments.plan_mandate_debits()$$), '42501|', 'a borrower cannot run the debit planner');
 select pg_temp.as_system();
-select is(payments.plan_mandate_debits() - 'skipped_over_max', jsonb_build_object('planned', 2, 'notices_late', 0),
+select is(payments.plan_mandate_debits() - 'skipped_over_max' - 'cancelled_paid' - 'cancelled_restated', jsonb_build_object('planned', 2, 'notices_late', 0),
   'the planner plans the one installment that falls due within ten days on mandates 6 and 7 (mandate 4''s maximum is one rupee, so nothing is planned for it)');
 select pg_temp.as_owner();
 select is((select (amount_minor, scheduled_on = pg_temp.d() + 3, planned, installment_seq, status)::text from payments.mandate_debits where mandate_id = pg_temp.mid(6) and planned), '(475000,t,t,1,scheduled)',
@@ -526,11 +526,16 @@ select is(payments.record_pre_debit_notice(pg_temp.notice(pg_temp.mid(7), 1), 'n
 select pg_temp.as_owner();
 select is((select (status, sent_at is null)::text from payments.pre_debit_notices where id = pg_temp.notice(pg_temp.mid(7), 1)), '(late,t)', 'it is marked late (never "sent")');
 select is(pg_temp.exc('mandate_notice_late'), 1::bigint, 'and the lender is told that a debit would come without its notice');
--- An installment that falls due too soon for the full lead time: its notice is late from the start.
+-- An installment that falls due too soon for the full lead time: its notice is late from the start. The lender's newer report names it as the next
+-- one due (an installment due BEFORE the reported next due date would be shown as already paid and is not planned: review fix A53).
 insert into servicing.schedule_installments (snapshot_id, lender_org_id, seq, due_date, principal_minor, interest_minor)
 select s.id, s.lender_org_id, 4, pg_temp.d() + 2, 300000, 50000 from servicing.schedule_snapshots s where s.loan_account_id = pg_temp.lid(3);
+insert into servicing.balance_snapshots (lender_org_id, loan_account_id, version, status, outstanding_principal_minor, total_overdue_minor, next_due_on, next_due_minor, days_past_due,
+  source_system, source_record_id, reported_as_of, content_sha256)
+select l.lender_org_id, l.id, 2, 'active', 4000000, 0, pg_temp.d() + 2, 350000, 0, 'file_import', 'SRC2-' || l.lms_loan_ref, clock_timestamp(), pg_temp.sha('snap2-' || l.lms_loan_ref)
+from servicing.loan_accounts l where l.id = pg_temp.lid(3);
 select pg_temp.as_system();
-select is(payments.plan_mandate_debits() - 'skipped_over_max', jsonb_build_object('planned', 1, 'notices_late', 1), 'a debit planned inside its lead time gets a notice marked late at once');
+select is(payments.plan_mandate_debits() - 'skipped_over_max' - 'cancelled_paid' - 'cancelled_restated', jsonb_build_object('planned', 1, 'notices_late', 1), 'a debit planned inside its lead time gets a notice marked late at once');
 select pg_temp.as_owner();
 select is(pg_temp.exc('mandate_notice_late'), 2::bigint, 'with an exception of its own');
 select is((select (status, notice_due_at < clock_timestamp())::text from payments.pre_debit_notices where id = pg_temp.notice(pg_temp.mid(7), 4)), '(late,t)', 'the late notice is due immediately');
