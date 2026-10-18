@@ -573,6 +573,12 @@ export function documentContentProblem(
   return null;
 }
 
+/** What to tell the borrower after the device's PDF viewer was asked to show a file: nothing when it was shown. */
+export function openOutcomeKey(outcome: 'opened' | 'no_viewer' | 'failed'): MessageKey | null {
+  if (outcome === 'opened') return null;
+  return outcome === 'no_viewer' ? 'loans.doc.noViewer' : 'loans.doc.openFailed';
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // Closure
 // ---------------------------------------------------------------------------------------------------------------------

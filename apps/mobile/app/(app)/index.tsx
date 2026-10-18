@@ -2,6 +2,7 @@ import { useRouter } from 'expo-router';
 import { useBorrower } from '../../src/borrower/BorrowerProvider';
 import { errorKey } from '../../src/borrower/errors';
 import { nextStep } from '../../src/borrower/journey';
+import { MyLoansEntry } from '../../src/borrower/MyLoansEntry';
 import { useI18n } from '../../src/i18n/I18nProvider';
 import {
   Banner,
@@ -70,6 +71,7 @@ export default function HomeScreen() {
           <Button title={t('home.myRequests')} secondary onPress={() => router.push('/requests')} />
         </Card>
       ) : null}
+      <MyLoansEntry />
       <Banner tone="info">{t('home.noKyc')}</Banner>
     </ScrollScreen>
   );
