@@ -3,7 +3,7 @@
 -- negative controls that say so. Synthetic data only (labelled SAMPLE). Error codes are reported as SQLSTATE|hint.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(228);
+select plan(229);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -398,7 +398,7 @@ select pg_temp.as_owner();
 select pg_temp.mk_mandate(pg_temp.mid(12), pg_temp.lid(12), 'active', 'SAMPLE-PM-S');
 select pg_temp.as_system();
 select payments.plan_mandate_debits(interval '40 days');
-select is((select count(*) from payments.mandate_debits where mandate_id = pg_temp.mid(12) and planned), 2::bigint, 'a STALE report (even one saying the next due date is in 40 days) revises and skips nothing');
+select is((select count(*) from payments.mandate_debits where mandate_id = pg_temp.mid(12) and planned), 2::bigint, 'CONTROL: a STALE report (even one saying the next due date is in 40 days) revises and skips nothing');
 select pg_temp.as_owner();
 select pg_temp.mk_mandate(pg_temp.mid(13), pg_temp.lid(13), 'active', 'SAMPLE-PM-P');
 insert into servicing.balance_snapshots (lender_org_id, loan_account_id, version, status, outstanding_principal_minor, total_overdue_minor, next_due_on, next_due_minor, days_past_due,
@@ -617,6 +617,7 @@ select is(pg_temp.mstatus(pg_temp.mid(20)), 'cancelled', 'mandate 20 was cancell
 select is(payments.record_mandate_handoff(pg_temp.mid(20), 'handoff', 'SAMPLE-PM-LATE', null), 'cancelled', 'the provider''s late answer names the mandate''s state');
 select is((select provider_mandate_ref from payments.mandates where id = pg_temp.mid(20)), 'SAMPLE-PM-LATE', 'the provider''s reference is stored, so it can be looked up and matched');
 select is(pg_temp.mexc(pg_temp.mid(20), 'mandate_unresolved'), 1::bigint, 'and the platform is told that the provider holds a registration Udofin closed');
+select is(pg_temp.outbox('mandate.cancel:' || pg_temp.mid(20)::text), 1::bigint, 'and the cancellation the borrower asked for is queued for the provider now that the reference exists');
 select is(payments.record_mandate_handoff(pg_temp.mid(20), 'handoff', 'SAMPLE-PM-LATE', null), 'cancelled', 'a repeat of the same answer changes nothing');
 select is(pg_temp.mexc(pg_temp.mid(20), 'mandate_unresolved'), 1::bigint, 'and raises nothing more');
 select is(pg_temp.deliver(pg_temp.lx(), 'SAMPLE-D-501', 'SAMPLE-E-501', 'mandate', 'active', 'SAMPLE-PM-LATE', null, null, pg_temp.at(1)), 'exception', 'a later "active" event for that reference is correlated and flagged, not lost as unmatched');
@@ -713,6 +714,7 @@ select is(pg_temp.mexc(pg_temp.mid(19), 'mandate_status_conflict'), 1::bigint, '
 select is(pg_temp.deliver(pg_temp.lx(), 'SAMPLE-D-602', 'SAMPLE-E-602', 'mandate', 'active', 'SAMPLE-PM-J', null, null, pg_temp.at(1)), 'applied', 'the next genuine event is applied (the mandate is not frozen)');
 select is(pg_temp.deliver(pg_temp.lx(), 'SAMPLE-D-603', 'SAMPLE-E-603', 'mandate', 'revoked', 'SAMPLE-PM-J', null, null, pg_temp.at(2)), 'applied', 'including a revoke');
 select is(pg_temp.mstatus(pg_temp.mid(19)), 'revoked', 'which the mandate follows');
+select pg_temp.free(pg_temp.mid(19));
 -- A lookup with a time in the future is bounded in the same way.
 select pg_temp.as_owner();
 select pg_temp.mk_mandate(pg_temp.mid(30), pg_temp.lid(10), 'active', 'SAMPLE-PM-J3');

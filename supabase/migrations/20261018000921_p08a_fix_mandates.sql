@@ -137,6 +137,10 @@ $$;
 revoke all on function private.check_mandate_debit_consistency() from public;
 create trigger consistency before insert or update on payments.mandate_debits
   for each row execute function private.check_mandate_debit_consistency();
+comment on function private.check_mandate_debit_consistency() is
+  'Trigger of payments.mandate_debits. A planned debit is never above the mandate maximum (23514); the schedule a debit points at belongs to the debit''s own loan and lender, and the provider event to the debit''s own lender (23503). The composite keys carry the rest.';
+comment on table payments.mandate_debits is
+  'One row per instalment per mandate. A PLANNED debit comes from the lender''s reported schedule and figures (payments.plan_mandate_debits): its amount equals the reported figure and never exceeds the mandate maximum (a trigger refuses it). One live planned debit per instalment of a schedule snapshot; a planned debit nobody presented is CANCELLED by the system (never deleted) when the lender''s fresh report shows the instalment as paid, when the lender restated it, or when the mandate ended or its loan closed; a debit the provider already knows is never cancelled by the system. An UNPLANNED debit is one the provider reported and we did not plan; it is recorded and flagged to the lender (critical when the mandate was not in force). status moves forward only (scheduled, notified, presented, then settled, returned or cancelled); a contradiction opens an exception and changes nothing. The return code is stored verbatim (an unusable one is dropped and flagged); return_class comes from payments.mandate_return_codes at the time it was recorded. A returned debit creates no Udofin charge. Written only by the mandate functions. Owner: payments module.';
 
 create or replace function private.check_mandate_event_consistency()
 returns trigger
@@ -155,6 +159,10 @@ $$;
 revoke all on function private.check_mandate_event_consistency() from public;
 create trigger consistency before insert on payments.mandate_events
   for each row execute function private.check_mandate_event_consistency();
+comment on function private.check_mandate_event_consistency() is
+  'Trigger of payments.mandate_events: the provider event a history row cites belongs to the same lender as the mandate (23503).';
+comment on table payments.pre_debit_notices is
+  'The service notice sent to the borrower before each planned debit: when it was due, whether it went out and the delivery state the channel reported. A notice planned too close to its debit is marked late and the lender is told (mandate_notice_late); the debit is never silently presented. A notice that can never go out (the debit was cancelled or is over, the mandate ended, the loan is no longer active) is closed as not_needed by the system; a notice held back only by a pause, a cancellation request or a switch that is off stays open. The notice carries no wording of its own in the database: the app shows a fixed factual line (amount, date). Written only by the mandate functions. Owner: payments module.';
 
 -- ---------------------------------------------------------------------------------------------
 -- 2. Helpers (no grants: only the definer functions below call them)
@@ -396,25 +404,19 @@ begin
   end if;
 
   -- A debit presented or settled while the mandate is not in force (paused, ended, a cancellation requested, the loan no longer active, or not
-  -- registered yet) is recorded and shown to the lender as critical, whether or not it was planned. Other debit news on a mandate that is not yet
-  -- in force, and every unplanned debit, is flagged as before.
+  -- registered yet) is recorded and shown to the lender as critical, whether or not it was planned; so is a settlement with an amount that cannot be
+  -- one. Everything else that needs a person (an unplanned debit, other debit news on a mandate not yet in force, an unusable amount or return
+  -- code) is flagged as a warning.
   v_in_force := m.status = 'active' and m.cancel_requested_at is null
                 and exists (select 1 from servicing.loan_accounts la where la.id = m.loan_account_id and la.lender_org_id = m.lender_org_id and la.status = 'active');
-  if not v_in_force and p_status in ('presented', 'settled') then
+  if (not v_in_force and p_status in ('presented', 'settled')) or (v_bad_amount and p_status = 'settled') then
     perform private.raise_exception_impl(m.lender_org_id, 'mandate_debit_unresolved', 'critical', 'lender', jsonb_build_object('debit_id', d.id::text));
-  elsif v_new or m.status not in ('active', 'paused', 'cancelled', 'revoked', 'expired') then
+  elsif v_new or v_bad_amount or v_bad_code or m.status not in ('active', 'paused', 'cancelled', 'revoked', 'expired') then
     perform private.raise_exception_impl(m.lender_org_id, 'mandate_debit_unresolved', 'warning', 'lender', jsonb_build_object('debit_id', d.id::text));
   end if;
-  if v_bad_amount then
-    perform private.raise_exception_impl(m.lender_org_id, 'mandate_debit_unresolved', case when p_status = 'settled' then 'critical' else 'warning' end, 'lender',
-      jsonb_build_object('debit_id', d.id::text));
-    if p_status = 'settled' then
-      -- Money is reported moved with an amount that cannot be one: nothing is settled on it.
-      return 'exception';
-    end if;
-  end if;
-  if v_bad_code then
-    perform private.raise_exception_impl(m.lender_org_id, 'mandate_debit_unresolved', 'warning', 'lender', jsonb_build_object('debit_id', d.id::text));
+  if v_bad_amount and p_status = 'settled' then
+    -- Money is reported moved with an amount that cannot be one: nothing is settled on it.
+    return 'exception';
   end if;
 
   if v_amount is not null and d.amount_minor is null then
@@ -626,8 +628,8 @@ begin
         return 'registration_pending';
       end if;
       perform private.raise_exception_impl(m.lender_org_id, 'mandate_unresolved', 'warning', 'platform', jsonb_build_object('mandate_id', m.id::text));
-      if v_stored and m.cancel_requested_at is not null and m.cancel_sent_at is null
-         and m.status in ('registration_pending', 'active', 'paused') then
+      if v_stored and m.cancel_requested_at is not null and m.cancel_sent_at is null then
+        -- The borrower asked to cancel and the provider has never been told: queue it now that the reference exists (whatever the mandate's state).
         perform private.enqueue_mandate_cancel(m.id);
       end if;
     end if;
@@ -654,7 +656,7 @@ begin
 end
 $$;
 comment on function payments.record_mandate_handoff(uuid, text, text, timestamptz) is
-  'System only. Records what happened when the provider was asked to take a mandate request: handoff (draft -> registration_pending, the provider reference is stored; NOT an activation; a cancellation the borrower requested meanwhile is queued again), rejected (a definite refusal: draft -> failed, source handoff), unknown (draft -> requires_reconciliation and a platform exception: look the mandate up before any retry) or not_sent (nothing reached any provider: draft -> failed, source system). A repeat answers the current status and changes nothing. A provider reference for a mandate that has already left the draft is stored once (a requires_reconciliation mandate moves on to registration_pending) or, for a finished mandate, kept and flagged to the platform (mandate_unresolved): the provider''s registration is never forgotten.';
+  'System only. Records what happened when the provider was asked to take a mandate request: handoff (draft -> registration_pending, the provider reference is stored; NOT an activation; a cancellation the borrower requested meanwhile is queued again), rejected (a definite refusal: draft -> failed, source handoff), unknown (draft -> requires_reconciliation and a platform exception: look the mandate up before any retry) or not_sent (nothing reached any provider: draft -> failed, source system). A repeat answers the current status and changes nothing. A provider reference for a mandate that has already left the draft is stored once (a requires_reconciliation mandate moves on to registration_pending) or, for a finished mandate, kept and flagged to the platform (mandate_unresolved); in both cases a cancellation the borrower had requested is queued for the provider. The provider''s registration is never forgotten.';
 
 -- An authenticated provider status lookup (the adapter checked the answer came from the provider). Same standing as a verified event.
 create or replace function payments.apply_mandate_lookup(p_mandate uuid, p_provider_status text, p_provider_mandate_ref text default null, p_observed_at timestamptz default clock_timestamp())
@@ -685,7 +687,10 @@ begin
   elsif p_provider_mandate_ref is not null and m.provider_mandate_ref is distinct from p_provider_mandate_ref then
     raise exception 'the provider reference differs from the stored one' using errcode = '55000', hint = 'provider_ref_mismatch';
   end if;
-  update payments.mandates set status_checked_at = clock_timestamp() where id = m.id;
+  if m.status in ('active', 'paused') then
+    -- Only the periodic check of a live mandate needs the time (a pending or unresolved mandate is listed by its own clock, which a lookup must not reset).
+    update payments.mandates set status_checked_at = clock_timestamp() where id = m.id;
+  end if;
   v_outcome := private.apply_mandate_status(m.id, v_new, 'status_lookup', null, p_observed_at);
   if v_stored then
     -- The lookup supplied the reference the hand-off never delivered: a pending cancellation request can be sent now.
@@ -698,7 +703,7 @@ begin
 end
 $$;
 comment on function payments.apply_mandate_lookup(uuid, text, text, timestamptz) is
-  'System only. Applies an AUTHENTICATED provider status lookup with the same rules as a verified event (stale or repeated: nothing; allowed transition: applied; contradiction: an exception and nothing changes; a time more than 15 minutes ahead is replaced by the clock and flagged). Records when the mandate was last looked up. May supply the provider reference of a mandate whose hand-off outcome was unknown, which queues a pending cancellation request again. Returns the outcome.';
+  'System only. Applies an AUTHENTICATED provider status lookup with the same rules as a verified event (stale or repeated: nothing; allowed transition: applied; contradiction: an exception and nothing changes; a time more than 15 minutes ahead is replaced by the clock and flagged). Records when an active or paused mandate was last looked up. May supply the provider reference of a mandate whose hand-off outcome was unknown, which queues a pending cancellation request again. Returns the outcome.';
 
 -- A debit report: a return code that is not a code never fails the whole report (the debit is recorded without it and a person is told).
 create or replace function payments.apply_debit_lookup(
