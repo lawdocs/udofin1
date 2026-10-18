@@ -3,7 +3,7 @@
 -- Every behaviour asserted here FAILED before the migration (the file was run against a database without it before it was kept).
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(304);
+select plan(305);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -58,6 +58,12 @@ create function pg_temp.lx() returns uuid language sql as $fn$ select 'f9b00000-
 create function pg_temp.ly() returns uuid language sql as $fn$ select 'f9b00000-0000-4000-8000-000000000002'::uuid $fn$;
 create function pg_temp.lz() returns uuid language sql as $fn$ select 'f9b00000-0000-4000-8000-000000000003'::uuid $fn$;
 create function pg_temp.lw() returns uuid language sql as $fn$ select 'f9b00000-0000-4000-8000-000000000004'::uuid $fn$;
+-- The private attestation check is not executable by the API roles; the tests read it as the owner (plpgsql: the file loads without the migration).
+create function pg_temp.attested() returns boolean language plpgsql security definer as $fn$
+begin
+  return private.own_account_list_attested();
+end
+$fn$;
 -- A stand-in for the backend's keyed fingerprint: real account n under key version kv.
 create function pg_temp.fp(n integer, kv integer default 1) returns text language sql as $fn$
   select encode(sha256(convert_to('SAMPLE-028-ACCOUNT-' || n || '-KEY-' || kv, 'UTF8')), 'hex') $fn$;
@@ -102,7 +108,7 @@ grant execute on all functions in schema pg_temp to public;
 -- lender X payments approvers, 12 Y_ADM and 13 Y_APR lender Y, 14 X_VIEW lender X viewer, 15 X_SVC lender X servicing operator,
 -- 16 W_ADM and 17 W_ADM2 payments admins, 18 W_APR payments approver, 19 W_SVC servicing operator, 20 W_CA communications admin and
 -- 21 W_CB communications approver of lender W (the activation-order lender), 22 Z_SVC servicing operator of lender Z.
-insert into auth.users (id, raw_app_meta_data) select pg_temp.u(n), '{"actor_type":"staff"}'::jsonb from generate_series(1, 24) n;
+insert into auth.users (id, raw_app_meta_data) select pg_temp.u(n), '{"actor_type":"staff"}'::jsonb from generate_series(1, 25) n;
 select pg_temp.as_owner();
 insert into tenancy.organizations (id, kind, legal_name, display_name, regulator_registration_no, status) values
   ('f9a00000-0000-4000-8000-000000000000', 'platform', 'Udofin Platform (test)', 'Udofin', null, 'active'),
@@ -149,7 +155,7 @@ select payments.approve_account_format_rule(pg_temp.got('rule')::uuid);
 -- ============================================================================================================================
 select pg_temp.as_owner();
 select is((select count(*) from payments.own_account_attestations), 0::bigint, 'nothing is seeded: no attestation exists');
-select is(private.own_account_list_attested(), false, 'so the own-account list is not attested');
+select is(pg_temp.attested(), false, 'so the own-account list is not attested');
 select pg_temp.as_user(pg_temp.u(1));
 select pg_temp.keep('reg1', pg_temp.register(1, 'reg-key-028-0000001', pg_temp.got('rule')::uuid)::text);
 select pg_temp.keep('regu', pg_temp.register(900, 'reg-key-028-0000900', pg_temp.got('rule')::uuid, kind => 'udofin', org => null, purposes => array['fee_collection'],
@@ -182,7 +188,7 @@ select is(payments.attest_own_account_list('SAMPLE-OWN-LIST-1'), 'attested', 'at
 select is((select count(*) from payments.own_account_attestations), 1::bigint, 'and wrote no second record');
 select is((select (event_kind, evidence_ref, entries_counted, actor_id = pg_temp.u(4))::text from payments.own_account_attestations), '(attested,SAMPLE-OWN-LIST-1,2,t)',
   'the attestation records the evidence reference, how many verified accounts it covers and who attested');
-select is(private.own_account_list_attested(), true, 'the list is now attested');
+select is(pg_temp.attested(), true, 'the list is now attested');
 select pg_temp.as_user(pg_temp.u(3));
 select is(payments.verify_account(pg_temp.got('reg1')::uuid, 'SAMPLE-EVIDENCE-028-L1'), 'verified', 'a lender account can now be verified');
 -- Linking needs the attestation too.
@@ -190,7 +196,7 @@ select pg_temp.as_user(pg_temp.u(8));
 select pg_temp.keep('sa1', payments.request_settlement_account(pg_temp.lx(), 'SAMPLE collections', 'Sample Bank', pg_temp.mask(1))::text);
 select pg_temp.as_user(pg_temp.u(3));
 select is(payments.withdraw_own_account_list_attestation('the list is being reviewed after a new account was found'), 'withdrawn', 'a registry verifier withdraws the attestation');
-select is(private.own_account_list_attested(), false, 'the list is no longer attested');
+select is(pg_temp.attested(), false, 'the list is no longer attested');
 select is(payments.withdraw_own_account_list_attestation('the list is being reviewed after a new account was found'), 'withdrawn', 'withdrawing again is not an error');
 select is((select count(*) from payments.own_account_attestations), 2::bigint, 'and wrote no third record');
 select pg_temp.as_user(pg_temp.u(1));
@@ -538,6 +544,8 @@ select pg_temp.keep('s_u', pg_temp.register(900, 'rot-key-028-0000900', pg_temp.
 select pg_temp.keep('s_g', pg_temp.register(901, 'rot-key-028-0000901', pg_temp.got('rule')::uuid, kind => 'group_company', org => null, purposes => array['operational'], kv => 2,
   lname => 'Udofin Group SAMPLE Ltd (fixture)', others => jsonb_build_object('1', pg_temp.fp(901, 1)), rekeys => pg_temp.got('regg')::uuid)::text);
 select pg_temp.keep('s_1', pg_temp.register(1, 'rot-key-028-0000001', pg_temp.got('rule')::uuid, kv => 2, others => jsonb_build_object('1', pg_temp.fp(1, 1)), rekeys => pg_temp.got('reg1')::uuid)::text);
+select is(pg_temp.err(format($$select pg_temp.register(1, 'rot-key-028-0000002', %L::uuid, kv => 1, others => jsonb_build_object('2', pg_temp.fp(1, 2)), rekeys => %L::uuid)$$, pg_temp.got('rule'), pg_temp.got('s_1'))),
+  '22023|rekey_invalid', 'M7: a re-key names the PROPOSED key version; re-keying "back" under the ACTIVE version, with a live successor as the target, is refused');
 select pg_temp.as_user(pg_temp.u(3));
 select payments.verify_account(pg_temp.got('s_u')::uuid, 'SAMPLE-EVIDENCE-028-SU');
 select payments.verify_account(pg_temp.got('s_g')::uuid, 'SAMPLE-EVIDENCE-028-SG');
@@ -554,7 +562,7 @@ select is(payments.validate_collection_target(pg_temp.got('c5')::uuid) ->> 'ok',
 select is((select count(*) from payments.revalidate_payment_configs(pg_temp.lx()) where suspended), 0::bigint, 'and the nightly run does not suspend it: collections do not stop');
 select pg_temp.as_owner();
 select is((select status from payments.lender_payment_configs where id = pg_temp.got('c5')::uuid), 'active', 'the configuration is active');
-select is(private.own_account_list_attested(), false, 'the own-account list needs a fresh attestation under the new key version');
+select is(pg_temp.attested(), false, 'the own-account list needs a fresh attestation under the new key version');
 select pg_temp.as_user(pg_temp.u(4));
 select is(payments.attest_own_account_list('SAMPLE-OWN-LIST-3'), 'attested', 'a verifier attests it again (the re-keyed Udofin account is verified)');
 -- The manual fallback: an account whose successor could not be taken over at the rotation is re-linked by a registry manager.
@@ -734,13 +742,11 @@ select is(pg_temp.err(format($$insert into tenancy.lender_settlement_accounts (l
 select is(pg_temp.err(format($$insert into tenancy.lender_settlement_accounts (lender_org_id, label, bank_name, masked_account_ref, status, registry_id, verified_by, verified_at)
   values (%L, 'SAMPLE forged 3', 'Test Bank', 'XXXXXX7777', 'verified', %L, %L, now())$$, pg_temp.lx(), pg_temp.got('e32'), pg_temp.u(3))), '55000|masked_ref_mismatch',
   'nor a masked reference that differs from the entry''s');
--- verify_account past effective_to; register_account refusing p_rekeys under the active key.
+-- verify_account past effective_to (the refusal of p_rekeys under the active key is asserted in section 5, where a proposed key exists).
 select pg_temp.as_user(pg_temp.u(1));
 select pg_temp.keep('e33', pg_temp.reg2(33, 'reg-key-028-0000043', pg_temp.got('rule')::uuid, eff_from => private.today_ist() - 10, eff_to => private.today_ist() - 1)::text);
 select pg_temp.as_user(pg_temp.u(3));
 select is(pg_temp.err(format($$select payments.verify_account(%L, 'SAMPLE-EVIDENCE-028-33')$$, pg_temp.got('e33'))), '55000|not_effective', 'an entry past its effective_to cannot be verified');
-select pg_temp.as_user(pg_temp.u(1));
-select is(pg_temp.err(format($$select pg_temp.reg2(34, 'reg-key-028-0000044', %L::uuid, rekeys => %L::uuid)$$, pg_temp.got('rule'), pg_temp.got('e30'))), '22023|rekey_invalid', 're-keying targets the proposed key version: a re-key under the ACTIVE key is refused');
 
 -- ============================================================================================================================
 -- 9. U41: lenders read the provider vocabulary only
@@ -800,16 +806,27 @@ select ok(col_description('payments.lender_payment_configs'::regclass, (select a
 -- 11. U55: the separation-of-duties triggers serialise per login
 -- ============================================================================================================================
 select pg_temp.as_owner();
-select is(pg_temp.holds_advisory('sod:' || pg_temp.u(23)::text), false, 'before any grant the transaction holds no lock for login 23');
+select is(pg_temp.holds_advisory('sod:' || pg_temp.u(23)::text), false, 'before any write the transaction holds no lock for login 23');
 insert into tenancy.memberships (id, org_id, user_id, status) values ('f9c10000-0000-4000-8000-000000000023', pg_temp.lx(), pg_temp.u(23), 'active');
 select is(pg_temp.holds_advisory('sod:' || pg_temp.u(23)::text), true, 'a membership of the login takes its separation-of-duties lock');
+-- A role grant: the membership of login 24 is created with the membership trigger lifted, so a lock for login 24 can only come from the grant.
 insert into tenancy.roles (id, org_id, applies_to, key, name, description) values ('f9d00000-0000-4000-8000-000000000001', pg_temp.lx(), 'lender', 'custom_locking_role', 'Custom role', 'A role to test locking');
+alter table tenancy.memberships disable trigger memberships_segregation_payments;
 insert into tenancy.memberships (id, org_id, user_id, status) values ('f9c10000-0000-4000-8000-000000000024', pg_temp.lx(), pg_temp.u(24), 'active');
+alter table tenancy.memberships enable trigger memberships_segregation_payments;
+select is(pg_temp.holds_advisory('sod:' || pg_temp.u(24)::text), false, 'fixture: login 24 has a membership and no lock yet');
 insert into tenancy.membership_roles (membership_id, role_id) values ('f9c10000-0000-4000-8000-000000000024', 'f9d00000-0000-4000-8000-000000000001');
 select is(pg_temp.holds_advisory('sod:' || pg_temp.u(24)::text), true, 'a role grant takes the lock of the login that receives it');
-select is(pg_temp.holds_advisory('sod:' || pg_temp.u(25)::text), false, 'and only that login''s');
+-- A permission added to a role: login 25 holds the role through a grant made with both triggers lifted, so no earlier write locked it.
+alter table tenancy.memberships disable trigger memberships_segregation_payments;
+alter table tenancy.membership_roles disable trigger membership_roles_segregation_payments;
+insert into tenancy.memberships (id, org_id, user_id, status) values ('f9c10000-0000-4000-8000-000000000025', pg_temp.lx(), pg_temp.u(25), 'active');
+insert into tenancy.membership_roles (membership_id, role_id) values ('f9c10000-0000-4000-8000-000000000025', 'f9d00000-0000-4000-8000-000000000001');
+alter table tenancy.memberships enable trigger memberships_segregation_payments;
+alter table tenancy.membership_roles enable trigger membership_roles_segregation_payments;
+select is(pg_temp.holds_advisory('sod:' || pg_temp.u(25)::text), false, 'fixture: login 25 holds the role and no lock yet');
 insert into tenancy.role_permissions (role_id, permission_key) values ('f9d00000-0000-4000-8000-000000000001', 'payment.read');
-select is(pg_temp.holds_advisory('sod:' || pg_temp.u(24)::text), true, 'a permission added to a role locks every login that holds the role');
+select is(pg_temp.holds_advisory('sod:' || pg_temp.u(25)::text), true, 'a permission added to a role locks every login that holds the role');
 select is(pg_temp.err($$insert into tenancy.role_permissions (role_id, permission_key) values ('f9d00000-0000-4000-8000-000000000001', 'payment.configure')$$), 'ok', 'the pair rule itself is unchanged: one half is fine ...');
 select is(pg_temp.err($$insert into tenancy.role_permissions (role_id, permission_key) values ('f9d00000-0000-4000-8000-000000000001', 'payment.config.approve')$$), '23514|segregation_of_duties', '... both halves in one role are refused');
 

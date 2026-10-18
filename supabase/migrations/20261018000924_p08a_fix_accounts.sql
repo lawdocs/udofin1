@@ -208,8 +208,7 @@ as $$
 $$;
 comment on function private.registry_is_successor(uuid, uuid) is
   'True when p_new is the re-keyed successor of p_old (rekeyed_from_id chain, at most 20 rotations deep). Used by the settlement-account guard to allow the one change of the registry link that a key rotation needs.';
-revoke all on function private.registry_is_successor(uuid, uuid) from public;
-grant execute on function private.registry_is_successor(uuid, uuid) to authenticated, service_role;
+revoke all on function private.registry_is_successor(uuid, uuid) from public, anon, authenticated, service_role;
 
 -- The own-account list (accounts owned by Udofin and its group) must be attested complete before lender accounts are verified and
 -- before payments or mandates can be switched on (A17). An append-only history; the latest event for the ACTIVE key version decides.
@@ -260,8 +259,7 @@ as $$
 $$;
 comment on function private.own_account_list_attested() is
   'True when the latest own-account-list event for the ACTIVE fingerprint key version is an attestation (not a withdrawal). False when there is none, when no key version is active, or after a key rotation until the list is attested again.';
-revoke all on function private.own_account_list_attested() from public;
-grant execute on function private.own_account_list_attested() to authenticated, service_role;
+revoke all on function private.own_account_list_attested() from public, anon, authenticated, service_role;
 
 -- ---------------------------------------------------------------------------------------------
 -- 2. Merchants: a claim is a CLAIM; only one claim of an id can be verified and active at a time (A19, M2, U52)
