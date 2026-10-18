@@ -1,9 +1,11 @@
 import { createApiClient } from '@udofin/auth-client';
 import {
   LP_LIST_KEYS,
+  lpAskedLender,
   lpCapabilitiesFrom,
   lpKeepParams,
   lpLenderFrom,
+  lpLendersOf,
   lpPermissionsIn,
   type LpParams,
   type LpResult,
@@ -27,14 +29,16 @@ export async function paymentsPage(searchParams: Promise<LpParams>) {
     baseUrl: portalAuth().apiBaseUrl,
     getAccessToken: () => Promise.resolve(session.accessToken),
   });
-  // The lender the screens act for, and what the person may do in that lender (not in any other organisation).
-  const lenderId = lpLenderFrom(session.me.memberships);
+  // The lender the screens act for (the one chosen in the address when the person belongs to it, else the first that holds a
+  // payment permission), and what the person may do in that lender (not in any other organisation).
+  const lenderId = lpLenderFrom(session.me.memberships, lpAskedLender(query));
   return {
     me: session.me,
     api,
     query,
     caps: lpCapabilitiesFrom(lpPermissionsIn(session.me.memberships, lenderId)),
     lenderId,
+    lenders: lpLendersOf(session.me.memberships),
     userId: session.me.userId,
   } as const;
 }
@@ -47,6 +51,7 @@ export const viewContext = (page: Ready, returnTo: string): LpViewContext => ({
   returnTo,
   caps: page.caps,
   userId: page.userId,
+  lenders: page.lenders,
   ...(page.lenderId ? { lenderId: page.lenderId } : {}),
 });
 

@@ -10,7 +10,10 @@ export default async function BankCreditsRoute({
   const page = await paymentsPage(searchParams);
   if ('blocked' in page) return page.blocked;
   // The accounts are needed only by a person who may upload.
-  const accounts = page.caps.reconcile ? await lpLoadSettlementAccounts(page.api) : undefined;
+  const accounts =
+    page.caps.reconcile && page.lenderId
+      ? await lpLoadSettlementAccounts(page.api, page.lenderId)
+      : undefined;
   const notice = noticeFrom(page.query);
   return (
     <PageFrame me={page.me} current="/reconciliation">

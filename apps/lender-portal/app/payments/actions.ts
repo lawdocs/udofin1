@@ -1,7 +1,7 @@
 'use server';
 
 import { createApiClient } from '@udofin/auth-client';
-import { lpRunOperation, lpSafeReturnPath } from '@udofin/portal-kit';
+import { lpIsUuid, lpRunOperation, lpSafeReturnPath } from '@udofin/portal-kit';
 import { redirect } from 'next/navigation';
 import { currentSession, portalAuth } from '@/lib/auth';
 
@@ -20,6 +20,9 @@ export async function paymentsAction(formData: FormData): Promise<void> {
   });
   const outcome = await lpRunOperation(api, formData);
   const params = new URLSearchParams();
+  // A person who belongs to several lenders comes back to the lender the form was for (an identifier, checked), not to another.
+  const lenderId = formData.get('lenderId');
+  if (lpIsUuid(lenderId)) params.set('lenderId', lenderId);
   if (outcome.ok) {
     params.set('done', '1');
     if (outcome.counts) {

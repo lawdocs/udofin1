@@ -1,11 +1,13 @@
 // Phase 08a screens for lender payments, mandates, reconciliation and exceptions (pages in apps/lender-portal/app/{payments,mandates,reconciliation}).
 // Only names that start with Lp or lp are exported, and each one explicitly, so this area cannot collide with another area of this package.
 export {
+  lpAskedLender,
   lpCapabilitiesFrom,
   lpIsDate,
   lpIsUuid,
   lpKeepParams,
   lpLenderFrom,
+  lpLendersOf,
   lpPermissionsIn,
   lpLoadExceptionDetail,
   lpLoadExceptions,

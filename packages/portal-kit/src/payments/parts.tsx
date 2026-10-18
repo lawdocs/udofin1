@@ -1,5 +1,6 @@
 import { type ReactNode, useId } from 'react';
 import { type FormAction } from '../onboarding/forms.js';
+import { LenderPicker } from '../reminders/common.js';
 import { ErrorState, LoadingState } from '../states.js';
 import { type LpCapabilities, type LpResult } from './data.js';
 import { ERROR_WORDS, lpErrorMessage } from './labels.js';
@@ -14,6 +15,16 @@ export interface LpViewContext {
   userId?: string;
   /** The lender organisation the screens act for. */
   lenderId?: string;
+  /** The lenders the person holds a payment permission in (named, so the page can say whose figures it shows and offer a choice). */
+  lenders?: readonly { lenderId: string; name: string }[];
+}
+
+/**
+ * Which lender a page is about. With one lender it is named; with several, a small form chooses (a GET to the same page, so the
+ * choice is in the address and survives a reload). Nothing is drawn when no lender is known.
+ */
+export function LpLender({ ctx, path }: { ctx: LpViewContext; path: string }) {
+  return <LenderPicker lenders={ctx.lenders ?? []} selected={ctx.lenderId} path={path} />;
 }
 
 /** The detail line of a failed load: a stable explanation, never the server's own text. */
