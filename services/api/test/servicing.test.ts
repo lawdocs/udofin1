@@ -403,8 +403,8 @@ describe('the other contracts', () => {
       const walk = (node: unknown) => {
         if (Array.isArray(node)) node.forEach(walk);
         else if (node && typeof node === 'object') {
-          for (const [key, value] of Object.entries(node)) {
-            if (key === 'properties' && value && typeof value === 'object')
+          for (const [key, value] of Object.entries(node) as [string, unknown][]) {
+            if (key === 'properties' && value !== null && typeof value === 'object')
               found.push(...Object.keys(value));
             walk(value);
           }
