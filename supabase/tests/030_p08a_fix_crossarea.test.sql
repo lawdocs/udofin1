@@ -9,7 +9,7 @@
 -- Synthetic data only (labelled SAMPLE). Error codes are reported as SQLSTATE|hint.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(83);
+select plan(159);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -286,7 +286,7 @@ select is((select array_agg(feature order by feature) from servicing.lender_feat
 
 -- ============================================================================================================================
 -- Loans (applications are an earlier phase's rows: fixtures), then the lenders' files through stage_import and commit_import.
--- Applications 1 to 9 are borrower b1 at lender X, 10 is b2 at X, 11 is b2 at Y, 12 is b1 at Y.
+-- Applications 1 to 9, 13 and 14 are borrower b1 at lender X, 10 is b2 at X, 11 is b2 at Y, 12 is b1 at Y.
 -- ============================================================================================================================
 select pg_temp.as_owner();
 insert into lending.loan_products (id, lender_org_id, category_key, code, name, status) values
@@ -298,12 +298,12 @@ values ('fa910000-0000-4000-8000-000000000001', 'fa900000-0000-4000-8000-0000000
        ('fa910000-0000-4000-8000-000000000002', 'fa900000-0000-4000-8000-000000000002', pg_temp.ly(), 1, 'approved', 1000000, 50000000, 180, 1825, 'fixed', 1400, 2400, pg_temp.u(28), pg_temp.u(29), now(), now());
 insert into lending.loan_requests (id, borrower_id, category_key, requested_amount_minor, requested_tenure_days, purpose_code, status)
 select ('fa700000-0000-4000-8000-0000000000' || lpad(n::text, 2, '0'))::uuid, case when n in (10, 11) then pg_temp.got('b2')::uuid else pg_temp.got('b1')::uuid end, 'personal', 5000000, 365, 'education', 'submitted'
-from generate_series(1, 12) n;
+from generate_series(1, 14) n;
 insert into lending.applications (id, lender_org_id, loan_request_id, borrower_id, product_version_id, status, requested_amount_minor, requested_tenure_days, lender_reference)
-select ('fa200000-0000-4000-8000-0000000000' || lpad(n::text, 2, '0'))::uuid, case when n >= 11 then pg_temp.ly() else pg_temp.lx() end,
+select ('fa200000-0000-4000-8000-0000000000' || lpad(n::text, 2, '0'))::uuid, case when n in (11, 12) then pg_temp.ly() else pg_temp.lx() end,
        ('fa700000-0000-4000-8000-0000000000' || lpad(n::text, 2, '0'))::uuid, case when n in (10, 11) then pg_temp.got('b2')::uuid else pg_temp.got('b1')::uuid end,
-       case when n >= 11 then 'fa910000-0000-4000-8000-000000000002' else 'fa910000-0000-4000-8000-000000000001' end::uuid, 'disbursement_pending', 5000000, 365, 'SAMPLE-APP-' || n
-from generate_series(1, 12) n;
+       case when n in (11, 12) then 'fa910000-0000-4000-8000-000000000002' else 'fa910000-0000-4000-8000-000000000001' end::uuid, 'disbursement_pending', 5000000, 365, 'SAMPLE-APP-' || n
+from generate_series(1, 14) n;
 
 -- Row builders for the lenders' files (labelled SAMPLE figures; 4,750.00 due is 4,000.00 principal and 750.00 interest).
 create function pg_temp.lrow(p_ref text, p_app text, p_due_days integer, p_srid text, p_hours numeric default 1, p_extra jsonb default '{}'::jsonb) returns jsonb language sql as $fn$
@@ -342,12 +342,15 @@ grant execute on all functions in schema pg_temp to public;
 select is(pg_temp.imp(pg_temp.lx(), 10, 'loan', 'x-loans', jsonb_build_array(
   pg_temp.lrow('SAMPLE-LN-1', 'SAMPLE-APP-1', 3, 'SRC-L1'), pg_temp.lrow('SAMPLE-LN-2', 'SAMPLE-APP-2', 3, 'SRC-L2'), pg_temp.lrow('SAMPLE-LN-3', 'SAMPLE-APP-3', 3, 'SRC-L3'),
   pg_temp.lrow('SAMPLE-LN-4', 'SAMPLE-APP-4', 3, 'SRC-L4'), pg_temp.lrow('SAMPLE-LN-5', 'SAMPLE-APP-5', 3, 'SRC-L5'), pg_temp.lrow('SAMPLE-LN-6', 'SAMPLE-APP-6', 3, 'SRC-L6'),
-  pg_temp.lrow('SAMPLE-LN-7', 'SAMPLE-APP-7', 3, 'SRC-L7'), pg_temp.lrow('SAMPLE-LN-8', 'SAMPLE-APP-8', 3, 'SRC-L8'), pg_temp.lrow('SAMPLE-LN-9', 'SAMPLE-APP-9', 1, 'SRC-L9'),
-  pg_temp.lrow('SAMPLE-LN-10', 'SAMPLE-APP-10', 3, 'SRC-L10'))), 'committed:{"new": 10}', 'A: lender X''s servicing operator imports ten loans (stage, then commit)');
+  pg_temp.lrow('SAMPLE-LN-7', 'SAMPLE-APP-7', 3, 'SRC-L7'), pg_temp.lrow('SAMPLE-LN-8', 'SAMPLE-APP-8', 2, 'SRC-L8'), pg_temp.lrow('SAMPLE-LN-9', 'SAMPLE-APP-9', 0, 'SRC-L9'),
+  pg_temp.lrow('SAMPLE-LN-10', 'SAMPLE-APP-10', 3, 'SRC-L10'),
+  pg_temp.lrow('SAMPLE-LN-11', 'SAMPLE-APP-13', 26, 'SRC-L11', 0, '{"overdue_principal":"4000.00","overdue_interest":"750.00","total_overdue":"4750.00","days_past_due":"4"}'),
+  pg_temp.lrow('SAMPLE-LN-12', 'SAMPLE-APP-14', 26, 'SRC-L12', 0, '{"overdue_principal":"4000.00","overdue_interest":"750.00","total_overdue":"4750.00","days_past_due":"4"}'))), 'committed:{"new": 12}', 'A: lender X''s servicing operator imports twelve loans (stage, then commit)');
 select is(pg_temp.imp(pg_temp.lx(), 10, 'schedule', 'x-sched', jsonb_build_array(
   pg_temp.srow('SAMPLE-LN-1', 3, 'SRC-S1'), pg_temp.srow('SAMPLE-LN-2', 3, 'SRC-S2'), pg_temp.srow('SAMPLE-LN-3', 3, 'SRC-S3'), pg_temp.srow('SAMPLE-LN-4', 3, 'SRC-S4'),
-  pg_temp.srow('SAMPLE-LN-5', 3, 'SRC-S5'), pg_temp.srow('SAMPLE-LN-6', 3, 'SRC-S6'), pg_temp.srow('SAMPLE-LN-7', 3, 'SRC-S7'), pg_temp.srow('SAMPLE-LN-8', 3, 'SRC-S8'),
-  pg_temp.srow('SAMPLE-LN-9', 1, 'SRC-S9'), pg_temp.srow('SAMPLE-LN-10', 3, 'SRC-S10'))), 'committed:{"new": 10}', 'A: and their repayment schedules');
+  pg_temp.srow('SAMPLE-LN-5', 3, 'SRC-S5'), pg_temp.srow('SAMPLE-LN-6', 3, 'SRC-S6'), pg_temp.srow('SAMPLE-LN-7', 3, 'SRC-S7'), pg_temp.srow('SAMPLE-LN-8', 2, 'SRC-S8'),
+  pg_temp.srow('SAMPLE-LN-9', 0, 'SRC-S9'), pg_temp.srow('SAMPLE-LN-10', 3, 'SRC-S10'),
+  pg_temp.srow('SAMPLE-LN-11', -4, 'SRC-S11', 0), pg_temp.srow('SAMPLE-LN-12', -4, 'SRC-S12', 0))), 'committed:{"new": 12}', 'A: and their repayment schedules (loans 11 and 12 are four days overdue)');
 select is(pg_temp.imp(pg_temp.ly(), 20, 'loan', 'y-loans', jsonb_build_array(
   pg_temp.lrow('SAMPLE-LN-Y1', 'SAMPLE-APP-11', 3, 'SRC-LY1'), pg_temp.lrow('SAMPLE-LN-Y2', 'SAMPLE-APP-12', 3, 'SRC-LY2'))), 'committed:{"new": 2}', 'A: lender Y imports its two loans');
 select is(pg_temp.imp(pg_temp.ly(), 20, 'schedule', 'y-sched', jsonb_build_array(
@@ -358,7 +361,7 @@ select servicing.complete_disbursements(pg_temp.ly());
 select pg_temp.as_owner();
 create function pg_temp.lid(p_ref text) returns uuid language sql as $fn$ select id from servicing.loan_accounts where lms_loan_ref = p_ref $fn$;
 grant execute on all functions in schema pg_temp to public;
-select is((select count(*) from servicing.loan_accounts where status = 'active' and last_synced_at is not null), 12::bigint, 'A: twelve loan accounts exist, lender-reported and active');
+select is((select count(*) from servicing.loan_accounts where status = 'active' and last_synced_at is not null), 14::bigint, 'A: fourteen loan accounts exist, lender-reported and active');
 
 -- ============================================================================================================================
 -- FLOW A.2  A payment from the borrower's request to a bank-confirmed, lender-posted payment, and what each side and every other party sees.
@@ -371,10 +374,11 @@ create function pg_temp.dlv(p_delivery text, p_event text, p_kind text, p_status
     'provider', 'sample_provider', 'outcome', 'verified', 'reason_class', 'none', 'delivery_id', p_delivery, 'payload_sha256', pg_temp.sha('body-' || p_delivery),
     'scheme', 'mock-standard-webhooks-v1', 'signature_present', true, 'timestamp_skew_seconds', 3, 'body_bytes', 420, 'ip_hmac', repeat('a', 64),
     'event', jsonb_build_object('provider', 'sample_provider', 'deliveryId', p_delivery, 'eventId', p_event, 'objectKind', p_kind, 'objectRef', p_obj, 'orderRef', p_order, 'status', p_status,
-      'rank', case p_status when 'created' then 10 when 'pending' then 15 when 'authorized' then 20 when 'failed' then 25 when 'captured' then 30 when 'paid' then 30
-                            when 'refunded' then 40 when 'disputed' then 50 else 0 end,
+      'rank', case p_status when 'created' then 10 when 'pending' then 15 when 'authorized' then 20 when 'failed' then 25 when 'rejected' then 25 when 'captured' then 30
+                            when 'paid' then 30 when 'succeeded' then 30 when 'active' then 30 when 'paused' then 35 when 'refunded' then 40 when 'returned' then 40
+                            when 'cancelled' then 45 when 'revoked' then 45 when 'disputed' then 50 else 0 end,
       'amountMinor', p_amount::text, 'currency', case when p_amount is null then null else 'INR' end,
-      'occurredAt', coalesce(p_occurred, to_char(clock_timestamp() at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')), 'parentPaymentRef', p_parent)));
+      'occurredAt', coalesce(p_occurred, to_char((clock_timestamp() + interval '2 seconds') at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')), 'parentPaymentRef', p_parent)));
 $fn$;
 create function pg_temp.ev(p_event text) returns uuid language sql as $fn$ select id from payments.provider_events where provider_event_id = p_event $fn$;
 create function pg_temp.cfgx() returns uuid language sql as $fn$ select id from payments.lender_payment_configs where lender_org_id = 'fab00000-0000-4000-8000-000000000001' and status = 'active' $fn$;
@@ -632,6 +636,222 @@ select is(pg_temp.foreign_reversal(), 'lender_posted,true,posted,true,1',
 select pg_temp.as_owner();
 select is((select count(*) from servicing.lms_receipts where lms_receipt_ref in ('RV-FOREIGN', 'RC-PAD')), 0::bigint, 'D: and the block left no row behind');
 select is((select count(*) from pg_constraint where conname = 'lms_receipts_reverses_receipt_id_lender_org_id_fkey'), 1::bigint, 'D: nor changed the table (the key is back)');
+
+-- ============================================================================================================================
+-- FLOW A.3  A platform suspension in the middle of a payment: the link is withdrawn, the lender cannot undo the hold, a DIFFERENT platform person
+--           releases it, the lender's pair activates the configuration again, the payment completes.
+-- ============================================================================================================================
+select pg_temp.keep('i2', pg_temp.ask(40, 'SAMPLE-LN-2', 'pay-key-030-A2-0000001')::text);
+select pg_temp.as_system();
+select payments.record_order_created(pg_temp.got('i2')::uuid, 'ORD-A2');
+select payments.store_handoff_link('payment_intent', pg_temp.got('i2')::uuid, 'v1', pg_temp.bytes(40), now() + interval '2 hours');
+select pg_temp.as_user(pg_temp.u(40));
+select is((select count(*) from payments.take_handoff_link('payment_intent', pg_temp.got('i2')::uuid)), 1::bigint, 'A3: before the suspension the borrower can fetch the hand-off link');
+-- The suspension.
+select pg_temp.as_user(pg_temp.u(41));
+select is(pg_temp.err(format($$select payments.suspend_payment_config(%L, 'a borrower must not be able to do this')$$, pg_temp.cfgx())), '42501|', 'A3: a borrower cannot suspend a configuration');
+select pg_temp.as_user(pg_temp.u(25));
+select is(pg_temp.err(format($$select payments.suspend_payment_config(%L, 'another lender''s approver must not do this')$$, pg_temp.cfgx())), '42501|', 'A3: nor can another lender''s approver');
+select pg_temp.as_user(pg_temp.u(1));
+select is(payments.suspend_payment_config(pg_temp.cfgx(), 'provider reported a settlement incident today'), 'suspended', 'A3: a platform person suspends lender X''s configuration');
+select pg_temp.as_user(pg_temp.u(40));
+select is(pg_temp.err(format($$select * from payments.take_handoff_link('payment_intent', %L)$$, pg_temp.got('i2'))), 'P0002|link_unavailable', 'A3: the hand-off link is withdrawn at once (the borrower is not sent to pay into a destination the platform has just stopped)');
+select is((select link_available from payments.my_payment_detail(pg_temp.got('i2')::uuid)), false, 'A3: the borrower''s detail says so: no link is available (the order is pending at the provider, so it is not cancellable either: it lapses with its link period)');
+select is(pg_temp.err(format($$select payments.request_payment(%L, 'installment', 475000, 'pay-key-030-A3-0000001')$$, pg_temp.lid('SAMPLE-LN-7'))), '55000|collection_target_invalid', 'A3: a new payment on another loan of the lender is refused while the configuration is suspended');
+select pg_temp.as_system();
+select is(payments.ingest_provider_delivery(pg_temp.got('tokx'), pg_temp.dlv('DLV-A2', 'EVT-A2', 'payment', 'captured', 'PAY-A2', 'ORD-A2', 475000)) ->> 'outcome', 'rejected',
+  'A3: a delivery for the suspended configuration is rejected at the door (the receiver verifies against active configurations only)');
+select pg_temp.as_owner();
+select is((select count(*) from payments.provider_events where provider_event_id = 'EVT-A2'), 0::bigint, 'A3: and stores no event');
+select is((select count(*) from payments.webhook_receipts where delivery_id = 'DLV-A2' and reason_class = 'token_unknown_or_inactive'), 1::bigint, 'A3: only a receipt (the database cannot tell it from garbage)');
+-- The lender cannot undo it.
+select pg_temp.as_user(pg_temp.u(14));
+select is(pg_temp.err(format($$select payments.submit_payment_config(%L)$$, pg_temp.got('cx')::uuid)), '55000|platform_hold', 'A3: the lender''s maker cannot re-submit the held configuration');
+select pg_temp.as_user(pg_temp.u(13));
+select pg_temp.keep('cx2', pg_temp.draft(pg_temp.lx(), 'cfg-key-030-000000002', pg_temp.got('mx')::uuid, pg_temp.got('sax')::uuid)::text);
+select pg_temp.as_user(pg_temp.u(14));
+select is(pg_temp.err(format($$select payments.submit_payment_config(%L)$$, pg_temp.got('cx2'))), '55000|platform_hold', 'A3: nor submit a NEW configuration while the hold stands (a new draft must not undo the kill switch)');
+select pg_temp.as_user(pg_temp.u(15));
+select is(pg_temp.err(format($$select payments.retire_payment_config(%L, 'the approver must not retire a held configuration')$$, pg_temp.got('cx')::uuid)), '55000|platform_hold', 'A3: nor retire it');
+-- Release by a DIFFERENT platform person.
+select pg_temp.as_user(pg_temp.u(1));
+select is(pg_temp.err(format($$select payments.release_payment_config_hold(%L, 'the suspending person must not lift the hold')$$, pg_temp.got('cx')::uuid)), '42501|self_approval', 'A3: the person who suspended cannot release');
+select pg_temp.as_user(pg_temp.u(2));
+select is(payments.release_payment_config_hold(pg_temp.got('cx')::uuid, 'incident closed, evidence reviewed by a second person'), 'suspended', 'A3: a different platform person releases the hold (the configuration stays suspended)');
+select pg_temp.as_user(pg_temp.u(14));
+select is(payments.submit_payment_config(pg_temp.got('cx')::uuid), 'pending_approval', 'A3: now the lender''s maker re-submits the configuration (validated again) ...');
+select pg_temp.as_user(pg_temp.u(15));
+select is(payments.decide_payment_config(pg_temp.got('cx')::uuid, true, 'SAMPLE re-approval'), 'active', 'A3: ... and the approver approves it again');
+-- The payment completes.
+select pg_temp.as_system();
+select is(payments.ingest_provider_delivery(pg_temp.got('tokx'), pg_temp.dlv('DLV-A2B', 'EVT-A2B', 'payment', 'captured', 'PAY-A2', 'ORD-A2', 475000)) ->> 'outcome', 'ok', 'A3: the provider''s event now reaches the database');
+select is(payments.apply_provider_event(pg_temp.ev('EVT-A2B')) ->> 'outcome', 'applied', 'A3: and is applied');
+select pg_temp.as_user(pg_temp.u(40));
+select is((select stage from payments.my_payment(pg_temp.got('i2')::uuid)), 'provider_received', 'A3: the borrower''s stage: provider_received');
+-- Lender Y was never affected.
+select pg_temp.as_user(pg_temp.u(41));
+select pg_temp.keep('iy2', pg_temp.ask(41, 'SAMPLE-LN-Y1', 'pay-key-030-Y2-0000001')::text);
+select is((select intent_status from payments.my_payment(pg_temp.got('iy2')::uuid)), 'created', 'A3: lender Y''s borrower could ask for a payment while lender X''s configuration was held ... ');
+select pg_temp.as_user(pg_temp.u(27));
+select is((select count(*) from payments.lender_payment_config_events where config_id = pg_temp.cfgx()), 0::bigint, 'A3: ... and lender Y''s viewer sees nothing of lender X''s configuration history (suspension, release, re-approval)');
+
+-- ============================================================================================================================
+-- FLOW B  A mandate from the borrower's request (with step-up) to the provider's registration, a planned debit, its pre-debit notice, the debit itself,
+--         a borrower's cancellation the provider has not acknowledged (the sweep queues it again) and an ended mandate that takes its planned debits
+--         and notices with it. Loan 7 of lender X falls due in three days, loan 8 in two (so its 48-hour notice is late from the start).
+-- ============================================================================================================================
+create function pg_temp.mid(n integer) returns uuid language sql as $fn$ select ('faa00000-0000-4000-8000-0000000000' || lpad(n::text, 2, '0'))::uuid $fn$;
+-- Step-up codes (verified, bound to a mandate id) and device-integrity results, as the identity module would have recorded them (an earlier phase's rows).
+create function pg_temp.stepup(p_borrower text, p_mandate uuid) returns void language plpgsql as $fn$
+begin
+  perform pg_temp.as_owner();
+  insert into identity.stepup_challenges (id, borrower_id, action, context_ref, code_hash, status, delivery_status, expires_at, verified_at, verified_until)
+  values (gen_random_uuid(), p_borrower::uuid, 'mandate_creation', p_mandate::text, repeat('a', 64), 'verified', 'accepted', now() + interval '10 minutes', now(), now() + interval '10 minutes');
+end
+$fn$;
+create function pg_temp.integrity(p_borrower text, p_level text) returns void language plpgsql as $fn$
+begin
+  perform pg_temp.as_owner();
+  insert into identity.device_attestations (borrower_id, level, provider, verified_at, expires_at) values (p_borrower::uuid, p_level, 'sample_attest', clock_timestamp(), clock_timestamp() + interval '1 hour');
+end
+$fn$;
+-- The provider event for a mandate or a debit: delivered by the receiver and applied by the worker; returns the apply outcome (or ingest:<outcome>).
+create function pg_temp.mdeliver(p_token text, p_tag text, p_kind text, p_status text, p_obj text, p_order text default null, p_amount bigint default null, p_occurred text default null)
+returns text language plpgsql as $fn$
+declare v_in text;
+begin
+  perform pg_temp.as_system();
+  v_in := payments.ingest_provider_delivery(p_token, pg_temp.dlv('DLV-' || p_tag, 'EVT-' || p_tag, p_kind, p_status, p_obj, p_order, p_amount, null, p_occurred)) ->> 'outcome';
+  if v_in <> 'ok' then return 'ingest:' || v_in; end if;
+  return payments.apply_provider_event(pg_temp.ev('EVT-' || p_tag)) ->> 'outcome';
+end
+$fn$;
+-- A mandate up to ACTIVE through the public functions: step-up, request, the worker's hand-off, the provider's registration event.
+create function pg_temp.mandate_up(p_borrower integer, p_bkey text, p_loan text, p_mid uuid, p_ref text, p_token text, p_tag text) returns text language plpgsql as $fn$
+declare v text;
+begin
+  perform pg_temp.stepup(pg_temp.got(p_bkey), p_mid);
+  perform pg_temp.as_user(pg_temp.u(p_borrower));
+  perform payments.request_mandate(p_mid, pg_temp.lid(p_loan), 'enach_api', 4000000, pg_temp.d() + 1, pg_temp.d() + 365, 'XXXXXX9999');
+  perform pg_temp.as_system();
+  perform payments.record_mandate_handoff(p_mid, 'handoff', p_ref, now() + interval '1 hour');
+  v := pg_temp.mdeliver(p_token, 'M' || p_tag, 'mandate', 'active', p_ref);
+  return v;
+end
+$fn$;
+grant execute on all functions in schema pg_temp to public;
+
+-- 1. The request: a verified step-up code bound to THIS mandate and a device-integrity result are needed.
+select pg_temp.integrity(pg_temp.got('b1'), 'strong');
+select pg_temp.integrity(pg_temp.got('b2'), 'strong');
+select pg_temp.as_user(pg_temp.u(40));
+select is(pg_temp.err(format($$select payments.request_mandate(%L, %L, 'enach_api', 4000000, %L, %L, 'XXXXXX9999')$$, pg_temp.mid(1), pg_temp.lid('SAMPLE-LN-7'), pg_temp.d() + 1, pg_temp.d() + 365)), '42501|stepup_required',
+  'B: without a verified step-up code bound to this mandate nothing is created');
+select pg_temp.stepup(pg_temp.got('b1'), pg_temp.mid(1));
+select pg_temp.as_user(pg_temp.u(40));
+select is(payments.request_mandate(pg_temp.mid(1), pg_temp.lid('SAMPLE-LN-7'), 'enach_api', 4000000, pg_temp.d() + 1, pg_temp.d() + 365, 'XXXXXX9999'), pg_temp.mid(1), 'B: with the step-up, the borrower''s request creates the mandate');
+select is((select (status, rail, max_amount_minor, cancel_requested, next_debit_on is null)::text from payments.my_mandates()), '(draft,enach_api,4000000,f,t)', 'B: the borrower sees: draft, the rail, the maximum, nothing to cancel, no debit yet');
+-- 2. The worker hands the request to the provider and keeps the sealed authorisation link.
+select pg_temp.as_system();
+select is(payments.record_mandate_handoff(pg_temp.mid(1), 'handoff', 'SAMPLE-PM-B1', now() + interval '1 hour'), 'registration_pending', 'B: the provider took the request: registration_pending (not active)');
+select is(payments.store_handoff_link('mandate', pg_temp.mid(1), 'v1', pg_temp.bytes(40), now() + interval '2 hours'), 'stored', 'B: the worker keeps the sealed authorisation link');
+select pg_temp.as_user(pg_temp.u(40));
+select is((select status from payments.my_mandates()), 'registration_pending', 'B: the borrower sees: registration_pending');
+select is((select count(*) from payments.take_handoff_link('mandate', pg_temp.mid(1))), 1::bigint, 'B: and can fetch the authorisation link');
+select pg_temp.as_user(pg_temp.u(41));
+select is(pg_temp.err(format($$select * from payments.take_handoff_link('mandate', %L)$$, pg_temp.mid(1))), 'P0002|link_unavailable', 'B: another borrower cannot');
+-- 3. The provider's registered event.
+select is(pg_temp.mdeliver(pg_temp.got('tokx'), 'MB1', 'mandate', 'active', 'SAMPLE-PM-B1'), 'applied', 'B: the provider''s verified "active" event is applied');
+select pg_temp.as_user(pg_temp.u(40));
+select is((select status from payments.my_mandates()), 'active', 'B: the borrower sees: active');
+select is(pg_temp.err(format($$select * from payments.take_handoff_link('mandate', %L)$$, pg_temp.mid(1))), 'P0002|link_unavailable', 'B: once registered, the authorisation link is no longer handed out');
+-- 4. The planner plans the installment that falls due within ten days; the notice is due 48 hours before the debit day.
+select pg_temp.as_system();
+select is((payments.plan_mandate_debits() ->> 'planned')::int >= 1, true, 'B: the planner plans the debit for the installment due in three days');
+select pg_temp.as_user(pg_temp.u(40));
+select is((select (next_debit_on = pg_temp.d() + 3, next_debit_minor, next_debit_notified)::text from payments.my_mandates()), '(t,475000,f)', 'B: the borrower sees the next debit: in three days, 4,750.00, not yet notified');
+select is((select (status, planned, notice_status)::text from payments.my_mandate_debits(pg_temp.mid(1))), '(scheduled,t,planned)', 'B: with a pre-debit notice planned');
+-- 5. The notice is claimed by the worker, sent, and recorded (once it is due: a day passes, which the fixture states by moving the due time).
+select pg_temp.as_system();
+select is((select count(*) from payments.claim_pre_debit_notices(100) where mandate_id = pg_temp.mid(1)), 0::bigint, 'B: the notice is not claimed before it is due');
+select pg_temp.as_owner();
+update payments.pre_debit_notices set notice_due_at = clock_timestamp() - interval '1 minute' where mandate_id = pg_temp.mid(1);
+select pg_temp.as_system();
+select pg_temp.keep('nb1', (select notice_id::text from payments.claim_pre_debit_notices(100) where mandate_id = pg_temp.mid(1)));
+select isnt(pg_temp.got('nb1'), null, 'B: the notice is due and is claimed');
+select is((select count(*) from payments.claim_pre_debit_notices(100) where mandate_id = pg_temp.mid(1)), 0::bigint, 'B: it is leased: not claimed again at once');
+select is(payments.record_pre_debit_notice(pg_temp.got('nb1')::uuid, 'accepted'), 'accepted', 'B: the channel accepts it');
+select pg_temp.as_user(pg_temp.u(40));
+select is((select (status, notice_status, notice_sent_at is not null)::text from payments.my_mandate_debits(pg_temp.mid(1))), '(notified,sent,t)', 'B: the debit is notified and the notice sent');
+select is((select next_debit_notified from payments.my_mandates()), true, 'B: the mandate list says the next debit was notified');
+-- 6. The debit is presented and settled (provider events on the debit day).
+select is(pg_temp.mdeliver(pg_temp.got('tokx'), 'DB1P', 'debit', 'pending', 'SAMPLE-DB-B1', 'SAMPLE-PM-B1', 475000, pg_temp.dt(3) || 'T10:00:00Z'), 'applied', 'B: the provider presents the debit: matched to the planned debit');
+select is(pg_temp.mdeliver(pg_temp.got('tokx'), 'DB1S', 'debit', 'succeeded', 'SAMPLE-DB-B1', 'SAMPLE-PM-B1', 475000, pg_temp.dt(3) || 'T10:00:00Z'), 'applied', 'B: and settles it');
+select pg_temp.as_user(pg_temp.u(40));
+select is((select (status, planned)::text from payments.my_mandate_debits(pg_temp.mid(1))), '(settled,t)', 'B: the borrower sees the debit as settled');
+select pg_temp.as_owner();
+select is(private.reminder_recent_payment(pg_temp.lid('SAMPLE-LN-7'), 48), true, 'B: a settled debit is a payment for the reminders'' quiet period');
+select is((select count(*) from payments.reconciliation_exceptions where subject ->> 'mandate_id' = pg_temp.mid(1)::text or subject ->> 'debit_id' in (select id::text from payments.mandate_debits where mandate_id = pg_temp.mid(1))), 0::bigint,
+  'B: and nothing is raised for a clean mandate cycle');
+
+-- 7. A second mandate (loan 8, due in two days: its notice is late from the start) and a third at lender Y.
+select is(pg_temp.mandate_up(40, 'b1', 'SAMPLE-LN-8', pg_temp.mid(2), 'SAMPLE-PM-B2', pg_temp.got('tokx'), 'B2'), 'applied', 'B: the borrower''s second mandate (loan 8) is registered');
+select is(pg_temp.mandate_up(41, 'b2', 'SAMPLE-LN-Y1', pg_temp.mid(3), 'SAMPLE-PM-Y1', pg_temp.got('toky'), 'Y1'), 'applied', 'B: and lender Y''s borrower registers a mandate at lender Y');
+select pg_temp.as_system();
+select is((payments.plan_mandate_debits() ->> 'notices_late')::int >= 1, true, 'B: planning a debit inside its notice lead time marks its notice late at once');
+select pg_temp.as_user(pg_temp.u(40));
+select is((select (status, planned, notice_status)::text from payments.my_mandate_debits(pg_temp.mid(2))), '(scheduled,t,late)', 'B: the borrower sees the second debit with a late notice');
+select pg_temp.as_user(pg_temp.u(17));
+select is((select (class, severity, owner)::text from payments.reconciliation_exceptions where class = 'mandate_notice_late' and subject ->> 'debit_id' in
+            (select id::text from payments.mandate_debits where mandate_id = pg_temp.mid(2))), '(mandate_notice_late,warning,lender)', 'B: the lender''s viewer sees the late notice raised as a lender exception');
+select pg_temp.as_user(pg_temp.u(27));
+select is((select count(*) from payments.mandates where lender_org_id = pg_temp.lx()) + (select count(*) from payments.mandate_debits where lender_org_id = pg_temp.lx())
+          + (select count(*) from payments.pre_debit_notices where lender_org_id = pg_temp.lx()) + (select count(*) from payments.mandate_events where lender_org_id = pg_temp.lx()), 0::bigint,
+  'B: lender Y''s viewer sees none of lender X''s mandates, debits, notices or mandate history');
+select is((select count(*) from payments.mandates), 1::bigint, 'B: and exactly its own mandate');
+select pg_temp.as_user(pg_temp.u(17));
+select is((select count(*) from payments.mandates), 2::bigint, 'B: lender X''s viewer sees its two mandates and not lender Y''s');
+select pg_temp.as_user(pg_temp.u(41));
+select is(pg_temp.err(format($$select payments.request_mandate_cancellation(%L)$$, pg_temp.mid(2))), 'P0002|', 'B: another borrower cannot cancel the mandate');
+select is((select array_agg(mandate_id) from payments.my_mandates()), array[pg_temp.mid(3)], 'B: and sees only her own mandate');
+-- 8. The borrower cancels; the provider has not acknowledged it.
+select pg_temp.as_user(pg_temp.u(40));
+select is((select array_agg(mandate_id order by mandate_id) from payments.my_mandates()), array[pg_temp.mid(1), pg_temp.mid(2)], 'B: the first borrower sees her two mandates');
+select is(payments.request_mandate_cancellation(pg_temp.mid(2)), 'cancel_requested', 'B: the borrower asks to cancel the second mandate');
+select is((select (cancel_requested, next_debit_on is null)::text from payments.my_mandates() where mandate_id = pg_temp.mid(2)), '(t,t)', 'B: she sees the request, and no next debit is shown for a mandate she asked to cancel');
+select pg_temp.as_system();
+select is((select count(*) from payments.claim_pre_debit_notices(100) where mandate_id = pg_temp.mid(2)), 0::bigint, 'B: no pre-debit notice is sent for a mandate with a cancellation request');
+select pg_temp.as_owner();
+select is((select count(*) from ops.outbox_events where dedupe_key like 'mandate.cancel:' || pg_temp.mid(2)::text || '%'), 1::bigint, 'B: one cancellation is queued for the provider');
+select pg_temp.as_system();
+select is((payments.sweep_mandates() ->> 'cancel_resent')::int, 0, 'B: the sweep does not queue it again a moment later');
+select pg_temp.as_owner();
+update payments.mandates set cancel_enqueued_at = clock_timestamp() - interval '1 hour' where id = pg_temp.mid(2);
+select pg_temp.as_system();
+select is((payments.sweep_mandates() ->> 'cancel_resent')::int, 1, 'B: an hour later, with no acknowledgement, the sweep queues the cancellation again');
+select pg_temp.as_owner();
+select is((select count(*) from ops.outbox_events where dedupe_key like 'mandate.cancel:' || pg_temp.mid(2)::text || '%'), 2::bigint, 'B: a second cancellation is in the queue');
+select pg_temp.as_system();
+select is(payments.mark_mandate_cancel_sent(pg_temp.mid(2)), 'ok', 'B: the worker sends it and records that the provider took it');
+select is((payments.sweep_mandates() ->> 'cancel_resent')::int, 0, 'B: an acknowledged cancellation is not queued again');
+-- 9. The provider confirms; the mandate is over and takes its planned debit and its notice with it.
+select is(pg_temp.mdeliver(pg_temp.got('tokx'), 'MB2C', 'mandate', 'cancelled', 'SAMPLE-PM-B2'), 'applied', 'B: the provider''s verified "cancelled" event is applied');
+select pg_temp.as_user(pg_temp.u(40));
+select is((select (status, next_debit_on is null)::text from payments.my_mandates() where mandate_id = pg_temp.mid(2)), '(cancelled,t)', 'B: the borrower sees: cancelled, no next debit');
+select is((select (status, planned)::text from payments.my_mandate_debits(pg_temp.mid(2))), '(cancelled,t)', 'B: the planned debit nobody presented is cancelled');
+select pg_temp.as_owner();
+select is((select array_agg(status) from payments.pre_debit_notices where mandate_id = pg_temp.mid(2)), array['not_needed'], 'B: and its unsent notice is closed as not needed');
+-- A debit the provider presents after the end is recorded and raised, never silently attached.
+select is(pg_temp.mdeliver(pg_temp.got('tokx'), 'DB2P', 'debit', 'pending', 'SAMPLE-DB-B2', 'SAMPLE-PM-B2', 475000, pg_temp.dt(2) || 'T10:00:00Z'), 'applied', 'B: the provider presents a debit after the end');
+select pg_temp.as_owner();
+select is((select (planned, status)::text from payments.mandate_debits where provider_debit_ref = 'SAMPLE-DB-B2'), '(f,presented)', 'B: it is recorded as an unplanned debit (the planned one was cancelled)');
+select pg_temp.as_user(pg_temp.u(17));
+select is((select (class, severity)::text from payments.reconciliation_exceptions where class = 'mandate_debit_unresolved' and subject ->> 'debit_id' in
+            (select id::text from payments.mandate_debits where provider_debit_ref = 'SAMPLE-DB-B2')), '(mandate_debit_unresolved,critical)', 'B: the lender''s viewer sees a critical mandate_debit_unresolved for it');
+select pg_temp.as_user(pg_temp.u(27));
+select is((select count(*) from payments.reconciliation_exceptions where class in ('mandate_notice_late', 'mandate_debit_unresolved')), 0::bigint, 'B: and lender Y sees none of those exceptions');
+select pg_temp.as_user(pg_temp.u(41));
+select is((select (status)::text from payments.my_mandates()), 'active', 'B: lender Y''s mandate is untouched by lender X''s cancellation (still active)');
 
 select * from finish();
 rollback;
