@@ -293,6 +293,12 @@ comment on function servicing.plan_reminders(interval, integer) is
 -- ---------------------------------------------------------------------------------------------
 -- F. Claiming and recording (A23, M33, M34, M36, M37, M39, M40)
 -- ---------------------------------------------------------------------------------------------
+-- The claim scan pages through planned messages (and through claimed messages whose lease ran out) in (scheduled_for, id) order, so each page can stop
+-- early. These two partial indexes serve exactly that; they replace reminders_due (scheduled_for) where status = 'planned', which they cover.
+create index reminders_planned_keyset on servicing.reminders (scheduled_for, id) where status = 'planned';
+create index reminders_claimed_keyset on servicing.reminders (scheduled_for, id) where status = 'claimed';
+drop index servicing.reminders_due;
+
 -- The return type gains claim_token, so the function is dropped and created again (grants restated below).
 drop function servicing.claim_due_reminders(integer, interval);
 create function servicing.claim_due_reminders(p_limit integer default 100, p_lease interval default interval '10 minutes')
@@ -307,6 +313,7 @@ declare
   v_now timestamptz := clock_timestamp();
   v_today date := (clock_timestamp() at time zone 'Asia/Kolkata')::date;
   v_clock timestamptz;
+  c record;
   r servicing.reminders;
   pol servicing.reminder_policies;
   l servicing.loan_accounts;
@@ -344,26 +351,45 @@ begin
   -- A lender window only narrows the platform window: when that is closed, no lender window is open.
   if not private.reminder_in_window(v_clock, v_params.window_from, v_params.window_to) then return; end if;
   -- The scan pages through the candidates by (scheduled_for, id) and goes on until p_limit messages are claimed or the candidates run out, so
-  -- messages that are held back (stale or inconsistent report, a later installment, the daily cap) never use up the limit. The window and the
-  -- lender's switches are decided inside the query.
+  -- messages that are held back (a later installment, the daily cap) never use up the limit. The window, the lender's switches and the rule
+  -- "no consistent, fresh lender report, no claim" are decided inside the query, so a lender whose report went stale costs a lookup per row and no
+  -- more (its messages stay planned, and expire after 48 hours if no report comes).
   loop
     exit when v_claimed >= p_limit;
     v_seen := 0;
-    for r in
-      select x.* from servicing.reminders x
-        join servicing.reminder_policies pp on pp.id = x.policy_id and pp.lender_org_id = x.lender_org_id
-       where (x.scheduled_for, x.id) > (v_after_at, v_after_id)
-         and x.scheduled_for <= v_now
-         and (x.status = 'planned' or (x.status = 'claimed' and x.claimed_until < v_now and x.attempts < 3))
-         and private.reminder_in_window(v_clock, greatest(pp.window_from, v_params.window_from), least(pp.window_to, v_params.window_to))
-         and private.feature_enabled(x.lender_org_id, 'reminders') and private.feature_enabled(x.lender_org_id, 'servicing_sync')
-       order by x.scheduled_for, x.id
-       limit v_page
-       for update of x skip locked
+    for c in
+      select u.id, u.scheduled_for from (
+        (select x.id, x.scheduled_for from servicing.reminders x
+           join servicing.reminder_policies pp on pp.id = x.policy_id and pp.lender_org_id = x.lender_org_id
+           cross join lateral private.reminder_figures(x.loan_account_id) f
+          where x.status = 'planned' and (x.scheduled_for, x.id) > (v_after_at, v_after_id) and x.scheduled_for <= v_now
+            and f.ok and not f.stale
+            and private.reminder_in_window(v_clock, greatest(pp.window_from, v_params.window_from), least(pp.window_to, v_params.window_to))
+            and private.feature_enabled(x.lender_org_id, 'reminders') and private.feature_enabled(x.lender_org_id, 'servicing_sync')
+          order by x.scheduled_for, x.id
+          limit v_page)
+        union all
+        (select x.id, x.scheduled_for from servicing.reminders x
+           join servicing.reminder_policies pp on pp.id = x.policy_id and pp.lender_org_id = x.lender_org_id
+           cross join lateral private.reminder_figures(x.loan_account_id) f
+          where x.status = 'claimed' and x.claimed_until < v_now and x.attempts < 3 and (x.scheduled_for, x.id) > (v_after_at, v_after_id) and x.scheduled_for <= v_now
+            and f.ok and not f.stale
+            and private.reminder_in_window(v_clock, greatest(pp.window_from, v_params.window_from), least(pp.window_to, v_params.window_to))
+            and private.feature_enabled(x.lender_org_id, 'reminders') and private.feature_enabled(x.lender_org_id, 'servicing_sync')
+          order by x.scheduled_for, x.id
+          limit v_page)
+      ) u
+      order by u.scheduled_for, u.id
+      limit v_page
     loop
       v_seen := v_seen + 1;
-      v_after_at := r.scheduled_for;
-      v_after_id := r.id;
+      v_after_at := c.scheduled_for;
+      v_after_id := c.id;
+      -- Lock the candidate (skip locked: another worker has it) and look at it again: it may have moved since the scan.
+      select * into r from servicing.reminders x
+       where x.id = c.id and (x.status = 'planned' or (x.status = 'claimed' and x.claimed_until < v_now and x.attempts < 3))
+       for update skip locked;
+      if not found then continue; end if;
       v_why := null;
       select * into pol from servicing.reminder_policies p where p.id = r.policy_id;
       select * into l from servicing.loan_accounts la where la.id = r.loan_account_id;

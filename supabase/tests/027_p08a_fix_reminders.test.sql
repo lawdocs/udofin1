@@ -5,7 +5,7 @@
 -- database WITHOUT the migration this file then fails assertion by assertion instead of aborting at the first statement that needs the new objects.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(101);
+select plan(102);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -327,6 +327,11 @@ select pg_temp.mk_loan(7, pg_temp.ly(), pg_temp.got('b1')::uuid, 1, 31, 1, 47500
 insert into servicing.reminders (lender_org_id, loan_account_id, borrower_id, policy_id, installment_seq, due_date, offset_days, channel, scheduled_for)
 select la.lender_org_id, la.id, la.borrower_id, pg_temp.pol(), g, pg_temp.d() + 1, 0, 'in_app', now() - interval '3 hours' - g * interval '1 second'
 from servicing.loan_accounts la, generate_series(1, 205) g where la.id = pg_temp.lid(8);
+-- 205 rows of a loan with a fresh report whose installments are not the next due one: they are held back inside the claim loop, not by the scan query.
+select pg_temp.mk_loan(36, pg_temp.lx(), pg_temp.got('b1')::uuid, 1, 31, 1, 475000, 0, 0);
+insert into servicing.reminders (lender_org_id, loan_account_id, borrower_id, policy_id, installment_seq, due_date, offset_days, channel, scheduled_for)
+select la.lender_org_id, la.id, la.borrower_id, pg_temp.pol(), 1 + g, pg_temp.d() + 31, -1, 'in_app', now() - interval '2 hours' - g * interval '1 second'
+from servicing.loan_accounts la, generate_series(1, 205) g where la.id = pg_temp.lid(36);
 set local session_replication_role = replica;
 insert into servicing.reminder_policies (lender_org_id, version, status, offsets_days, channels, window_from, window_to, max_per_day, drafted_by, approved_by, approved_at)
 values (pg_temp.ly(), 1, 'approved', array[0], array['in_app'], time '09:00', time '18:00', 2, pg_temp.u(6), pg_temp.u(10), now());
@@ -336,9 +341,10 @@ from servicing.reminder_policies p cross join (values (0), (-1)) o (off) cross j
 set local session_replication_role = origin;
 select pg_temp.mk_rem(9, 1, 1, 0, 'in_app', interval '1 hour');
 select pg_temp.as_system();
-select is(pg_temp.claim(3), 1::bigint, 'with a limit of 3, four rows of a lender whose reminders switch is off and 205 rows (more than one page of the scan) held back by a stale report come before the one claimable row: it is still claimed');
+select is(pg_temp.claim(3), 1::bigint, 'with a limit of 3, four rows of a lender whose reminders switch is off, 205 rows held back by a stale report and 205 rows of a later installment (more than one page of the scan) come before the one claimable row: it is still claimed');
 select is(pg_temp.st(9, 1, 0), 'claimed', 'the claimable message is the one that was claimed');
 select is((select count(*) from servicing.reminders where loan_account_id = pg_temp.lid(8) and status = 'planned'), 205::bigint, 'the 205 rows held back by the stale report stay planned (not claimed, not suppressed, not dropped)');
+select is((select count(*) from servicing.reminders where loan_account_id = pg_temp.lid(36) and status = 'planned'), 205::bigint, 'and so do the 205 rows of a later installment');
 select is((select count(*) from servicing.reminders where loan_account_id = pg_temp.lid(7) and status = 'planned'), 4::bigint, 'and so do the four rows of the lender whose reminders switch is off');
 
 -- 5.2 A pre-due or due-day message is never claimed for an installment whose day has passed (M33).
