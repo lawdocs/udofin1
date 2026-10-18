@@ -1,9 +1,12 @@
 import { createApiClient } from '@udofin/auth-client';
 import {
   LP_LIST_KEYS,
+  flashIsDone,
+  lpAskedLender,
   lpCapabilitiesFrom,
   lpKeepParams,
   lpLenderFrom,
+  lpLendersOf,
   lpPermissionsIn,
   type LpParams,
   type LpResult,
@@ -12,6 +15,7 @@ import {
 import { connection } from 'next/server';
 import { requireSession } from '@/components/session-gate';
 import { portalAuth } from '@/lib/auth';
+import { successNotice } from '@/app/_flash';
 import { paymentsAction } from './actions';
 
 /**
@@ -27,14 +31,16 @@ export async function paymentsPage(searchParams: Promise<LpParams>) {
     baseUrl: portalAuth().apiBaseUrl,
     getAccessToken: () => Promise.resolve(session.accessToken),
   });
-  // The lender the screens act for, and what the person may do in that lender (not in any other organisation).
-  const lenderId = lpLenderFrom(session.me.memberships);
+  // The lender the screens act for (the one chosen in the address when the person belongs to it, else the first that holds a
+  // payment permission), and what the person may do in that lender (not in any other organisation).
+  const lenderId = lpLenderFrom(session.me.memberships, lpAskedLender(query));
   return {
     me: session.me,
     api,
     query,
     caps: lpCapabilitiesFrom(lpPermissionsIn(session.me.memberships, lenderId)),
     lenderId,
+    lenders: lpLendersOf(session.me.memberships),
     userId: session.me.userId,
   } as const;
 }
@@ -47,6 +53,7 @@ export const viewContext = (page: Ready, returnTo: string): LpViewContext => ({
   returnTo,
   caps: page.caps,
   userId: page.userId,
+  lenders: page.lenders,
   ...(page.lenderId ? { lenderId: page.lenderId } : {}),
 });
 
@@ -68,20 +75,20 @@ export const keepFilters = (query: LpParams, list: keyof typeof LP_LIST_KEYS) =>
     LP_LIST_KEYS[list].filter((key) => key !== 'cursor'),
   );
 
-const COUNT = /^\d{1,6}$/;
 const CODE = /^[a-z0-9_]{1,60}$/;
-const count = (value: string | string[] | undefined): number | undefined => {
-  const text = firstParam(value);
-  return text !== undefined && COUNT.test(text) ? Number(text) : undefined;
-};
 
-/** The outcome of the last form, read from the address. Only a flag, a stable code and two counts can arrive this way. */
-export function noticeFrom(query: LpParams) {
+/**
+ * The outcome of the last form on this page. A success, and the counts of a bank-credit upload, are what the server wrote after
+ * the API accepted the change, for this page, a few seconds ago: neither can be claimed by the address. Only a stable error code
+ * can arrive in the address, and it is shown as a fixed sentence.
+ */
+export async function noticeFrom(query: LpParams, path: string) {
   const error = firstParam(query.error);
+  const notice = await successNotice(path);
   return {
-    done: query.done === '1',
+    done: flashIsDone(notice),
     error: error !== undefined && CODE.test(error) ? error : undefined,
-    inserted: count(query.inserted),
-    duplicates: count(query.duplicates),
+    inserted: notice?.counts?.inserted,
+    duplicates: notice?.counts?.duplicates,
   };
 }

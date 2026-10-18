@@ -26,7 +26,7 @@ export default async function DocumentRequestsRoute({
     ...(query.cursor ? { cursor: query.cursor } : {}),
     ...(query.lenderId ? { lenderId: query.lenderId } : {}),
   });
-  const notice = noticeFrom(raw);
+  const notice = await noticeFrom(raw, '/loans/requests');
   return (
     <PageFrame me={page.session.me} current="/loans">
       <ServicingRequestsPage

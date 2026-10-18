@@ -25,7 +25,7 @@ export default async function PolicyRoute({
   const policies = lender
     ? await loadReminderPolicies(page.api, lender.lenderId, query)
     : ({ ok: false, status: 403, code: 'forbidden' } as const);
-  const notice = noticeFrom(raw);
+  const notice = await noticeFrom(raw, '/reminders/policy');
   return (
     <PageFrame me={page.session.me} current="/reminders">
       <RemindersPolicyPage

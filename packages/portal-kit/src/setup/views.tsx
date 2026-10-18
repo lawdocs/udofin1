@@ -886,8 +886,11 @@ export function SetupFeaturesPage({
       <h1>Features</h1>
       <SetupNav current="/payment-setup/features" />
       <p>
-        These switches are read-only. Only the platform team can change them, and it takes two
-        people. Your organisation cannot switch a feature on or off from here.
+        These switches are read-only. Only the platform team can change them; your organisation
+        cannot switch a feature on or off from here. Switching a feature on takes two platform
+        people: one asks and a different person decides. The platform team can switch a feature off
+        with one person, at once, in an emergency; switching it on again then needs a new two-person
+        request. Every change is kept in the platform’s history.
       </p>
       {lender === null ? (
         <NoLender what="the features" />

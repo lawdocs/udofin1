@@ -36,7 +36,7 @@ export default async function PaymentConfigRoute({
         loadPaymentSetupSettlements(page.api, config.data.lenderId),
       ])
     : [forbidden, forbidden, forbidden, forbidden];
-  const notice = noticeFrom(await searchParams);
+  const notice = await noticeFrom(await searchParams, `/payment-setup/${id}`);
   return (
     <PageFrame me={page.session.me} current="/payment-setup">
       <PaymentSetupDetailPage

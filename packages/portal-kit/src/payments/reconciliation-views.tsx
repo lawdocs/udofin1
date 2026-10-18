@@ -1,5 +1,6 @@
 import { LP_BANK_CREDIT_MAX_ROWS } from '@udofin/contracts';
 import { OpForm, SelectField, TextField } from '../onboarding/forms.js';
+import { LenderPicker } from '../reminders/common.js';
 import { EmptyState } from '../states.js';
 import { type LpResult } from './data.js';
 import { lpCount, lpDate, lpDateTimeIst, lpRupees } from './format.js';
@@ -10,6 +11,7 @@ import {
   Facts,
   Loadable,
   Pager,
+  LpLender,
   LpNotice,
   RECONCILIATION_LINKS,
   SectionNav,
@@ -33,14 +35,20 @@ import {
 export function LpReconciliationRunsView({
   page,
   keep,
+  lenders,
+  lenderId,
 }: {
   page: LpResult<RunPage> | undefined;
   keep: Readonly<Record<string, string>>;
+  /** The lenders the person holds a payment permission in, and the one the list is about. */
+  lenders?: readonly { lenderId: string; name: string }[];
+  lenderId?: string | undefined;
 }) {
   return (
     <section>
       <h1>Reconciliation</h1>
       <SectionNav links={RECONCILIATION_LINKS} current="/reconciliation" label="Reconciliation" />
+      <LenderPicker lenders={lenders ?? []} selected={lenderId} path="/reconciliation" />
       <p className="muted">
         Each run compares what the payment provider reported, what the provider settled, the bank
         credits you uploaded and the receipts from your loan system. A run that lacked an input says
@@ -83,7 +91,9 @@ export function LpReconciliationRunsView({
                       <td>{lpCount(run.counts.matchedToReceipt)}</td>
                       <td>{lpDateTimeIst(run.createdAt)}</td>
                       <td>
-                        <a href={`/reconciliation/runs/${run.runDate}`}>Open report</a>
+                        <a href={`/reconciliation/runs/${run.runDate}?lenderId=${run.lenderId}`}>
+                          Open report
+                        </a>
                       </td>
                     </tr>
                   ))}
@@ -466,6 +476,7 @@ export function LpBankCreditUploadView({
         label="Reconciliation"
       />
       <LpNotice done={done} error={error} inserted={inserted} duplicates={duplicates} />
+      <LpLender ctx={ctx} path="/reconciliation/bank-credits" />
       <WhatItChanges>
         <p>
           Reports the credits that reached your settlement account so that reconciliation can match
@@ -543,11 +554,13 @@ export function LpReconciliationSettingsView({
         label="Reconciliation"
       />
       <LpNotice done={done} error={error} />
+      <LpLender ctx={ctx} path="/reconciliation/settings" />
       <Loadable result={settings} title="the waiting times">
         {(data) => {
+          // Only the row of the lender acted for. Another lender's row is never shown or pre-filled, even when it is the only one.
           const current = ctx.lenderId
-            ? (data.items.find((s) => s.lenderId === ctx.lenderId) ?? data.items[0])
-            : data.items[0];
+            ? data.items.find((s) => s.lenderId === ctx.lenderId)
+            : undefined;
           return (
             <>
               <p className="muted">
@@ -569,8 +582,8 @@ export function LpReconciliationSettingsView({
                 />
               ) : (
                 <p>
-                  Your organisation has not set its own waiting times: the unverified platform
-                  defaults apply. Each report states the waiting times its run used.
+                  This lender has not set its own waiting times: the unverified platform defaults
+                  apply. Each report states the waiting times its run used.
                 </p>
               )}
               {ctx.caps.configure && ctx.lenderId ? (

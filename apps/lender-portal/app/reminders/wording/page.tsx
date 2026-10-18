@@ -25,7 +25,7 @@ export default async function WordingRoute({
   const templates = lender
     ? await loadReminderTemplates(page.api, lender.lenderId, query)
     : ({ ok: false, status: 403, code: 'forbidden' } as const);
-  const notice = noticeFrom(raw);
+  const notice = await noticeFrom(raw, '/reminders/wording');
   return (
     <PageFrame me={page.session.me} current="/reminders">
       <RemindersWordingPage

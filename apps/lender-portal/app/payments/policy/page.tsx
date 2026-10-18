@@ -1,6 +1,6 @@
 import { LpPaymentPolicyView, lpLoadPaymentPolicy } from '@udofin/portal-kit';
 import { PageFrame } from '@/components/page-frame';
-import { noticeFrom, paymentsPage, viewContext } from '../_page-kit';
+import { noLender, noticeFrom, paymentsPage, viewContext } from '../_page-kit';
 
 export default async function PaymentPolicyRoute({
   searchParams,
@@ -9,8 +9,9 @@ export default async function PaymentPolicyRoute({
 }) {
   const page = await paymentsPage(searchParams);
   if ('blocked' in page) return page.blocked;
-  const policy = await lpLoadPaymentPolicy(page.api);
-  const notice = noticeFrom(page.query);
+  // The policy of the lender acted for only: the list is asked for that lender, never for every lender the person belongs to.
+  const policy = page.lenderId ? await lpLoadPaymentPolicy(page.api, page.lenderId) : noLender;
+  const notice = await noticeFrom(page.query, '/payments/policy');
   return (
     <PageFrame me={page.me} current="/payments">
       <LpPaymentPolicyView

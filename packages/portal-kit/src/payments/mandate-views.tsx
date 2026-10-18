@@ -22,6 +22,7 @@ import {
   Loadable,
   MANDATES_LINKS,
   Pager,
+  LpLender,
   LpNotice,
   SectionNav,
   WhatItChanges,
@@ -428,11 +429,13 @@ export function LpMandatePolicyView({
       <h1>Mandate policy</h1>
       <SectionNav links={MANDATES_LINKS} current="/mandates/policy" label="Mandates" />
       <LpNotice done={done} error={error} />
+      <LpLender ctx={ctx} path="/mandates/policy" />
       <Loadable result={policy} title="the mandate policy">
         {(data) => {
+          // Only the row of the lender acted for. Another lender's row is never shown or pre-filled, even when it is the only one.
           const current = ctx.lenderId
-            ? (data.items.find((p) => p.lenderId === ctx.lenderId) ?? data.items[0])
-            : data.items[0];
+            ? data.items.find((p) => p.lenderId === ctx.lenderId)
+            : undefined;
           return (
             <>
               <h2>Current policy</h2>
@@ -454,7 +457,7 @@ export function LpMandatePolicyView({
                   ]}
                 />
               ) : (
-                <p>No mandate policy has been set for your organisation yet.</p>
+                <p>No mandate policy has been set for this lender yet.</p>
               )}
               {ctx.caps.configure && ctx.lenderId ? (
                 <>

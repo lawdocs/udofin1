@@ -20,7 +20,7 @@ export default async function ConflictsRoute({
   const raw = await searchParams;
   const query = parseServicingQuery(raw, { status: LS_CONFLICT_STATUSES });
   const conflicts = await loadServicingConflicts(page.api, query);
-  const notice = noticeFrom(raw);
+  const notice = await noticeFrom(raw, '/imports/conflicts');
   return (
     <PageFrame me={page.session.me} current="/imports">
       <ServicingConflictsPage

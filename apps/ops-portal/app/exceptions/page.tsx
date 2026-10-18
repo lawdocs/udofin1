@@ -10,6 +10,7 @@ import {
 } from '@udofin/portal-kit';
 import { connection } from 'next/server';
 import { PageFrame } from '@/components/page-frame';
+import { successNotice } from '@/app/_flash';
 import { platformAction, registerAccountAction } from '../accounts/actions';
 import { platformSession } from '../accounts/platform-session';
 
@@ -33,6 +34,8 @@ export default async function ExceptionsRoute({
       : loadPlatformOpenExceptions(page.api, query),
     loadPlatformLenderChoices(page.generic),
   ]);
+  // A success is what the server wrote for this page after the API accepted the change, never what the address says.
+  const flash = await successNotice('/exceptions');
   return (
     <PageFrame me={page.session.me} current="/exceptions">
       <AccountsExceptionsPage
@@ -48,7 +51,7 @@ export default async function ExceptionsRoute({
           caps: page.caps,
           userId: page.userId,
         }}
-        notice={accountsNoticeFrom(raw)}
+        notice={accountsNoticeFrom(raw, flash)}
       />
     </PageFrame>
   );

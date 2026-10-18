@@ -266,7 +266,7 @@ export function SettlementRequestForm({
             required
             maxLength={80}
             defaultValue={typedFirst(typed, 'label')}
-            hint="2 to 80 characters. Do not put an account number in it."
+            hint="2 to 80 characters. Do not put an account number, a PAN or any other personal number in it, not even with spaces or hyphens between the digits."
           />
           <TextInput
             name="bankName"
@@ -274,6 +274,7 @@ export function SettlementRequestForm({
             required
             maxLength={120}
             defaultValue={typedFirst(typed, 'bankName')}
+            hint="The name of the bank only. No account number or other personal number, not even with spaces or hyphens between the digits."
           />
           <TextInput
             name="maskedRef"

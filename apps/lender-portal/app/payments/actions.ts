@@ -1,9 +1,10 @@
 'use server';
 
 import { createApiClient } from '@udofin/auth-client';
-import { lpRunOperation, lpSafeReturnPath } from '@udofin/portal-kit';
+import { lpIsUuid, lpRunOperation, lpSafeReturnPath } from '@udofin/portal-kit';
 import { redirect } from 'next/navigation';
 import { currentSession, portalAuth } from '@/lib/auth';
+import { rememberSuccess } from '@/app/_flash';
 
 /**
  * The single entry point for the payment, mandate and reconciliation forms. A form names an operation from the allow-list in
@@ -20,15 +21,17 @@ export async function paymentsAction(formData: FormData): Promise<void> {
   });
   const outcome = await lpRunOperation(api, formData);
   const params = new URLSearchParams();
+  // A person who belongs to several lenders comes back to the lender the form was for (an identifier, checked), not to another.
+  const lenderId = formData.get('lenderId');
+  if (lpIsUuid(lenderId)) params.set('lenderId', lenderId);
   if (outcome.ok) {
-    params.set('done', '1');
-    if (outcome.counts) {
-      params.set('inserted', String(outcome.counts.inserted));
-      params.set('duplicates', String(outcome.counts.duplicates));
-    }
+    // The confirmation (and the counts of an upload) are written here, after the API accepted the change: a count or a "done" in
+    // the address could be written by anybody.
+    await rememberSuccess(returnTo, outcome.counts ? { counts: outcome.counts } : {});
   } else {
     // Only a stable code travels in the address; anything else becomes a neutral one.
     params.set('error', /^[a-z0-9_]{1,60}$/.test(outcome.code) ? outcome.code : 'failed');
   }
-  return redirect(`${returnTo}?${params.toString()}`);
+  const query = params.toString();
+  return redirect(query ? `${returnTo}?${query}` : returnTo);
 }

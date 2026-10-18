@@ -779,6 +779,37 @@ describe('the allow-listed operations', () => {
       expect(calls).toEqual([]);
     });
 
+    // A number can be hidden from a run-of-six rule by splitting it with spaces, hyphens, dots or slashes.
+    it.each([
+      ['spaced digits in the label', { label: 'Collections 1234 5678 9012 3456' }],
+      ['hyphenated digits in the bank name', { bankName: 'Example Bank A/c 0012-3456-7890-1234' }],
+      ['dotted digits in the label', { label: 'Collections 1234.5678.9012' }],
+      ['slashed digits in the bank name', { bankName: 'Bank 123/456/789' }],
+      ['nine digits in short groups', { label: 'Acct 12 34 56 78 9' }],
+      ['PAN in the label', { label: 'Owner ABCDE1234F' }],
+      ['lower-case PAN in the label', { label: 'Owner abcde1234f' }],
+      ['mixed-case PAN in the bank name', { bankName: 'Sample Bank AbCdE1234f' }],
+      ['a contiguous run of six digits (as before)', { label: 'Account 123456' }],
+    ])('sends nothing for %s', async (_why, change) => {
+      const { api, calls } = recorder();
+      expect(await runSetupOperation(api, formOf({ ...base, ...change }))).toEqual({
+        ok: false,
+        code: 'settlement_account_invalid',
+      });
+      expect(calls).toEqual([]);
+    });
+
+    it.each([
+      ['a year range', { label: 'Collections 2026-27' }],
+      ['a short branch code', { bankName: 'Sample Bank, branch 04/11' }],
+      ['eight digits split by spaces', { label: 'Account 12 34 56 78' }],
+      ['a word that is nearly a PAN', { label: 'Operating account ABCDE12' }],
+    ])('still accepts %s', async (_why, change) => {
+      const { api, calls } = recorder();
+      expect(await runSetupOperation(api, formOf({ ...base, ...change }))).toEqual({ ok: true });
+      expect(calls).toHaveLength(1);
+    });
+
     it('sends nothing for a missing label, bank or lender', async () => {
       const { api, calls } = recorder();
       expect(await runSetupOperation(api, formOf({ ...base, label: '' }))).toEqual({
@@ -1336,8 +1367,11 @@ describe('the allow-listed operations', () => {
         expect(safeSetupReturnPath(path), String(path)).toBe('/payment-setup');
     });
 
-    it('adds the result as done=1 or a short error code and nothing else', () => {
-      expect(setupNoticeUrl('/payment-setup', { ok: true })).toBe('/payment-setup?done=1');
+    it('puts nothing about a success in the address, only a short error code for a failure', () => {
+      expect(setupNoticeUrl('/payment-setup', { ok: true })).toBe('/payment-setup');
+      expect(setupNoticeUrl('/payment-setup?done=1&lenderId=abc', { ok: true })).toBe(
+        '/payment-setup?lenderId=abc',
+      );
       expect(
         setupNoticeUrl('/payment-setup/accounts?lenderId=abc', {
           ok: false,
@@ -2064,6 +2098,14 @@ describe('Merchants and settlement accounts', () => {
     });
   });
 
+  it('says in the hints of the label and the bank name that spaces and hyphens do not hide a number', () => {
+    const { container } = view();
+    const words = text(container);
+    expect(words).toMatch(/Do not put an account number, a PAN or any other personal number in it/);
+    expect(words).toMatch(/No account number or other personal number/);
+    expect(words.match(/not even with spaces or hyphens between the digits/g)).toHaveLength(2);
+  });
+
   it('says it never takes a full account number, and has no field for one', () => {
     const { container } = view();
     expect(text(container)).toMatch(
@@ -2098,9 +2140,20 @@ describe('Features (read only)', () => {
   it('says the switches are read-only and only the platform team changes them', () => {
     const { container } = view();
     expect(text(container)).toMatch(/These switches are read-only/);
-    expect(text(container)).toMatch(
-      /Only the platform team can change them, and it takes two people/,
+    expect(text(container)).toMatch(/Only the platform team can change them/);
+  });
+
+  it('says what is true about people: two to switch on, one may switch off in an emergency', () => {
+    const { container } = view();
+    const words = text(container);
+    expect(words).toMatch(/Switching a feature on takes two platform people/);
+    expect(words).toMatch(
+      /The platform team can switch a feature off with one person, at once, in an emergency/,
     );
+    expect(words).toMatch(/switching it on again then needs a new two-person request/);
+    expect(words).toMatch(/Every change is kept in the platform’s history/);
+    // The old sentence told lenders that no feature can be removed without a second person.
+    expect(words).not.toMatch(/it takes two people/);
   });
 
   it('has no write form for anybody', () => {

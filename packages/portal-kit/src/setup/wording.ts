@@ -165,6 +165,19 @@ export function looksLikeSecretValue(text: string): boolean {
   return false;
 }
 
+/**
+ * Whether the label or bank name of a settlement account could carry a personal or account number. A run of six or more digits
+ * is refused (the database does the same), and so is a number split up so that no run is long: nine or more digits once
+ * spaces, hyphens, dots and slashes are removed, or a PAN-shaped token in any letter case. The masked reference is the only
+ * place an account is named; these two fields are free text and must never become a second copy of a number. The contract and
+ * the database apply their own check and stay the authority.
+ */
+export function looksLikeAccountDetail(text: string): boolean {
+  if (/[0-9]{6,}/.test(text)) return true;
+  if (/[0-9]{9,}/.test(text.replace(/[\s\-./]/g, ''))) return true;
+  return /\b[A-Za-z]{5}[0-9]{4}[A-Za-z]\b/.test(text);
+}
+
 // -- Errors ---------------------------------------------------------------------------------------------------------------
 const GENERIC_ERROR = 'The action could not be completed. Nothing was changed.';
 const ERROR: Readonly<Record<string, string>> = {

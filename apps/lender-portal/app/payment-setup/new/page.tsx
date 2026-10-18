@@ -30,7 +30,7 @@ export default async function NewPaymentConfigRoute({
         loadPaymentSetupSettlements(page.api, lender.lenderId),
       ])
     : [forbidden, forbidden, forbidden];
-  const notice = noticeFrom(raw);
+  const notice = await noticeFrom(raw, '/payment-setup/new');
   return (
     <PageFrame me={page.session.me} current="/payment-setup">
       <PaymentSetupNewPage

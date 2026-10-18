@@ -9,6 +9,7 @@ import {
 } from '@udofin/portal-kit';
 import { redirect } from 'next/navigation';
 import { currentSession, portalAuth } from '@/lib/auth';
+import { rememberSuccess } from '@/app/_flash';
 
 async function apiFor() {
   const session = await currentSession();
@@ -29,6 +30,8 @@ export async function remindersAction(formData: FormData): Promise<void> {
   const api = await apiFor();
   if (!api) return redirect('/login');
   const outcome = await runRemindersOperation(api, formData);
+  // The confirmation is written here, after the API accepted the change, not carried in the address.
+  if (outcome.ok) await rememberSuccess(returnTo);
   return redirect(remindersNoticeUrl(returnTo, outcome));
 }
 
@@ -42,5 +45,6 @@ export async function remindersDraftAction(formData: FormData): Promise<Reminder
   if (!api) return redirect('/login');
   const outcome = await runRemindersOperation(api, formData);
   if (!outcome.ok) return outcome;
+  await rememberSuccess(returnTo);
   return redirect(remindersNoticeUrl(returnTo, outcome));
 }

@@ -347,6 +347,22 @@ export type ServicingOutcome = { ok: true; stage?: StageState } | { ok: false; c
 const KEY = /^[A-Za-z0-9._:-]{16,128}$/;
 const STAGE_OPERATION = 'servicing.import.stage';
 const COMMIT_OPERATION = 'servicing.import.commit';
+const REGISTER_OPERATION = 'servicing.document.register';
+
+/**
+ * How long the portal waits for the API on the operations that carry or process a whole file. Staging checks every record,
+ * applying writes them, and registering a document posts a PDF of up to 8 MiB as a JSON body of about 11 MB. The generic client
+ * limit (10 s) cut these off while the API was still working and showed a false failure. The limit is bounded: a call that
+ * takes longer than this is reported as "result unknown", never waited for without end.
+ */
+export const SERVICING_LONG_TIMEOUT_MS = 60_000;
+
+/** The API timeout an operation needs, or undefined for the client's own default (small writes). */
+export function servicingTimeoutMs(name: unknown): number | undefined {
+  return name === STAGE_OPERATION || name === COMMIT_OPERATION || name === REGISTER_OPERATION
+    ? SERVICING_LONG_TIMEOUT_MS
+    : undefined;
+}
 
 /**
  * Runs the operation a form names. Unknown operations are refused without any call to the API. A caller that serves one
@@ -369,7 +385,16 @@ export async function runServicingOperation(
     return { ok: false, code: 'path_not_allowed' };
   if (typeof key !== 'string' || !KEY.test(key)) return { ok: false, code: 'validation_failed' };
   const result = await operation.run(api, form, key);
-  if (!result.ok) return { ok: false, code: safeErrorCode(result.code) };
+  if (!result.ok) {
+    // A write that got no answer (timeout or a dropped connection) may still have been applied: the person is told to check,
+    // never that nothing happened.
+    if (
+      (name === COMMIT_OPERATION || name === REGISTER_OPERATION) &&
+      result.code === 'network_error'
+    )
+      return { ok: false, code: 'result_unknown' };
+    return { ok: false, code: safeErrorCode(result.code) };
+  }
   const outcome = LsImportOutcome.safeParse(result.data);
   // A commit that fails inside the database is an HTTP 200 whose batch says "failed": nothing was applied, so it is not
   // reported as done.
@@ -390,13 +415,17 @@ export function safeServicingReturnPath(value: unknown): string {
   return typeof value === 'string' && allowed.test(value) ? value : '/loans';
 }
 
-/** The page address to go back to after an action, with the result as `done=1` or a short `error` code (nothing else). */
+/**
+ * The page address to go back to after an action: the same filters, and for a failure a short `error` code (nothing else). A
+ * success adds nothing to the address: the confirmation is written by the server action as a short-lived cookie (see flash.ts),
+ * because anything in an address can be written by anybody.
+ */
 export function noticeUrl(
   returnTo: string,
   outcome: { ok: true } | { ok: false; code: string },
 ): string {
   const [path = '/loans', query = ''] = returnTo.split('?', 2);
   const kept = query.split('&').filter((part) => part !== '' && !/^(done|error)=/.test(part));
-  kept.push(outcome.ok ? 'done=1' : `error=${encodeURIComponent(safeErrorCode(outcome.code))}`);
-  return `${path}?${kept.join('&')}`;
+  if (!outcome.ok) kept.push(`error=${encodeURIComponent(safeErrorCode(outcome.code))}`);
+  return kept.length > 0 ? `${path}?${kept.join('&')}` : path;
 }

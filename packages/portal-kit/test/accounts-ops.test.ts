@@ -21,6 +21,7 @@ import {
 } from '@udofin/contracts';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
+import { openFlash, sealFlash } from '../src/flash.js';
 import { type OnboardingApi } from '../src/onboarding/api.js';
 import {
   createPlatformClient,
@@ -48,6 +49,7 @@ import {
 } from '../src/accounts/data.js';
 import {
   accountRegisteredUrl,
+  accountsFlashFor,
   ACCOUNTS_OPERATIONS,
   accountsNoticeUrl,
   runAccountRegistration,
@@ -380,23 +382,55 @@ describe('what the person may do, and what the page address may ask for', () => 
     expect(accountsHref('/accounts', {})).toBe('/accounts');
   });
 
-  it('reads the new entry only when the address holds an identifier', () => {
-    expect(registeredIdFrom({ registered: REGISTRY_1 })).toBe(REGISTRY_1);
-    expect(registeredIdFrom({ registered: 'XXXXXX1234' })).toBeUndefined();
-    expect(registeredIdFrom({ registered: [REGISTRY_1] })).toBeUndefined();
-    expect(registeredIdFrom({})).toBeUndefined();
+  // A success reaches the page as a notice the server wrote (see flash.ts), never as something the address says.
+  const NOW = Date.UTC(2026, 9, 18, 10, 0, 0);
+  const noticeFor = (path: string, detail: { result?: string; registered?: string } = {}) =>
+    openFlash(sealFlash({ path, ...detail }, NOW), path, NOW);
+
+  it('reads the new entry from the notice the server wrote, and never from the address', () => {
+    expect(registeredIdFrom(noticeFor('/accounts', { registered: REGISTRY_1 }))).toBe(REGISTRY_1);
+    expect(registeredIdFrom(noticeFor('/accounts'))).toBeUndefined();
+    expect(registeredIdFrom(undefined)).toBeUndefined();
+    // The function has no way to be given an address: a crafted ?registered=<id> cannot name an entry.
+    expect(registeredIdFrom.length).toBe(1);
     expect(isId(REGISTRY_1)).toBe(true);
     expect(isId('1; drop')).toBe(false);
   });
 
-  it('reads the notice of the last action from the address', () => {
-    expect(noticeFrom({ done: '1', error: 'x', result: 'applied', reasons: 'a,b' })).toEqual({
-      done: true,
+  it('takes a success and a decision only from the notice the server wrote', () => {
+    const raw = {
+      done: '1',
       error: 'x',
       result: 'applied',
       reasons: 'a,b',
+      registered: REGISTRY_1,
+    };
+    // A forged address alone: no confirmation, no decision. Only the closed failure codes can arrive this way.
+    expect(noticeFrom(raw, undefined)).toEqual({
+      done: false,
+      error: 'x',
+      result: undefined,
+      reasons: 'a,b',
     });
-    expect(noticeFrom({})).toEqual({
+    expect(noticeFrom({ done: '1', result: 'applied' }, undefined)).toEqual({
+      done: false,
+      error: undefined,
+      result: undefined,
+      reasons: undefined,
+    });
+    expect(noticeFrom({}, noticeFor('/features', { result: 'applied' }))).toEqual({
+      done: true,
+      error: undefined,
+      result: 'applied',
+      reasons: undefined,
+    });
+    expect(noticeFrom({ result: 'rejected' }, noticeFor('/features'))).toEqual({
+      done: true,
+      error: undefined,
+      result: undefined,
+      reasons: undefined,
+    });
+    expect(noticeFrom({}, undefined)).toEqual({
       done: false,
       error: undefined,
       result: undefined,
@@ -1394,15 +1428,14 @@ describe('where a form may go back to', () => {
       expect(safeAccountsReturnPath(bad), String(bad)).toBe('/accounts');
   });
 
-  it('adds the result as done=1 or a short error code, replacing an older notice, and nothing else', () => {
-    expect(accountsNoticeUrl('/accounts', { ok: true })).toBe('/accounts?done=1');
+  it('puts nothing about a success in the address, only a short error code, and drops an older notice', () => {
+    expect(accountsNoticeUrl('/accounts', { ok: true })).toBe('/accounts');
     expect(
       accountsNoticeUrl('/accounts?status=verified&done=1&error=x&registered=y', { ok: true }),
-    ).toBe('/accounts?status=verified&done=1');
-    expect(accountsNoticeUrl('/features', { ok: true, result: 'applied' })).toBe(
-      '/features?done=1&result=applied',
-    );
-    expect(accountsNoticeUrl('/features', { ok: true, result: '<b>' })).toBe('/features?done=1');
+    ).toBe('/accounts?status=verified');
+    expect(accountsNoticeUrl('/features', { ok: true, result: 'applied' })).toBe('/features');
+    expect(accountsNoticeUrl('/features?done=1&result=applied', { ok: true })).toBe('/features');
+    expect(accountsNoticeUrl('/features', { ok: true, result: '<b>' })).toBe('/features');
     expect(accountsNoticeUrl('/features', { ok: false, code: 'self_approval' })).toBe(
       '/features?error=self_approval',
     );
@@ -1416,6 +1449,14 @@ describe('where a form may go back to', () => {
         reasons: ['payment_config_missing', 'Bad Reason'],
       }),
     ).toBe('/features?error=prerequisites_unmet&reasons=payment_config_missing');
+  });
+
+  it('writes a success notice with the known decision and the new entry only, and none for a failure', () => {
+    expect(accountsFlashFor({ ok: true, result: 'applied' })).toEqual({ result: 'applied' });
+    expect(accountsFlashFor({ ok: true, result: '<b>' })).toEqual({});
+    expect(accountsFlashFor({ ok: true })).toEqual({});
+    expect(accountsFlashFor({ ok: true, created: { id: '123456789012' } })).toEqual({});
+    expect(accountsFlashFor({ ok: false, code: 'self_approval' })).toBeUndefined();
   });
 });
 
@@ -1529,11 +1570,13 @@ describe('the account number: typed once, posted once, to one route, and never a
       expect(text).not.toContain(forbidden);
   });
 
-  it('goes next to an address that holds the identifier, or a short code, and nothing typed', async () => {
+  it('goes next to the registry, or to a short code, and nothing typed is in the address', async () => {
     const rec = recordingApi(registered);
     const outcome = await runAccountRegistration(rec.api, formOf(fields), 'ops');
     const url = accountRegisteredUrl(outcome);
-    expect(url).toBe(`/accounts?registered=${REGISTRY_1}`);
+    // The identifier of the new entry is the notice the server writes (accountsFlashFor), not part of the address.
+    expect(url).toBe('/accounts');
+    expect(accountsFlashFor(outcome)).toEqual({ registered: REGISTRY_1 });
     for (const forbidden of [CANARY_ACCOUNT, CANARY_LAST_FOUR, CANARY_BRANCH_CODE, 'XXXXXX'])
       expect(url).not.toContain(forbidden);
     expect(accountRegisteredUrl({ ok: false, code: 'account_number_invalid' })).toBe(

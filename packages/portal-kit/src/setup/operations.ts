@@ -12,7 +12,7 @@ import { type OnboardingApi } from '../onboarding/api.js';
 import { parseRupeesToPaise } from '../servicing/format.js';
 import { safeErrorCode } from '../servicing/wording.js';
 import { RAIL_LIMIT_ROWS, type DraftedConfig } from './types.js';
-import { looksLikeSecretValue } from './wording.js';
+import { looksLikeAccountDetail, looksLikeSecretValue } from './wording.js';
 
 export type { DraftedConfig };
 
@@ -171,8 +171,9 @@ export const SETUP_OPERATIONS: Readonly<Record<string, SetupOperation>> = {
             bankName: 'settlement_account_invalid',
           }),
         );
-      // The database also refuses a run of six or more digits in the label or the bank name (so a number cannot hide there).
-      if (/[0-9]{6,}/.test(parsed.data.label) || /[0-9]{6,}/.test(parsed.data.bankName))
+      // A number must not hide in the label or the bank name: a run of six or more digits, a number split by spaces, hyphens,
+      // dots or slashes (nine or more digits in all) and a PAN-shaped token are all refused before anything is sent.
+      if (looksLikeAccountDetail(parsed.data.label) || looksLikeAccountDetail(parsed.data.bankName))
         return bad('settlement_account_invalid');
       return post(api, '/v1/lender/settlement-accounts', parsed.data, key);
     },
@@ -322,13 +323,17 @@ export function safeSetupReturnPath(value: unknown): string {
   return typeof value === 'string' && allowed.test(value) ? value : '/payment-setup';
 }
 
-/** The page address to go back to after an action, with the result as `done=1` or a short `error` code (nothing else). */
+/**
+ * The page address to go back to after an action: the same filters, and for a failure a short `error` code (nothing else). A
+ * success adds nothing to the address: the confirmation is written by the server action as a short-lived cookie (see flash.ts),
+ * because anything in an address can be written by anybody.
+ */
 export function setupNoticeUrl(
   returnTo: string,
   outcome: { ok: true } | { ok: false; code: string },
 ): string {
   const [path = '/payment-setup', query = ''] = returnTo.split('?', 2);
   const kept = query.split('&').filter((part) => part !== '' && !/^(done|error)=/.test(part));
-  kept.push(outcome.ok ? 'done=1' : `error=${encodeURIComponent(safeErrorCode(outcome.code))}`);
-  return `${path}?${kept.join('&')}`;
+  if (!outcome.ok) kept.push(`error=${encodeURIComponent(safeErrorCode(outcome.code))}`);
+  return kept.length > 0 ? `${path}?${kept.join('&')}` : path;
 }

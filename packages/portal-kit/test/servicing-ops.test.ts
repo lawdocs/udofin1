@@ -55,8 +55,10 @@ import { openLenderDocument } from '../src/servicing/document-file.js';
 import {
   noticeUrl,
   runServicingOperation,
+  SERVICING_LONG_TIMEOUT_MS,
   SERVICING_OPERATIONS,
   safeServicingReturnPath,
+  servicingTimeoutMs,
 } from '../src/servicing/operations.js';
 import {
   anomalyWords,
@@ -880,6 +882,70 @@ describe('importing a file', () => {
   });
 });
 
+describe('the time an operation may take', () => {
+  it('gives applying an import and registering a document the same bounded limit as staging a file', () => {
+    expect(SERVICING_LONG_TIMEOUT_MS).toBe(60_000);
+    for (const op of [
+      'servicing.import.stage',
+      'servicing.import.commit',
+      'servicing.document.register',
+    ])
+      expect(servicingTimeoutMs(op), op).toBe(SERVICING_LONG_TIMEOUT_MS);
+  });
+
+  it('leaves every other operation, and anything that is not an operation, on the client default', () => {
+    const others = Object.keys(SERVICING_OPERATIONS).filter(
+      (op) =>
+        ![
+          'servicing.import.stage',
+          'servicing.import.commit',
+          'servicing.document.register',
+        ].includes(op),
+    );
+    expect(others.length).toBeGreaterThan(5);
+    for (const op of others) expect(servicingTimeoutMs(op), op).toBeUndefined();
+    for (const value of [null, undefined, '', '__proto__', 42, new File([], 'x')])
+      expect(servicingTimeoutMs(value)).toBeUndefined();
+  });
+
+  const silent = (): OnboardingApi => ({
+    get: () => Promise.resolve({ ok: false as const, status: 0, code: 'network_error' }),
+    post: () => Promise.resolve({ ok: false as const, status: 0, code: 'network_error' }),
+  });
+
+  it('says the result is unknown, not that the service could not be reached, when a write got no answer', async () => {
+    const apply = await runServicingOperation(
+      silent(),
+      formOf({ op: 'servicing.import.commit', ...base, id: BATCH, reviewed: 'on' }),
+    );
+    expect(apply).toEqual({ ok: false, code: 'result_unknown' });
+    const register = await runServicingOperation(
+      silent(),
+      formOf({
+        op: 'servicing.document.register',
+        ...base,
+        loanId: LOAN,
+        kind: 'statement',
+        lenderReference: 'STMT/SAMPLE/001',
+        issuedAt: '2026-10-01T10:00',
+        file: pdfFile(),
+      }),
+    );
+    expect(register).toEqual({ ok: false, code: 'result_unknown' });
+    const words = servicingErrorMessage('result_unknown');
+    expect(words).toMatch(/not known whether this was done/);
+    expect(words).not.toMatch(/could not be reached/);
+  });
+
+  it('keeps the plain answer for a small write that got no answer', async () => {
+    const out = await runServicingOperation(
+      silent(),
+      formOf({ op: 'servicing.conflict.acknowledge', ...base, id: CONFLICT }),
+    );
+    expect(out).toEqual({ ok: false, code: 'network_error' });
+  });
+});
+
 describe('applying and discarding a file are separate explicit steps', () => {
   it('applies only when the person ticked that they reviewed the preview', async () => {
     const { api, calls } = recordingApi();
@@ -1330,12 +1396,13 @@ describe('where an action returns to', () => {
     }
   });
 
-  it('adds the result to the address and replaces an older result', () => {
-    expect(noticeUrl('/loans', { ok: true })).toBe('/loans?done=1');
+  it('puts nothing about a success in the address, a short error code for a failure, and drops an older result', () => {
+    expect(noticeUrl('/loans', { ok: true })).toBe('/loans');
     expect(noticeUrl('/loans?status=active', { ok: false, code: 'import_has_errors' })).toBe(
       '/loans?status=active&error=import_has_errors',
     );
-    expect(noticeUrl('/imports?error=forbidden', { ok: true })).toBe('/imports?done=1');
+    expect(noticeUrl('/imports?error=forbidden', { ok: true })).toBe('/imports');
+    expect(noticeUrl('/imports?done=1&cursor=a', { ok: true })).toBe('/imports?cursor=a');
     expect(noticeUrl('/imports?done=1&cursor=a', { ok: false, code: 'mfa_required' })).toBe(
       '/imports?cursor=a&error=mfa_required',
     );

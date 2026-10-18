@@ -30,7 +30,7 @@ export default async function RemindersRoute({
         loadReminderPenalTexts(page.api, lender.lenderId, {}, 1),
       ])
     : [null, { ok: false, status: 403, code: 'forbidden' } as const, null];
-  const notice = noticeFrom(raw);
+  const notice = await noticeFrom(raw, '/reminders');
   return (
     <PageFrame me={page.session.me} current="/reminders">
       <RemindersLogPage

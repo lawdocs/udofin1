@@ -17,3 +17,13 @@ export * from './payments/index.js';
 export * from './reminders/index.js';
 export * from './accounts/index.js';
 export * from './setup/index.js';
+export {
+  FLASH_TTL_SECONDS,
+  flashCookieName,
+  flashIsDone,
+  flashIsExisting,
+  flashPathOf,
+  openFlash,
+  sealFlash,
+  type Flash,
+} from './flash.js';

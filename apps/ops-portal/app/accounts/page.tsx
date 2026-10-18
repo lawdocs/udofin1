@@ -13,6 +13,7 @@ import {
 } from '@udofin/portal-kit';
 import { connection } from 'next/server';
 import { PageFrame } from '@/components/page-frame';
+import { successNotice } from '@/app/_flash';
 import { platformAction, registerAccountAction } from './actions';
 import { platformSession } from './platform-session';
 
@@ -26,7 +27,10 @@ export default async function AccountsRoute({
   if ('blocked' in page) return page.blocked;
   const raw = await searchParams;
   const query = parseAccountsQuery(raw, { status: ACCOUNTS_REGISTRY_STATUSES });
-  const registeredId = accountsRegisteredIdFrom(raw);
+  // A success, and the entry that was just registered, are what the server wrote for this page after the API accepted the change,
+  // never what the address says (an address can name any entry).
+  const flash = await successNotice('/accounts');
+  const registeredId = accountsRegisteredIdFrom(flash);
   // Registering needs to know that a format rule is approved and a key version is active; only the people who can register read them.
   const [accounts, registered, rules, keys, lenders] = await Promise.all([
     loadPlatformAccounts(page.api, query),
@@ -53,7 +57,7 @@ export default async function AccountsRoute({
           caps: page.caps,
           userId: page.userId,
         }}
-        notice={accountsNoticeFrom(raw)}
+        notice={accountsNoticeFrom(raw, flash)}
       />
     </PageFrame>
   );

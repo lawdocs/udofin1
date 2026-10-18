@@ -19,7 +19,7 @@ export default async function ClosuresRoute({
   const raw = await searchParams;
   const query = parseServicingQuery(raw);
   const closures = await loadServicingClosures(page.api, query);
-  const notice = noticeFrom(raw);
+  const notice = await noticeFrom(raw, '/loans/closures');
   return (
     <PageFrame me={page.session.me} current="/loans">
       <ServicingClosuresPage

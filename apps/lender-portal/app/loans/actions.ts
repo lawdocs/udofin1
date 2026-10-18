@@ -5,9 +5,11 @@ import {
   runServicingOperation,
   safeServicingReturnPath,
   servicingNoticeUrl,
+  servicingTimeoutMs,
 } from '@udofin/portal-kit';
 import { redirect } from 'next/navigation';
 import { currentSession, portalAuth } from '@/lib/auth';
+import { rememberSuccess } from '@/app/_flash';
 
 /**
  * The single entry point for the lender servicing forms. A form names an allow-listed operation (see
@@ -18,10 +20,15 @@ export async function servicingAction(formData: FormData): Promise<void> {
   const returnTo = safeServicingReturnPath(formData.get('returnTo'));
   const session = await currentSession();
   if (session.state !== 'ok') return redirect('/login');
+  // Applying an import and registering a document take longer than a small write (the same file was given 60 s to stage).
+  const timeoutMs = servicingTimeoutMs(formData.get('op'));
   const api = createApiClient({
     baseUrl: portalAuth().apiBaseUrl,
     getAccessToken: () => Promise.resolve(session.accessToken),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
   });
   const outcome = await runServicingOperation(api, formData);
+  // The confirmation is written here, after the API accepted the change, not carried in the address.
+  if (outcome.ok) await rememberSuccess(returnTo);
   return redirect(servicingNoticeUrl(returnTo, outcome));
 }

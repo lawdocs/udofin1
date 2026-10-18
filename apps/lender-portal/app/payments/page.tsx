@@ -10,7 +10,7 @@ export default async function PaymentsRoute({
   const page = await paymentsPage(searchParams);
   if ('blocked' in page) return page.blocked;
   const payments = await lpLoadPayments(page.api, page.query);
-  const notice = noticeFrom(page.query);
+  const notice = await noticeFrom(page.query, '/payments');
   return (
     <PageFrame me={page.me} current="/payments">
       <LpPaymentsListView

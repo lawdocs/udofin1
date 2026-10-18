@@ -48,6 +48,7 @@ export {
   runAccountRegistration,
   safeAccountsReturnPath,
   accountsNoticeUrl,
+  accountsFlashFor,
   accountRegisteredUrl,
   ACCOUNTS_OPERATIONS,
   type AccountsOutcome,

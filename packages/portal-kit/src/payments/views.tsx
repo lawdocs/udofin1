@@ -30,6 +30,7 @@ import {
   Loadable,
   PAYMENTS_LINKS,
   Pager,
+  LpLender,
   LpNotice,
   SectionNav,
   WhatItChanges,
@@ -550,11 +551,13 @@ export function LpPaymentPolicyView({
       <h1>Payment policy</h1>
       <SectionNav links={PAYMENTS_LINKS} current="/payments/policy" label="Payments" />
       <LpNotice done={done} error={error} />
+      <LpLender ctx={ctx} path="/payments/policy" />
       <Loadable result={policy} title="the payment policy">
         {(data) => {
+          // Only the row of the lender acted for. Another lender's row is never shown or pre-filled, even when it is the only one.
           const current = ctx.lenderId
-            ? (data.items.find((p) => p.lenderId === ctx.lenderId) ?? data.items[0])
-            : data.items[0];
+            ? data.items.find((p) => p.lenderId === ctx.lenderId)
+            : undefined;
           return (
             <>
               <h2>Current policy</h2>
@@ -579,8 +582,8 @@ export function LpPaymentPolicyView({
                 />
               ) : (
                 <p>
-                  No policy has been set for your organisation yet. Until it is set, the server’s
-                  own rules apply and no figure is shown here.
+                  No policy has been set for this lender yet. Until it is set, the server’s own
+                  rules apply and no figure is shown here.
                 </p>
               )}
               {ctx.caps.configure && ctx.lenderId ? (

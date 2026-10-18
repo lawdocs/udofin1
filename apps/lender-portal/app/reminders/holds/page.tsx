@@ -20,7 +20,7 @@ export default async function HoldsRoute({
   const raw = await searchParams;
   const query = parseRemindersQuery(raw, REMINDERS_STATUS_FILTERS.hold);
   const holds = await loadReminderHolds(page.api, query);
-  const notice = noticeFrom(raw);
+  const notice = await noticeFrom(raw, '/reminders/holds');
   return (
     <PageFrame me={page.session.me} current="/reminders">
       <RemindersHoldsPage

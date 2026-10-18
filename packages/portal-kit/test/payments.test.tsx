@@ -43,6 +43,7 @@ import {
   LpReconciliationSettingsView,
   LpSettlementBatchesView,
   LpSettlementBatchView,
+  lpAskedLender,
   lpCapabilitiesFrom,
   lpCheckStatementHeader,
   lpCount,
@@ -52,12 +53,18 @@ import {
   lpIsDate,
   lpIsUuid,
   lpLenderFrom,
+  lpLendersOf,
   lpLoadExceptionDetail,
   lpLoadMandateDetail,
+  lpLoadMandatePolicy,
   lpLoadPaymentDetail,
+  lpLoadPaymentPolicy,
   lpLoadPayments,
   lpLoadProviderEvents,
+  lpLoadReconRuns,
+  lpLoadReconSettings,
   lpLoadReconSummary,
+  lpLoadSettlementAccounts,
   lpLoadSettlementItems,
   lpParseRupees,
   lpPermissionsIn,
@@ -1643,8 +1650,9 @@ describe('reconciliation', () => {
     expect(cells).toContain('10');
     expect(cells.filter((c) => c === 'Not available')).toHaveLength(2);
     expect(cells).toContain('0');
+    // The report opens for the lender the run belongs to, so a person in two lenders does not land on the other one's report.
     expect(screen.getByRole('link', { name: 'Open report' }).getAttribute('href')).toBe(
-      '/reconciliation/runs/2026-10-16',
+      `/reconciliation/runs/2026-10-16?lenderId=${LENDER}`,
     );
   });
 
@@ -2632,5 +2640,389 @@ describe('filters carried from one page to the next', () => {
       />,
     );
     expect(screen.queryByRole('link', { name: 'Show all events of this payment' })).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// A person who belongs to two lenders: every figure on these pages is the acted-for lender's, never the other's.
+// ---------------------------------------------------------------------------------------------------------------
+describe('a person who belongs to two lenders', () => {
+  const A = uid(101);
+  const B = uid(102);
+  const memberships = [
+    {
+      organizationId: A,
+      organizationKind: 'lender',
+      organizationName: 'Alpha Finance (test)',
+      permissions: ['payment.read', 'payment.configure', 'payment.reconcile'],
+    },
+    {
+      organizationId: B,
+      organizationKind: 'lender',
+      organizationName: 'Beta Credit (test)',
+      permissions: ['payment.read', 'payment.configure'],
+    },
+  ];
+  const lenders = lpLendersOf(memberships);
+  const configure = ['payment.read', 'payment.configure', 'payment.reconcile'];
+  const actingFor = (lenderId: string) => ctx(configure, { lenderId, lenders });
+
+  describe('choosing the lender', () => {
+    it('acts for the lender named in the address when the person belongs to it', () => {
+      expect(lpLenderFrom(memberships)).toBe(A);
+      expect(lpLenderFrom(memberships, B)).toBe(B);
+      expect(lpLenderFrom(memberships, A)).toBe(A);
+    });
+
+    it('ignores a lender the person does not belong to, or holds no payment permission in', () => {
+      expect(lpLenderFrom(memberships, uid(999))).toBe(A);
+      const withoutRight = [
+        ...memberships,
+        {
+          organizationId: uid(103),
+          organizationKind: 'lender',
+          permissions: ['loan.read'],
+        },
+        { organizationId: uid(104), organizationKind: 'platform', permissions: ['payment.read'] },
+      ];
+      expect(lpLenderFrom(withoutRight, uid(103))).toBe(A);
+      expect(lpLenderFrom(withoutRight, uid(104))).toBe(A);
+    });
+
+    it('lists the lenders to choose between, once each, by name', () => {
+      expect(lenders).toEqual([
+        { lenderId: A, name: 'Alpha Finance (test)' },
+        { lenderId: B, name: 'Beta Credit (test)' },
+      ]);
+      expect(lpLendersOf([...memberships, memberships[0]!])).toHaveLength(2);
+      expect(
+        lpLendersOf([
+          { organizationId: A, organizationKind: 'lender', permissions: ['loan.read'] },
+        ]),
+      ).toEqual([]);
+    });
+
+    it('takes the lender of the address only when it is an identifier', () => {
+      expect(lpAskedLender({ lenderId: B })).toBe(B);
+      expect(lpAskedLender({ lenderId: [B, A] })).toBe(B);
+      for (const value of [
+        '',
+        'x',
+        `${B}x`,
+        '0190A000-0000-7000-8000-00000000AAAA',
+        '../etc',
+        undefined,
+      ])
+        expect(lpAskedLender({ lenderId: value })).toBeUndefined();
+      expect(lpAskedLender({})).toBeUndefined();
+    });
+  });
+
+  describe('what is asked of the API', () => {
+    const reader = (answer: unknown = { items: [], nextCursor: null }) => {
+      const paths: string[] = [];
+      const api: OnboardingApi = {
+        get: <T,>(path: string, _schema: ZodType<T>) => {
+          paths.push(path);
+          return Promise.resolve({ ok: true as const, status: 200, data: answer as T });
+        },
+        post: () => Promise.resolve({ ok: false as const, status: 500, code: 'unused' }),
+      };
+      return { api, paths };
+    };
+    const notFound = { ok: false, status: 404, code: 'not_found' };
+
+    it('asks for the policy, the mandate policy and the waiting times of one lender', async () => {
+      const { api, paths } = reader();
+      await lpLoadPaymentPolicy(api, B);
+      await lpLoadMandatePolicy(api, B);
+      await lpLoadReconSettings(api, B);
+      expect(paths).toEqual([
+        `/v1/lender/payment-policy?lenderId=${B}`,
+        `/v1/lender/mandate-policy?lenderId=${B}`,
+        `/v1/lender/reconciliation/settings?lenderId=${B}`,
+      ]);
+    });
+
+    it('never asks for the unfiltered list: a lender that is not an identifier is "not found"', async () => {
+      const { api, paths } = reader();
+      for (const lender of ['', 'x', '../x', `${B}?x=1`]) {
+        for (const load of [lpLoadPaymentPolicy, lpLoadMandatePolicy, lpLoadReconSettings])
+          expect(await load(api, lender)).toEqual(notFound);
+        expect(await lpLoadReconRuns(api, {}, lender)).toEqual(notFound);
+        expect(await lpLoadSettlementAccounts(api, lender)).toEqual(notFound);
+      }
+      expect(paths).toEqual([]);
+    });
+
+    it('lists the reconciliation runs of the lender acted for, keeping the cursor', async () => {
+      const { api, paths } = reader();
+      await lpLoadReconRuns(api, { cursor: 'abc_123', lenderId: A }, B);
+      expect(paths).toHaveLength(1);
+      const url = new URL(paths[0] ?? '', 'https://example.test');
+      expect(url.pathname).toBe('/v1/lender/reconciliation/runs');
+      // The lender is the acted-for one, whatever the address said, and nothing else is added.
+      expect(url.searchParams.getAll('lenderId')).toEqual([B]);
+      expect(url.searchParams.get('cursor')).toBe('abc_123');
+    });
+
+    it('offers the settlement accounts of the lender acted for and none of the other lender', async () => {
+      const account = (n: number, lenderId: string, maskedRef: string) => ({
+        settlementAccountId: uid(n),
+        lenderId,
+        maskedRef,
+        verificationStatus: 'verified' as const,
+        effectiveFrom: '2026-01-01',
+        effectiveTo: null,
+        usable: true,
+      });
+      const { api, paths } = reader({
+        items: [account(201, A, 'XXXXXX1111'), account(202, B, 'XXXXXX2222')],
+      });
+      const forB = await lpLoadSettlementAccounts(api, B);
+      expect(paths).toEqual(['/v1/lender/settlement-accounts/registry-status']);
+      expect(forB.ok && forB.data.items.map((x) => x.maskedRef)).toEqual(['XXXXXX2222']);
+      const forA = await lpLoadSettlementAccounts(api, A);
+      expect(forA.ok && forA.data.items.map((x) => x.maskedRef)).toEqual(['XXXXXX1111']);
+    });
+
+    it('passes a failed load on as a code', async () => {
+      const api: OnboardingApi = {
+        get: () => Promise.resolve({ ok: false as const, status: 403, code: 'forbidden' }),
+        post: () => Promise.resolve({ ok: false as const, status: 500, code: 'unused' }),
+      };
+      expect(await lpLoadSettlementAccounts(api, A)).toEqual({
+        ok: false,
+        status: 403,
+        code: 'forbidden',
+      });
+    });
+  });
+
+  describe('payment policy', () => {
+    const rowOf = (lenderId: string, linkValidityMinutes: number) => ({
+      lenderId,
+      allowPartialPayments: true,
+      minPartialAmountMinor: 77700,
+      allowPartPrepayment: true,
+      minPartPrepaymentMinor: 88800,
+      linkValidityMinutes,
+      updatedAt: STAMP,
+    });
+
+    it('shows no policy, and pre-fills nothing, when only the other lender has one', () => {
+      const { container } = render(
+        <LpPaymentPolicyView policy={ok({ items: [rowOf(B, 4321)] })} ctx={actingFor(A)} />,
+      );
+      const body = text(container);
+      expect(body).toContain('No policy has been set');
+      expect(body).not.toContain('4,321');
+      expect(body).not.toContain('4321');
+      expect(body).not.toContain('777.00');
+      expect(body).not.toContain('Accepted, from');
+      const value = (name: string) =>
+        (container.querySelector(`[name="${name}"]`) as HTMLInputElement | HTMLSelectElement).value;
+      expect(value('allowPartialPayments')).toBe('');
+      expect(value('minPartialAmount')).toBe('');
+      expect(value('allowPartPrepayment')).toBe('');
+      expect(value('minPartPrepayment')).toBe('');
+      expect(value('linkValidityMinutes')).toBe('');
+      // The form is still for the lender acted for.
+      expect(container.querySelector(`input[name="lenderId"][value="${A}"]`)).toBeTruthy();
+    });
+
+    it('shows the row of the lender acted for when both lenders have one', () => {
+      const policy = ok({ items: [rowOf(B, 4321), rowOf(A, 1440)] });
+      const forA = render(<LpPaymentPolicyView policy={policy} ctx={actingFor(A)} />);
+      expect(text(forA.container)).toContain('1,440 minutes');
+      expect(text(forA.container)).not.toContain('4,321');
+      expect(
+        (forA.container.querySelector('input[name="linkValidityMinutes"]') as HTMLInputElement)
+          .value,
+      ).toBe('1440');
+      cleanup();
+      const forB = render(<LpPaymentPolicyView policy={policy} ctx={actingFor(B)} />);
+      expect(text(forB.container)).toContain('4,321 minutes');
+      expect(forB.container.querySelector(`input[name="lenderId"][value="${B}"]`)).toBeTruthy();
+    });
+
+    it('shows no row at all when no lender is known', () => {
+      const { container } = render(
+        <LpPaymentPolicyView
+          policy={ok({ items: [rowOf(B, 4321)] })}
+          ctx={ctx(['payment.read'], { lenders: [] })}
+        />,
+      );
+      expect(text(container)).not.toContain('4,321');
+      expect(text(container)).toContain('No policy has been set');
+    });
+  });
+
+  describe('mandate policy', () => {
+    const rowOf = (lenderId: string, preDebitLeadHours: number) => ({
+      lenderId,
+      requirement: 'before_first_due' as const,
+      maxAmountCapMinor: 9_900_000,
+      preDebitLeadHours,
+      updatedAt: STAMP,
+    });
+
+    it('shows no policy, and pre-fills nothing, when only the other lender has one', () => {
+      const { container } = render(
+        <LpMandatePolicyView policy={ok({ items: [rowOf(B, 4321)] })} ctx={actingFor(A)} />,
+      );
+      const body = text(container);
+      expect(body).toContain('No mandate policy has been set');
+      expect(body).not.toContain('4,321');
+      expect(body).not.toContain('99,000');
+      const value = (name: string) =>
+        (container.querySelector(`[name="${name}"]`) as HTMLInputElement | HTMLSelectElement).value;
+      expect(value('requirement')).toBe('');
+      expect(value('maxAmountCap')).toBe('');
+      expect(value('preDebitLeadHours')).toBe('');
+      expect(container.querySelector(`input[name="lenderId"][value="${A}"]`)).toBeTruthy();
+    });
+
+    it('shows the row of the lender acted for when both lenders have one', () => {
+      const policy = ok({ items: [rowOf(B, 4321), rowOf(A, 48)] });
+      const { container } = render(<LpMandatePolicyView policy={policy} ctx={actingFor(A)} />);
+      expect(text(container)).toContain('48 hours before the debit');
+      expect(text(container)).not.toContain('4,321');
+      expect(
+        (container.querySelector('input[name="preDebitLeadHours"]') as HTMLInputElement).value,
+      ).toBe('48');
+    });
+  });
+
+  describe('waiting times', () => {
+    const rowOf = (lenderId: string, settlementLagDays: number) => ({
+      lenderId,
+      settlementLagDays,
+      receiptLagHours: 4321,
+      updatedAt: STAMP,
+    });
+
+    it('shows no waiting times, and pre-fills nothing, when only the other lender set them', () => {
+      const { container } = render(
+        <LpReconciliationSettingsView
+          settings={ok({ items: [rowOf(B, 17)] })}
+          ctx={actingFor(A)}
+        />,
+      );
+      const body = text(container);
+      expect(body).toContain('not set its own waiting times');
+      expect(body).not.toContain('17 days');
+      expect(body).not.toContain('4,321');
+      expect(
+        (container.querySelector('input[name="settlementLagDays"]') as HTMLInputElement).value,
+      ).toBe('');
+      expect(
+        (container.querySelector('input[name="receiptLagHours"]') as HTMLInputElement).value,
+      ).toBe('');
+      expect(container.querySelector(`input[name="lenderId"][value="${A}"]`)).toBeTruthy();
+    });
+
+    it('shows the row of the lender acted for when both lenders have one', () => {
+      const { container } = render(
+        <LpReconciliationSettingsView
+          settings={ok({ items: [rowOf(B, 17), rowOf(A, 3)] })}
+          ctx={actingFor(A)}
+        />,
+      );
+      expect(text(container)).toContain('3 days');
+      expect(text(container)).not.toContain('17 days');
+      expect(
+        (container.querySelector('input[name="settlementLagDays"]') as HTMLInputElement).value,
+      ).toBe('3');
+    });
+  });
+
+  describe('saying whose figures a page shows', () => {
+    it('offers a choice of lender, with the acted-for one selected, when there are several', () => {
+      const { container } = render(
+        <LpPaymentPolicyView policy={ok({ items: [] })} ctx={actingFor(B)} />,
+      );
+      const select = container.querySelector('select[name="lenderId"]') as HTMLSelectElement;
+      expect(Array.from(select.options).map((o) => o.textContent)).toEqual([
+        'Alpha Finance (test)',
+        'Beta Credit (test)',
+      ]);
+      expect(select.value).toBe(B);
+      expect(container.querySelector('form[method="get"][action="/payments/policy"]')).toBeTruthy();
+    });
+
+    it('names the lender, with no choice, when there is one', () => {
+      const { container } = render(
+        <LpMandatePolicyView
+          policy={ok({ items: [] })}
+          ctx={ctx(configure, { lenderId: A, lenders: [lenders[0]!] })}
+        />,
+      );
+      expect(text(container)).toContain('Lender: Alpha Finance (test)');
+      expect(container.querySelector('select[name="lenderId"]')).toBeNull();
+    });
+
+    it('draws the choice on the waiting times, bank credits and runs pages as well', () => {
+      const views = [
+        {
+          path: '/reconciliation/settings',
+          node: <LpReconciliationSettingsView settings={ok({ items: [] })} ctx={actingFor(A)} />,
+        },
+        {
+          path: '/reconciliation/bank-credits',
+          node: <LpBankCreditUploadView accounts={ok({ items: [] })} ctx={actingFor(A)} />,
+        },
+        {
+          path: '/reconciliation',
+          node: (
+            <LpReconciliationRunsView
+              page={ok({ items: [], nextCursor: null })}
+              keep={{}}
+              lenders={lenders}
+              lenderId={A}
+            />
+          ),
+        },
+      ];
+      for (const { path, node } of views) {
+        const { container } = render(node);
+        expect(
+          container.querySelector(`form[method="get"][action="${path}"] select[name="lenderId"]`),
+          path,
+        ).toBeTruthy();
+        cleanup();
+      }
+    });
+
+    it('opens the report of a run for the lender the run belongs to', () => {
+      render(
+        <LpReconciliationRunsView
+          page={ok({
+            items: [
+              {
+                id: uid(302),
+                lenderId: B,
+                runDate: '2026-10-16',
+                runNo: 1,
+                counts: {
+                  paymentsConsidered: 1,
+                  matchedToSettlement: 1,
+                  matchedToBank: 1,
+                  matchedToReceipt: 1,
+                },
+                createdAt: STAMP,
+              },
+            ],
+            nextCursor: null,
+          })}
+          keep={{ lenderId: B }}
+          lenders={lenders}
+          lenderId={B}
+        />,
+      );
+      expect(screen.getByRole('link', { name: 'Open report' }).getAttribute('href')).toBe(
+        `/reconciliation/runs/2026-10-16?lenderId=${B}`,
+      );
+    });
   });
 });
