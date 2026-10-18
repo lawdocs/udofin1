@@ -486,7 +486,7 @@ select is(payments.record_order_created(pg_temp.got('i3')::uuid, 'SAMPLE-ORDER-I
 select pg_temp.as_owner();
 set local session_replication_role = replica;
 insert into payments.provider_payments (lender_org_id, config_id, provider, provider_payment_ref, order_ref, intent_id, loan_account_id, status, rank, amount_minor, currency, captured_at, first_event_id, last_event_id)
-  values (pg_temp.lx(), pg_temp.cfg(pg_temp.lx()), 'mock_gateway', 'SAMPLE-PAY-I3', 'SAMPLE-ORDER-I3', pg_temp.got('i3')::uuid, pg_temp.lid(1), 'captured', 30, 475000, 'INR', now(), gen_random_uuid(), gen_random_uuid());
+  values (pg_temp.lx(), pg_temp.cfg(pg_temp.lx()), 'mock_gateway', 'SAMPLE-PAY-I3', 'SAMPLE-ORDER-I3', pg_temp.got('i3')::uuid, pg_temp.lid(1), 'captured', 30, 475000, 'INR', now() - interval '2 hours', gen_random_uuid(), gen_random_uuid());
 set local session_replication_role = origin;
 select pg_temp.as_owner();
 set local session_replication_role = replica;
@@ -498,8 +498,8 @@ select is((select array_agg(entry_kind) from servicing.my_loan_activity(pg_temp.
   array['payment_adjustment', 'payment_attempt', 'payment_attempt', 'payment_attempt', 'lender_receipt', 'lender_reversal', 'lender_receipt', 'lender_receipt'],
   'newest first: the refund, the three payment attempts, then the lender''s receipts and its reversal');
 select is((select array_agg(state) from servicing.my_loan_activity(pg_temp.lid(1))),
-  array['refund', 'provider_received', 'failed', 'cancelled', 'posted', 'recorded', 'reversed', 'posted'],
-  'each with its honest state: the provider reported money for the third attempt, the second failed and the first was cancelled, a reversed receipt says reversed');
+  array['refund', 'needs_attention', 'failed', 'cancelled', 'posted', 'recorded', 'reversed', 'posted'],
+  'each with its honest state: the provider reported money for the third attempt and then refunded part of it (needs_attention, no longer "received"), the second failed and the first was cancelled, a reversed receipt says reversed');
 select is((select array_agg(amount_minor) from servicing.my_loan_activity(pg_temp.lid(1))), array[100000, 475000, 475000, 475000, 1000, 475000, 475000, 475000]::bigint[], 'amounts are integer paise as reported');
 select is((select array_agg(purpose) from servicing.my_loan_activity(pg_temp.lid(1)) where entry_kind = 'payment_attempt'), array['installment', 'installment', 'installment'], 'a payment attempt names its purpose');
 select is((select count(*) from information_schema.columns where table_schema = 'servicing' and table_name = 'lms_receipts' and column_name in ('bank_reference', 'payment_mode')), 2::bigint,

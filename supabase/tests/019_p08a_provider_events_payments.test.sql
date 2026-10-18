@@ -200,25 +200,29 @@ select ('f9910000-0000-4000-8000-00000000000' || n)::uuid, ('f9900000-0000-4000-
        1000000, 50000000, 180, 1825, 'fixed', 1400, 2400, pg_temp.u(9), pg_temp.u(10), now(), now()
 from generate_series(1, 2) n;
 insert into lending.loan_requests (id, borrower_id, category_key, requested_amount_minor, requested_tenure_days, purpose_code, status)
-select ('f9700000-0000-4000-8000-0000000000' || lpad(n::text, 2, '0'))::uuid, case when n = 2 then pg_temp.got('b2')::uuid else pg_temp.got('b1')::uuid end, 'personal', 5000000, 365, 'education', 'submitted'
-from generate_series(1, 3) n;
+select ('f9700000-0000-4000-8000-0000000000' || lpad(n::text, 2, '0'))::uuid, case when n in (2, 4, 5) then pg_temp.got('b2')::uuid else pg_temp.got('b1')::uuid end, 'personal', 5000000, 365, 'education', 'submitted'
+from generate_series(1, 5) n;
 insert into lending.applications (id, lender_org_id, loan_request_id, borrower_id, product_version_id, status, requested_amount_minor, requested_tenure_days, lender_reference)
 select ('f9200000-0000-4000-8000-0000000000' || lpad(n::text, 2, '0'))::uuid, case when n = 3 then pg_temp.ly() else pg_temp.lx() end,
-       ('f9700000-0000-4000-8000-0000000000' || lpad(n::text, 2, '0'))::uuid, case when n = 2 then pg_temp.got('b2')::uuid else pg_temp.got('b1')::uuid end,
+       ('f9700000-0000-4000-8000-0000000000' || lpad(n::text, 2, '0'))::uuid, case when n in (2, 4, 5) then pg_temp.got('b2')::uuid else pg_temp.got('b1')::uuid end,
        case when n = 3 then 'f9910000-0000-4000-8000-000000000002' else 'f9910000-0000-4000-8000-000000000001' end::uuid, 'disbursed', 5000000, 365, 'SAMPLE-APP-' || n
-from generate_series(1, 3) n;
+from generate_series(1, 5) n;
 insert into servicing.loan_accounts (id, lender_org_id, application_id, borrower_id, source_system, lms_loan_ref, status, sanctioned_amount_minor)
 select ('f9400000-0000-4000-8000-0000000000' || lpad(n::text, 2, '0'))::uuid, a.lender_org_id, a.id, a.borrower_id, 'lender_lms', 'SAMPLE-LN-' || n, 'active', 5000000
-from lending.applications a, generate_series(1, 3) n where right(a.id::text, 2)::int = n;
+from lending.applications a, generate_series(1, 5) n where right(a.id::text, 2)::int = n;
 select pg_temp.keep('l1', 'f9400000-0000-4000-8000-000000000001');
 select pg_temp.keep('l2', 'f9400000-0000-4000-8000-000000000002');
 select pg_temp.keep('l3', 'f9400000-0000-4000-8000-000000000003');
+-- Loans 4 and 5 (borrower b2, lender X): the overdue payment and the foreclosure payment are open alone on their loans (request_payment refuses
+-- a foreclosure next to any other open payment, and an installment next to an overdue one).
+select pg_temp.keep('l4', 'f9400000-0000-4000-8000-000000000004');
+select pg_temp.keep('l5', 'f9400000-0000-4000-8000-000000000005');
 
 -- The lender-reported figures (fresh): LX1 has an installment of 4,750.00 due in ten days and nothing overdue; LX2 the same plus 1,000.00 overdue; LY1 like LX1.
 insert into servicing.balance_snapshots (lender_org_id, loan_account_id, version, status, outstanding_principal_minor, overdue_principal_minor, overdue_interest_minor,
   penal_charges_minor, other_charges_minor, total_overdue_minor, next_due_on, next_due_minor, days_past_due, source_system, source_record_id, reported_as_of, content_sha256)
-select l.lender_org_id, l.id, 1, 'active', 4000000, case when l.lms_loan_ref = 'SAMPLE-LN-2' then 80000 else 0 end, case when l.lms_loan_ref = 'SAMPLE-LN-2' then 20000 else 0 end,
-       0, 0, case when l.lms_loan_ref = 'SAMPLE-LN-2' then 100000 else 0 end, current_date + 10, 475000, 0, 'file_import', 'SRC-' || l.lms_loan_ref, clock_timestamp() - interval '1 hour',
+select l.lender_org_id, l.id, 1, 'active', 4000000, case when l.lms_loan_ref in ('SAMPLE-LN-2', 'SAMPLE-LN-4') then 80000 else 0 end, case when l.lms_loan_ref in ('SAMPLE-LN-2', 'SAMPLE-LN-4') then 20000 else 0 end,
+       0, 0, case when l.lms_loan_ref in ('SAMPLE-LN-2', 'SAMPLE-LN-4') then 100000 else 0 end, current_date + 10, 475000, 0, 'file_import', 'SRC-' || l.lms_loan_ref, clock_timestamp() - interval '1 hour',
        pg_temp.sha('snap-' || l.lms_loan_ref)
 from servicing.loan_accounts l;
 insert into servicing.schedule_snapshots (id, lender_org_id, loan_account_id, version)
@@ -337,7 +341,7 @@ select pg_temp.keep('i2', payments.request_payment(pg_temp.got('l2')::uuid, 'ins
 select is((select amount_minor from payments.payment_intents where id = pg_temp.got('i2')::uuid), 200000::bigint, 'a part payment at or above the lender''s minimum is accepted');
 select is(pg_temp.err(format($$select payments.request_payment(%L, 'overdue', 99999, 'f9-pay-key-000000021')$$, pg_temp.got('l2'))), '22023|amount_not_allowed', 'below the minimum is refused (overdue part)');
 select is(pg_temp.err(format($$select payments.request_payment(%L, 'overdue', 100001, 'f9-pay-key-000000022')$$, pg_temp.got('l2'))), '22023|amount_not_allowed', 'above the reported overdue figure is refused');
-select pg_temp.keep('i3', payments.request_payment(pg_temp.got('l2')::uuid, 'overdue', 100000, 'f9-pay-key-000000023')::text);
+select pg_temp.keep('i3', payments.request_payment(pg_temp.got('l4')::uuid, 'overdue', 100000, 'f9-pay-key-000000023')::text);
 select pg_temp.keep('i4', payments.request_payment(pg_temp.got('l2')::uuid, 'part_prepayment', 600000, 'f9-pay-key-000000024')::text);
 select is(pg_temp.err(format($$select payments.request_payment(%L, 'part_prepayment', 499999, 'f9-pay-key-000000025')$$, pg_temp.got('l2'))), '22023|amount_not_allowed', 'a part-prepayment below the minimum is refused');
 select is(pg_temp.err(format($$select payments.request_payment(%L, 'part_prepayment', 4000001, 'f9-pay-key-000000026')$$, pg_temp.got('l2'))), '22023|amount_not_allowed', 'or above the reported outstanding principal');
@@ -345,12 +349,12 @@ select is(pg_temp.err(format($$select payments.request_payment(%L, 'part_prepaym
 -- Foreclosure: exactly an unexpired lender quotation, never a flagged one.
 select pg_temp.as_owner();
 insert into servicing.foreclosure_quotes (lender_org_id, loan_account_id, lender_quote_ref, as_of, valid_until, principal_minor, interest_minor, charges_minor, prepayment_charge_minor, total_minor, source, reported_by)
-values (pg_temp.lx(), pg_temp.got('l2')::uuid, 'SAMPLE-Q-1', now() - interval '1 hour', now() + interval '3 days', 4000000, 75000, 5000, 20000, 4100000, 'lender_portal', pg_temp.u(5));
+values (pg_temp.lx(), pg_temp.got('l5')::uuid, 'SAMPLE-Q-1', now() - interval '1 hour', now() + interval '3 days', 4000000, 75000, 5000, 20000, 4100000, 'lender_portal', pg_temp.u(5));
 select pg_temp.keep('q1', (select id::text from servicing.foreclosure_quotes where lender_quote_ref = 'SAMPLE-Q-1'));
 select pg_temp.as_user(pg_temp.u(2));
-select is(pg_temp.err(format($$select payments.request_payment(%L, 'foreclosure', 4099999, 'f9-pay-key-000000030')$$, pg_temp.got('l2'))), '22023|amount_not_allowed', 'a foreclosure payment one paisa below the quotation is refused');
-select is(pg_temp.err(format($$select payments.request_payment(%L, 'foreclosure', 4100000, 'f9-pay-key-000000031', gen_random_uuid())$$, pg_temp.got('l2'))), '55000|quote_not_current', 'naming another quotation is refused');
-select pg_temp.keep('i5', payments.request_payment(pg_temp.got('l2')::uuid, 'foreclosure', 4100000, 'f9-pay-key-000000032', pg_temp.got('q1')::uuid)::text);
+select is(pg_temp.err(format($$select payments.request_payment(%L, 'foreclosure', 4099999, 'f9-pay-key-000000030')$$, pg_temp.got('l5'))), '22023|amount_not_allowed', 'a foreclosure payment one paisa below the quotation is refused');
+select is(pg_temp.err(format($$select payments.request_payment(%L, 'foreclosure', 4100000, 'f9-pay-key-000000031', gen_random_uuid())$$, pg_temp.got('l5'))), '55000|quote_not_current', 'naming another quotation is refused');
+select pg_temp.keep('i5', payments.request_payment(pg_temp.got('l5')::uuid, 'foreclosure', 4100000, 'f9-pay-key-000000032', pg_temp.got('q1')::uuid)::text);
 select is((select (quote_id = pg_temp.got('q1')::uuid, amount_minor, link_expires_at < now() + interval '3 days 1 minute')::text from payments.payment_intents where id = pg_temp.got('i5')::uuid), '(t,4100000,t)',
   'the intent carries the quotation and exactly its total; the link cannot outlive the quotation');
 select pg_temp.as_owner();
@@ -429,7 +433,7 @@ select is(pg_temp.err(format($$update payments.payment_intents set status = 'suc
 -- 4. Forged, tampered, stale, invalid and unknown-route deliveries leave a receipt and NOTHING else
 -- ============================================================================================================================
 select pg_temp.as_system();
-select pg_temp.keep('seen0', (select count(*)::text from ops.seen_webhooks where source like 'provider\_%'));
+select pg_temp.keep('seen0', (select count(*)::text from ops.seen_webhooks where source like 'pc\_%'));
 select pg_temp.keep('ev0', pg_temp.cnt('payments.provider_events')::text);
 select pg_temp.keep('truth0', pg_temp.truth());
 -- These carry the REAL event id and delivery id of the genuine capture that arrives later.
@@ -444,7 +448,7 @@ select is(pg_temp.out(pg_temp.got('tx'), pg_temp.dlv('wat', 'dlv_cap_1', 'evt_ca
 select is(pg_temp.rc('dlv_cap_1'), 'unverified:signature_mismatch,stale_timestamp:timestamp_outside_tolerance,invalid:malformed_body,scheme_not_configured:provider_scheme_not_configured,unverified:verifier_outcome_unknown,invalid:verifier_outcome_unknown',
   'each one has its own receipt with the right outcome and a closed-list reason class');
 select is(pg_temp.cnt('payments.provider_events')::text, pg_temp.got('ev0'), 'NO provider event was created by any of them');
-select is((select count(*)::text from ops.seen_webhooks where source like 'provider\_%'), pg_temp.got('seen0'), 'the replay store was not touched: a forged delivery cannot reserve a delivery id');
+select is((select count(*)::text from ops.seen_webhooks where source like 'pc\_%'), pg_temp.got('seen0'), 'the replay store was not touched: a forged delivery cannot reserve a delivery id');
 select is(pg_temp.truth(), pg_temp.got('truth0'), 'and no intent, payment, adjustment or configuration changed');
 select is((select count(*) from payments.webhook_receipts where delivery_id = 'dlv_cap_1' and (config_id is null or lender_org_id <> pg_temp.lx())), 0::bigint, 'the receipts are tied to the lender whose token routed them');
 select is((select (signature_present, scheme, timestamp_skew_seconds, body_bytes, source_ip_hmac = repeat('a', 64))::text from payments.webhook_receipts where delivery_id = 'dlv_cap_1' order by received_at limit 1),
@@ -475,7 +479,7 @@ select is((select verification_stages::text from payments.provider_events where 
 select is(pg_temp.rc('dlv_cap_1'), 'unverified:signature_mismatch,stale_timestamp:timestamp_outside_tolerance,invalid:malformed_body,scheme_not_configured:provider_scheme_not_configured,unverified:verifier_outcome_unknown,invalid:verifier_outcome_unknown,verified:none',
   'the genuine delivery has a verified receipt after the forged ones');
 select is((select event_id = pg_temp.ev('evt_cap_1') from payments.webhook_receipts where delivery_id = 'dlv_cap_1' and outcome = 'verified'), true, 'which points at the event');
-select is((select count(*) from ops.seen_webhooks where source like 'provider\_%'), pg_temp.got('seen0')::bigint + 1, 'the delivery id is now in the replay store, once');
+select is((select count(*) from ops.seen_webhooks where source like 'pc\_%'), pg_temp.got('seen0')::bigint + 1, 'the delivery id is now in the replay store, once');
 select is((select count(*) from ops.outbox_events where event_type = 'payment.apply_event' and payload ->> 'event_id' = pg_temp.ev('evt_cap_1')::text), 1::bigint, 'one payment.apply_event was enqueued for it');
 select is((select array_agg(k) from ops.outbox_events e, jsonb_object_keys(e.payload) k where e.event_type = 'payment.apply_event' and e.payload ->> 'event_id' = pg_temp.ev('evt_cap_1')::text), array['event_id'], 'carrying the event id only');
 select is((select status::text from payments.payment_intents where id = pg_temp.got('i1')::uuid), 'pending', 'ingest alone changes no payment: the intent is still pending');
@@ -561,7 +565,7 @@ select is(pg_temp.rc('dlv_uns_1'), 'verified_ignored:none,duplicate:replayed_del
 -- ============================================================================================================================
 -- 7. Authentic but not matched, or not business-valid: a receipt only, and the delivery id is NOT consumed (the provider may retry)
 -- ============================================================================================================================
-select pg_temp.keep('seen3', (select count(*)::text from ops.seen_webhooks where source like 'provider\_%'));
+select pg_temp.keep('seen3', (select count(*)::text from ops.seen_webhooks where source like 'pc\_%'));
 select pg_temp.keep('ev3', pg_temp.cnt('payments.provider_events')::text);
 select pg_temp.keep('truth3', pg_temp.truth());
 select is(pg_temp.ing(pg_temp.got('tx'), pg_temp.dlv('verified', 'dlv_m_1', 'evt_m_1', 'payment', 'captured', 'order_Y1', 475000, 'pay_y1')), '{"accepted": false, "outcome": "unmatched"}'::jsonb,
@@ -589,7 +593,7 @@ select is(pg_temp.out(pg_temp.got('tx'), jsonb_set(pg_temp.dlv('verified', 'dlv_
 select is(pg_temp.out(pg_temp.got('tx'), pg_temp.dlv('verified', 'dlv_b_10', 'evt_b_10', 'payment', 'captured', 'order_A1', 475000, 'pay_b', p_sha => 'xyz')), 'invalid', 'a payload hash that is not a SHA-256 is invalid');
 select is(pg_temp.out(pg_temp.got('tx'), (pg_temp.dlv('verified', 'dlv_b_11', 'evt_b_11', 'payment', 'captured', 'order_A1', 475000, 'pay_b')) - 'event'), 'invalid', 'a verified delivery with no event is invalid');
 select is(pg_temp.cnt('payments.provider_events')::text, pg_temp.got('ev3'), 'none of the unmatched or invalid deliveries created an event');
-select is((select count(*)::text from ops.seen_webhooks where source like 'provider\_%'), pg_temp.got('seen3'), 'and none consumed a delivery id');
+select is((select count(*)::text from ops.seen_webhooks where source like 'pc\_%'), pg_temp.got('seen3'), 'and none consumed a delivery id');
 select is(pg_temp.truth(), pg_temp.got('truth3'), 'and nothing changed');
 -- A delivery that arrives BEFORE the order is recorded can be retried and then matches.
 select is(pg_temp.out(pg_temp.got('tx'), pg_temp.dlv('verified', 'dlv_early', 'evt_early', 'payment', 'captured', 'order_A2', 200000, 'pay_2')), 'unmatched', 'a capture that arrives before the system has recorded the order is unmatched ...');
