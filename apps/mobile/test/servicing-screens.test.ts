@@ -150,6 +150,17 @@ describe('the payment buttons only navigate', () => {
     expect(text).toContain('router.push(mandateSetupHref(loanId))');
   });
 
+  it('the loan page links to the list of auto-pay mandates, which is a screen that exists', () => {
+    const text = home();
+    expect(text).toContain("t('loans.home.mandates')");
+    expect(text).toContain('router.push(mandateListHref)');
+    // The list is the payments index route; without this link no screen would open it.
+    expect(existsSync(join(root, 'app', '(app)', 'payments', 'index.tsx'))).toBe(true);
+    expect(read(join(root, 'src', 'borrower', 'servicing-view.ts'))).toContain(
+      "export const mandateListHref = '/payments'",
+    );
+  });
+
   it('are always drawn: the loan page does not ask the payment options route first', () => {
     const text = home();
     expect(text).not.toMatch(/options|mandateOptions|\/v1\/payments|\/v1\/mandates/);

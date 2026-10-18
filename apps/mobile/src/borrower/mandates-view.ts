@@ -1,4 +1,5 @@
 import {
+  type BorrowerMe,
   type BpMandate,
   type BpMandateDebit,
   type BpMandateOptions,
@@ -140,6 +141,23 @@ export function mandateSetupView(o: BpMandateOptions, ctx: Pick<Ctx, 'rupees'>):
         }))
       : [],
   };
+}
+
+/**
+ * The API refuses a mandate request unless the borrower's device-integrity level is 'device' or 'strong'
+ * (payments.request_mandate), and the level is raised only by a verified platform attestation. This version of the app cannot
+ * obtain one (no verifier exists yet; owner decision D-24), so for every borrower the request would be answered with
+ * `integrity_insufficient`. The setup form is therefore offered only at those levels, and the screen says plainly that auto-pay
+ * setup is not available in this version of the app. It never says that a check was run on the phone or that the phone failed.
+ */
+export function canOfferMandateSetup(level: BorrowerMe['integrityLevel'] | null): boolean {
+  return level === 'device' || level === 'strong';
+}
+
+/** The sentence shown instead of the setup form while it cannot be offered; null when the form may be offered or the level is unknown. */
+export function mandateSetupNotice(level: BorrowerMe['integrityLevel'] | null): Word | null {
+  if (level === null || canOfferMandateSetup(level)) return null;
+  return word('mandate.setup.notInThisVersion');
 }
 
 export interface MandateDraft {

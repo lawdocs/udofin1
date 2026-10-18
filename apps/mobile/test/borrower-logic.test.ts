@@ -57,6 +57,36 @@ describe('money', () => {
     expect(parseRupees('1000000000001')).toEqual({ ok: false, error: 'too_large' });
     expect(MAX_AMOUNT_PAISE).toBe(100_000_000_000_000);
   });
+  it('accepts a comma only where Indian or international grouping puts one (a decimal comma is refused, never read as thousands)', () => {
+    const table: [string, { ok: true; paise: number } | { ok: false; error: 'invalid' }][] = [
+      // Valid grouping.
+      ['1,00,000', { ok: true, paise: 10_000_000 }],
+      ['100,000', { ok: true, paise: 10_000_000 }],
+      ['12,345', { ok: true, paise: 1_234_500 }],
+      ['1,23,456', { ok: true, paise: 12_345_600 }],
+      ['1,234,567', { ok: true, paise: 123_456_700 }],
+      ['12,34,567.5', { ok: true, paise: 123_456_750 }],
+      ['5,000.50', { ok: true, paise: 500_050 }],
+      ['5000.50', { ok: true, paise: 500_050 }],
+      // A comma in any other place: refused with the existing invalid-amount code.
+      ['5000,50', { ok: false, error: 'invalid' }],
+      ['1,00', { ok: false, error: 'invalid' }],
+      ['1,5', { ok: false, error: 'invalid' }],
+      ['1,0,0', { ok: false, error: 'invalid' }],
+      [',100', { ok: false, error: 'invalid' }],
+      ['100,', { ok: false, error: 'invalid' }],
+      ['1,,000', { ok: false, error: 'invalid' }],
+      ['1,00,00', { ok: false, error: 'invalid' }],
+      ['12,3456', { ok: false, error: 'invalid' }],
+      ['1,234,56,789', { ok: false, error: 'invalid' }],
+      ['1,000,00', { ok: false, error: 'invalid' }],
+      ['0,100', { ok: false, error: 'invalid' }],
+      ['5,000,50.25', { ok: false, error: 'invalid' }],
+      ['5,000.5,0', { ok: false, error: 'invalid' }],
+      ['5,00.50', { ok: false, error: 'invalid' }],
+    ];
+    for (const [typed, expected] of table) expect(parseRupees(typed), typed).toEqual(expected);
+  });
   it('formats with Indian grouping', () => {
     expect(formatRupees(5_000_000)).toBe('50,000');
     expect(formatRupees(10_000_050)).toBe('1,00,000.50');

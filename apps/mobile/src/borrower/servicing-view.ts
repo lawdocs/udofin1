@@ -62,6 +62,8 @@ export const mandateSetupHref = (loanId: string) =>
   ({ pathname: '/payments/mandate-setup', params: { loanId } }) as const;
 export const paymentStatusHref = (paymentId: string) =>
   ({ pathname: '/payments/status', params: { paymentId } }) as const;
+/** The borrower's list of auto-pay mandates (all loans), where a mandate of any status can be opened, cancelled-requested or looked up. */
+export const mandateListHref = '/payments' as const;
 
 /** The path and query of a link, for tests and logs that want to see the address a button opens. */
 export function hrefToUrl(href: { pathname: string; params: Record<string, string> }): string {

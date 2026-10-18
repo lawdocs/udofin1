@@ -82,3 +82,88 @@ export async function pollLoop<T>(deps: PollLoopDeps<T>): Promise<void> {
     await deps.sleep(delay);
   }
 }
+
+export interface PollRunDeps<T> {
+  load: () => Promise<ApiResult<T>>;
+  delayFor: (data: T, attempt: number) => number | null;
+  onResult: (result: ApiResult<T>) => void;
+  /** The run ended by itself (first failed read, attempt limit, or `delayFor` said stop). Never called after `stop`. */
+  onDone: () => void;
+}
+
+/**
+ * One run of automatic checking. Returns `stop`: it ends the run for good, clears the pending wait and wakes the loop so that it
+ * returns without reading or reporting again. After `stop`, nothing more is read, reported or called back.
+ */
+export function startPollRun<T>(deps: PollRunDeps<T>): () => void {
+  let cancelled = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let wake: (() => void) | undefined;
+  void pollLoop<T>({
+    load: deps.load,
+    delayFor: deps.delayFor,
+    sleep: (ms) =>
+      new Promise<void>((resolve) => {
+        wake = resolve;
+        timer = setTimeout(resolve, ms);
+      }),
+    isCancelled: () => cancelled,
+    onResult: deps.onResult,
+  }).then(() => {
+    if (!cancelled) deps.onDone();
+  });
+  return () => {
+    cancelled = true;
+    if (timer !== undefined) clearTimeout(timer);
+    wake?.();
+  };
+}
+
+export interface PollGate {
+  /** The screen is the one the borrower is looking at (navigation focus). */
+  setFocused: (focused: boolean) => void;
+  /** The app is in the foreground. */
+  setForeground: (foreground: boolean) => void;
+  /** Ends the current run, if any, and starts a new one when the screen is focused and the app is in the foreground. */
+  restart: () => void;
+  /** True while a run is active. */
+  isRunning: () => boolean;
+}
+
+/**
+ * Runs automatic checking only while the screen is focused AND the app is in the foreground. Tabs keep a visited screen mounted
+ * after the borrower leaves it, so tying the run to mount would keep reading in the background; here the run ends the moment the
+ * screen loses focus or the app goes to the background, and a new run (a fresh read, attempts counted from zero) starts when both
+ * hold again. `start` begins a run and returns its `stop`.
+ */
+export function createPollGate(start: () => () => void): PollGate {
+  let focused = false;
+  let foreground = true;
+  let stop: (() => void) | null = null;
+  const sync = () => {
+    const wanted = focused && foreground;
+    if (wanted && stop === null) stop = start();
+    else if (!wanted && stop !== null) {
+      stop();
+      stop = null;
+    }
+  };
+  return {
+    setFocused: (value) => {
+      focused = value;
+      sync();
+    },
+    setForeground: (value) => {
+      foreground = value;
+      sync();
+    },
+    restart: () => {
+      if (stop !== null) {
+        stop();
+        stop = null;
+      }
+      sync();
+    },
+    isRunning: () => stop !== null,
+  };
+}

@@ -25,6 +25,7 @@ import { hi } from '../src/i18n/hi';
 import { hiPayments } from '../src/i18n/hi.payments';
 import { createMandatesClient } from '../src/borrower/mandates';
 import {
+  canOfferMandateSetup,
   canOpenAuthorisation,
   canRequestCancellation,
   debitView,
@@ -34,6 +35,7 @@ import {
   mandateDraftReducer,
   mandateHeadline,
   mandateListItemView,
+  mandateSetupNotice,
   mandateSetupView,
   mandateView,
   maskedAccountRef,
@@ -472,7 +474,7 @@ describe('payment options view', () => {
   it('shows the lender, the masked destination and whose figure it is', () => {
     const v = payOptionsView(options({ purposes: [installment] }), enCtx);
     expect(v.lender).toBe(LENDER);
-    expect(text(v.destination)).toBe(`Paid to ${LENDER}'s account XXXXXX1234`);
+    expect(text(v.destination)).toBe(`Payments for this loan go to ${LENDER}'s account XXXXXX1234`);
     expect(text(v.reported)).toContain(`As reported by ${LENDER} on`);
     expect(text(v.reported)).toContain('IST');
     expect(v.notice).toBeNull();
@@ -1026,13 +1028,38 @@ describe('payment status view', () => {
     );
     expect(lines(v)).toContain('Amount: ₹25,000');
     expect(lines(v)).toContain('For: Overdue amount');
-    expect(lines(v)).toContain(`Paid to ${LENDER}'s account XXXXXX1234`);
+    expect(lines(v)).toContain(`Payments for this loan go to ${LENDER}'s account XXXXXX1234`);
     const hidden = paymentStatusView(
       payment({ destinationMaskedRef: '123456789012' }),
       state,
       enCtx,
     );
     expect(lines(hidden).join(' ')).not.toContain('123456789012');
+  });
+
+  it('words the destination the same, and never as paid, at every stage and status in both languages', () => {
+    for (const stage of BP_PAYMENT_STAGES) {
+      for (const status of BP_PAYMENT_STATUSES) {
+        for (const ctx of [enCtx, hiCtx]) {
+          const v = paymentStatusView(payment({ stage, status }), state, ctx);
+          const destination = v.lines
+            .map((l) => text(l, ctx))
+            .find((l) => l.includes('XXXXXX1234'));
+          expect(destination, `${stage}/${status}`).toBeDefined();
+          expect(destination, `${stage}/${status}`).not.toMatch(/\bpaid\b|success|सफल|भुगतान हो/i);
+        }
+      }
+    }
+    // The wording itself: a statement about where payments go, not about this payment.
+    const cancelled = paymentStatusView(payment({ status: 'cancelled' }), state, enCtx);
+    expect(lines(cancelled)).toContain(
+      `Payments for this loan go to ${LENDER}'s account XXXXXX1234`,
+    );
+    expect(lines(cancelled).join(' ')).not.toMatch(/\bpaid to\b/i);
+    const before = payOptionsView(options({ purposes: [installment] }), hiCtx);
+    expect(text(before.destination, hiCtx)).toBe(
+      `इस ऋण के भुगतान ${LENDER} के खाते XXXXXX1234 में जाते हैं`,
+    );
   });
 
   it('knows when a payment is waiting', () => {
@@ -1097,7 +1124,13 @@ describe('error words', () => {
     expect(payErrorKey('stepup_required')).toBe('mandate.err.stepup');
     expect(en[payErrorKey('stepup_required')]).toMatch(/one-time code.*step 1/);
     expect(payErrorKey('integrity_insufficient')).toBe('mandate.err.integrity');
-    expect(en[payErrorKey('integrity_insufficient')]).toMatch(/security check/);
+    // No check is run on the phone by this version of the app, so the words must not say one failed (A37).
+    const said = en[payErrorKey('integrity_insufficient')];
+    expect(said).toContain('not be set up in this version of the app');
+    expect(said).not.toMatch(/security|did not pass|failed|device|phone/i);
+    const saidHindi = hi[payErrorKey('integrity_insufficient')];
+    expect(saidHindi).toContain('इस संस्करण');
+    expect(saidHindi).not.toMatch(/सुरक्षा जाँच|पास नहीं|फ़ोन ने|डिवाइस/);
   });
 
   it('falls back to the shared words, then the generic sentence, and never shows server text', () => {
@@ -1312,6 +1345,36 @@ describe('mandate setup view', () => {
 // ---------------------------------------------------------------------------------------------------------------
 // Mandates: status, cancellation, debits
 // ---------------------------------------------------------------------------------------------------------------
+describe('mandate setup is offered only where the API can accept it (A37)', () => {
+  it('offers the form only at the device-integrity levels the API accepts for a mandate', () => {
+    expect(canOfferMandateSetup('device')).toBe(true);
+    expect(canOfferMandateSetup('strong')).toBe(true);
+    expect(canOfferMandateSetup('none')).toBe(false);
+    expect(canOfferMandateSetup('basic')).toBe(false);
+    expect(canOfferMandateSetup(null)).toBe(false);
+  });
+
+  it('says plainly that setup is not available in this version of the app, without blaming the phone', () => {
+    expect(mandateSetupNotice('device')).toBeNull();
+    expect(mandateSetupNotice('strong')).toBeNull();
+    // Unknown level (the account state is not loaded): the screen shows its own loading or error state, not this sentence.
+    expect(mandateSetupNotice(null)).toBeNull();
+    for (const level of ['none', 'basic'] as const) {
+      const notice = mandateSetupNotice(level);
+      expect(notice, level).not.toBeNull();
+      const english = text(notice, enCtx);
+      expect(english).toBe(
+        'Setting up auto-pay is not available in this version of the app. You can still pay once, whenever you choose.',
+      );
+      expect(english).not.toMatch(/security|check|did not pass|failed|device|phone|attest/i);
+      const hindi = text(notice, hiCtx);
+      expect(hindi).toContain('इस संस्करण में उपलब्ध नहीं');
+      expect(hindi).not.toMatch(/सुरक्षा|जाँच|पास नहीं|फ़ोन|डिवाइस/);
+      expect(enPayments['mandate.setup.payOnce']).toBe('Make a one-time payment');
+    }
+  });
+});
+
 describe('mandate status words', () => {
   const head = (status: string) => mandateHeadline(status, LENDER);
   const all = (status: string, ctx: Ctx = enCtx) =>
@@ -1794,14 +1857,14 @@ describe('payments and mandates wording', () => {
     for (const key of keys) expect(enPayments[key], key).not.toMatch(banned);
   });
 
-  it('never says paid or successful about a stage, status or link', () => {
+  it('never says paid or successful in any pay.* or mandate.* key, in either language', () => {
+    // "cannot be paid" says that paying is not possible; it is the only use of the word and is set aside before the scan.
+    const modalNegative = /\bcannot be paid\b/gi;
+    const hindiClaim =
+      /भुगतान (हो गया|हो चुका|कर दिया|किया जा चुका)|चुका दिया|चुकाया (गया|जा चुका)|सफल/;
     for (const key of keys) {
-      if (
-        /^pay\.(stage|explain|status|link|wait)\./.test(key) ||
-        /^mandate\.(status|explain|link|wait)\./.test(key)
-      ) {
-        expect(enPayments[key], key).not.toMatch(/\bpaid\b|success/i);
-      }
+      expect(enPayments[key].replace(modalNegative, ''), key).not.toMatch(/\bpaid\b|success/i);
+      expect(hiPayments[key], key).not.toMatch(hindiClaim);
     }
   });
 
@@ -1906,6 +1969,23 @@ describe('what the screens may do (source checks)', () => {
     expect(src).toContain("action: 'mandate_creation'");
     expect(src).toContain('contextRef: mandateId');
     expect(src).toContain('usePreventScreenCapture()');
+  });
+
+  it('shows the setup form only when the integrity level allows it, with the one-time payment route otherwise', () => {
+    const src = code('app/(app)/payments/mandate-setup.tsx');
+    expect(src).toContain('const { meState, refresh: reloadMe } = useBorrower();');
+    expect(src).toContain("meState.kind === 'ready' ? meState.me.integrityLevel : null");
+    expect(src).toContain('const notice = mandateSetupNotice(level);');
+    // The form is drawn only inside `available`, and `available` needs a known level and no notice.
+    expect(src).toContain('const available = offerable && level !== null && notice === null;');
+    expect(src).toContain('{available ? (');
+    expect(src.indexOf('{available ? (')).toBeLessThan(src.indexOf("t('mandate.send.title')"));
+    expect(src.indexOf('{available ? (')).toBeLessThan(src.indexOf('void send()'));
+    // The notice has the one-time payment button, to the same Pay route the loan home uses.
+    expect(src).toContain("t('mandate.setup.payOnce')");
+    expect(src).toContain('router.replace(payHref(loanId))');
+    // No attestation is attempted here.
+    expect(src).not.toMatch(/integrityNonce|verifyIntegrity|attest/i);
   });
 
   it('starts with nothing selected and posts only the resolved request', () => {

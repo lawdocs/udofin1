@@ -11,7 +11,9 @@ export const enPayments = {
   'pay.intro':
     "You choose what to pay and confirm it here. You then pay on the payment provider's page, not in this app. {lender} sets the amounts.",
   'pay.lender': 'Lender: {lender}',
-  'pay.destination': "Paid to {lender}'s account {account}",
+  // Where payments for this loan go. It is shown before anything is paid and under cancelled, failed and expired payments too,
+  // so it must not read as a statement that this payment was made.
+  'pay.destination': "Payments for this loan go to {lender}'s account {account}",
   'pay.reportedAsOf': 'As reported by {lender} on {date}',
   'pay.stale':
     'These figures are out of date. {lender} last reported them on {date}. Payments that depend on them cannot be started until {lender} reports again.',
@@ -168,6 +170,9 @@ export const enPayments = {
   'mandate.setup.viewExisting': 'View it',
   'mandate.setup.rails': 'Choose how to set it up',
   'mandate.setup.railsNote': 'Nothing is selected for you. Choose one option.',
+  'mandate.setup.notInThisVersion':
+    'Setting up auto-pay is not available in this version of the app. You can still pay once, whenever you choose.',
+  'mandate.setup.payOnce': 'Make a one-time payment',
   'mandate.unavailable.loan_not_active':
     'Auto-pay cannot be set up because this loan is not active. Please contact {lender} if you have questions.',
   'mandate.unavailable.collection_target_invalid':
@@ -216,8 +221,9 @@ export const enPayments = {
   // ---- mandates: errors ----
   'mandate.err.stepup':
     'A one-time code check is needed for this request. Confirm with a code in step 1, then send the request again.',
+  // The app cannot obtain the device attestation the API requires, so no check was run on the phone: this says what is true.
   'mandate.err.integrity':
-    'This device did not pass the security check needed to set up auto-pay, so the request was not accepted.',
+    'Auto-pay cannot be set up in this version of the app, so the request was not accepted. You can still make a one-time payment.',
   'mandate.err.providerNotCapable':
     "Auto-pay is not available with this lender's payment provider.",
   'mandate.err.creditor':

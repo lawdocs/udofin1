@@ -1,7 +1,12 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { FigureLines, LoanPage, useText } from '../../../../src/borrower/servicing-ui';
 import { type SvcLoan } from '../../../../src/borrower/servicing-types';
-import { loanHomeModel, mandateSetupHref, payHref } from '../../../../src/borrower/servicing-view';
+import {
+  loanHomeModel,
+  mandateListHref,
+  mandateSetupHref,
+  payHref,
+} from '../../../../src/borrower/servicing-view';
 import { useI18n } from '../../../../src/i18n/I18nProvider';
 import { Banner, Body, Button, Card, Label } from '../../../../src/ui/kit';
 
@@ -72,6 +77,11 @@ function LoanHomeBody({ loan, reload }: { loan: SvcLoan; reload: () => void }) {
         title={t('loans.home.autopay')}
         secondary
         onPress={() => router.push(mandateSetupHref(loanId))}
+      />
+      <Button
+        title={t('loans.home.mandates')}
+        secondary
+        onPress={() => router.push(mandateListHref)}
       />
       <Button
         title={t('loans.home.schedule')}

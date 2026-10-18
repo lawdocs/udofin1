@@ -10,7 +10,7 @@ export const hiPayments: Record<keyof typeof enPayments, string> = {
   'pay.intro':
     'आप यहाँ तय करते हैं कि क्या चुकाना है और उसकी पुष्टि करते हैं। भुगतान आप भुगतान प्रदाता के पेज पर करते हैं, इस ऐप में नहीं। राशि {lender} तय करता है।',
   'pay.lender': 'ऋणदाता: {lender}',
-  'pay.destination': '{lender} के खाते {account} में भुगतान',
+  'pay.destination': 'इस ऋण के भुगतान {lender} के खाते {account} में जाते हैं',
   'pay.reportedAsOf': '{lender} द्वारा {date} को बताया गया',
   'pay.stale':
     'ये आँकड़े पुराने हैं। {lender} ने इन्हें आख़िरी बार {date} को बताया था। जब तक {lender} नए आँकड़े नहीं बताता, इन पर निर्भर भुगतान शुरू नहीं किए जा सकते।',
@@ -166,6 +166,9 @@ export const hiPayments: Record<keyof typeof enPayments, string> = {
   'mandate.setup.viewExisting': 'उसे देखें',
   'mandate.setup.rails': 'चुनें कि इसे कैसे चालू करना है',
   'mandate.setup.railsNote': 'आपके लिए कुछ भी पहले से चुना हुआ नहीं है। एक विकल्प चुनें।',
+  'mandate.setup.notInThisVersion':
+    'ऑटो-पे चालू करना ऐप के इस संस्करण में उपलब्ध नहीं है। आप जब चाहें, एक बार का भुगतान फिर भी कर सकते हैं।',
+  'mandate.setup.payOnce': 'एक बार का भुगतान करें',
   'mandate.unavailable.loan_not_active':
     'यह ऋण सक्रिय नहीं है, इसलिए ऑटो-पे चालू नहीं किया जा सकता। कोई प्रश्न हो तो कृपया {lender} से संपर्क करें।',
   'mandate.unavailable.collection_target_invalid':
@@ -215,7 +218,7 @@ export const hiPayments: Record<keyof typeof enPayments, string> = {
   'mandate.err.stepup':
     'इस अनुरोध के लिए एक बार वाले कोड की जाँच ज़रूरी है। चरण 1 में कोड से पुष्टि करें, फिर अनुरोध दोबारा भेजें।',
   'mandate.err.integrity':
-    'इस फ़ोन ने ऑटो-पे चालू करने के लिए ज़रूरी सुरक्षा जाँच पास नहीं की, इसलिए अनुरोध स्वीकार नहीं हुआ।',
+    'ऐप के इस संस्करण में ऑटो-पे चालू नहीं किया जा सकता, इसलिए अनुरोध स्वीकार नहीं हुआ। आप फिर भी एक बार का भुगतान कर सकते हैं।',
   'mandate.err.providerNotCapable': 'इस ऋणदाता के भुगतान प्रदाता के साथ ऑटो-पे उपलब्ध नहीं है।',
   'mandate.err.creditor':
     'इस ऋणदाता के लिए अभी ऑटो-पे चालू नहीं किया जा सकता। कृपया ऋणदाता से संपर्क करें।',
