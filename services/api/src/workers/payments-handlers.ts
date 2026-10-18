@@ -291,8 +291,9 @@ export function createPaymentsHandlers(
           'the provider order expires later than the payment period; the payment period is kept',
         );
       }
+      let recorded: string;
       try {
-        await processor.recordOrderCreated(intent.id, orderRef, expiry.record);
+        recorded = await processor.recordOrderCreated(intent.id, orderRef, expiry.record);
       } catch (error) {
         const failure = databaseFailureOf(error);
         if (failure.code === 'P0002') throw new PermanentError('intent_not_found');
@@ -307,6 +308,18 @@ export function createPaymentsHandlers(
           return;
         }
         throw error;
+      }
+      if (recorded !== 'pending') {
+        // The database keeps the order reference of an intent that closed while the provider call ran (the borrower cancelled it, or it
+        // failed or expired) and answers with the closed status instead of an error; it never reopens the intent, and a platform
+        // exception names the order. The same answer comes for a repeat of this job after the payment moved on. No link is kept for a
+        // payment nobody can open. There is no port to void an order at the provider, so the order is left there: money paid on it
+        // is found by its reference and raises payment_on_closed_intent.
+        log.warn(
+          { ...fields, intentStatus: recorded, why: 'intent_not_pending' },
+          'payment order recorded but the intent is no longer pending; no hand-off link is kept and the order is left at the provider',
+        );
+        return;
       }
       if (created === undefined) {
         log.info(
@@ -598,10 +611,14 @@ export function createPaymentsHandlers(
       log.info(fields, 'mandate cancellation not sent: it was sent already');
       return;
     }
-    if (!(MANDATE_LIVE_STATUSES as readonly string[]).includes(mandate.status)) {
+    // A cancellation asked for and not yet sent goes out whatever the status is now, once the provider has a reference: a mandate that
+    // finished (rejected, expired, cancelled by the bank) while the request waited, or whose reference arrived late, may still be
+    // live at the provider, and a request lowers risk. Without a reference only a live mandate is worth waiting for.
+    const live = (MANDATE_LIVE_STATUSES as readonly string[]).includes(mandate.status);
+    if (mandate.providerMandateRef === null && !live) {
       log.info(
         { ...fields, mandateStatus: mandate.status },
-        'mandate cancellation not sent: the mandate is no longer live',
+        'mandate cancellation not sent: the mandate is no longer live and the provider holds no reference to cancel',
       );
       return;
     }
