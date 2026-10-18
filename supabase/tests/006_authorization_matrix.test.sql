@@ -108,6 +108,7 @@ insert into expected_tables values
   ('payments.fingerprint_key_versions', '-', 's', '-', true),
   ('payments.account_registry', '-', 's', '-', true),
   ('payments.account_registry_events', '-', 's', '-', true),
+  ('payments.own_account_attestations', '-', 's', '-', true),
   ('payments.lender_payment_config_events', '-', 's', '-', true),
   ('payments.lender_payment_configs', '-', 's', 's', true),
   ('payments.merchant_registry', '-', 's', 's', true),

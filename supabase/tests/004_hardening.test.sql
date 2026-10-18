@@ -101,8 +101,9 @@ insert into auth.users (id, phone, raw_app_meta_data) values
   ('0e0e0e0e-0000-4000-8000-000000000001', null, '{"actor_type":"staff"}'),
   ('0f0f0f0f-0000-4000-8000-000000000001', null, '{"actor_type":"staff"}');
 
-select pg_temp.as_system();
--- Fixture rows are created directly; production code may only do this through change requests.
+-- Fixture rows are created directly, as the database owner; production code may only do this through change requests. (The system role can no
+-- longer do it by setting udofin.change_apply: migration 20261018000924, finding U53.)
+select pg_temp.as_owner();
 select set_config('udofin.change_apply', 'on', true);
 
 insert into tenancy.organizations (id, kind, legal_name, display_name, regulator_registration_no, status) values
@@ -249,7 +250,9 @@ select pg_temp.as_system();
 select is(private.current_actor(), 'system', 'only a trusted backend role is the system');
 
 -- ============================== Separate logins ==============================================
--- (These exercise the separation triggers themselves, so the change-control guard is lifted.)
+-- (These exercise the separation triggers themselves, so the change-control guard is lifted: as the database owner, the system role can no longer
+-- lift it by setting udofin.change_apply, migration 20261018000924, finding U53.)
+select pg_temp.as_owner();
 select set_config('udofin.change_apply', 'on', true);
 select throws_ok(
   $$insert into tenancy.memberships (org_id, user_id, status)
@@ -263,6 +266,7 @@ select throws_ok(
     values ('a1000000-0000-4000-8000-000000000000', '0e0e0e0e-0000-4000-8000-000000000001', 'active')$$,
   '23514', null, 'segregation of duties: platform staff cannot also be lender staff');
 select set_config('udofin.change_apply', 'off', true);
+select pg_temp.as_system();
 
 -- ============================== Consent ======================================================
 insert into consent.notices (id, purpose, version, language, lender_org_id, title, body_markdown, status, published_at, drafted_by, approved_by)

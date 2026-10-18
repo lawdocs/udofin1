@@ -99,8 +99,9 @@ insert into auth.users (id, phone, raw_app_meta_data) values
   ('0e0e0e0e-0000-4000-8000-000000000001', null, '{"actor_type":"staff"}'),
   ('0f0f0f0f-0000-4000-8000-000000000001', null, '{"actor_type":"staff"}');
 
-select pg_temp.as_system();
--- Fixture rows are created directly; production code may only do this through change requests.
+-- Fixture rows are created directly, as the database owner; production code may only do this through change requests. (The system role can no
+-- longer do it by setting udofin.change_apply: migration 20261018000924, finding U53.)
+select pg_temp.as_owner();
 select set_config('udofin.change_apply', 'on', true);
 
 insert into tenancy.organizations (id, kind, legal_name, display_name, regulator_registration_no, status) values
