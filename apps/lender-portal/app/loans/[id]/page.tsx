@@ -36,7 +36,7 @@ export default async function LoanRoute({
     loadServicingRequests(api, { loanAccountId: id, status: 'requested' }),
   ]);
   if (!detail.ok && detail.status === 404) notFound();
-  const notice = noticeFrom(await searchParams);
+  const notice = await noticeFrom(await searchParams, `/loans/${id}`);
   return (
     <PageFrame me={page.session.me} current="/loans">
       <ServicingLoanDetailPage

@@ -25,7 +25,7 @@ export default async function PenalTextRoute({
   const texts = lender
     ? await loadReminderPenalTexts(page.api, lender.lenderId, query)
     : ({ ok: false, status: 403, code: 'forbidden' } as const);
-  const notice = noticeFrom(raw);
+  const notice = await noticeFrom(raw, '/reminders/penal-text');
   return (
     <PageFrame me={page.session.me} current="/reminders">
       <RemindersPenalTextPage

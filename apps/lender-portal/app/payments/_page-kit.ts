@@ -14,6 +14,7 @@ import {
 import { connection } from 'next/server';
 import { requireSession } from '@/components/session-gate';
 import { portalAuth } from '@/lib/auth';
+import { successNotice } from '@/lib/flash';
 import { paymentsAction } from './actions';
 
 /**
@@ -73,20 +74,20 @@ export const keepFilters = (query: LpParams, list: keyof typeof LP_LIST_KEYS) =>
     LP_LIST_KEYS[list].filter((key) => key !== 'cursor'),
   );
 
-const COUNT = /^\d{1,6}$/;
 const CODE = /^[a-z0-9_]{1,60}$/;
-const count = (value: string | string[] | undefined): number | undefined => {
-  const text = firstParam(value);
-  return text !== undefined && COUNT.test(text) ? Number(text) : undefined;
-};
 
-/** The outcome of the last form, read from the address. Only a flag, a stable code and two counts can arrive this way. */
-export function noticeFrom(query: LpParams) {
+/**
+ * The outcome of the last form on this page. A success, and the counts of a bank-credit upload, are what the server wrote after
+ * the API accepted the change, for this page, a few seconds ago: neither can be claimed by the address. Only a stable error code
+ * can arrive in the address, and it is shown as a fixed sentence.
+ */
+export async function noticeFrom(query: LpParams, path: string) {
   const error = firstParam(query.error);
+  const notice = await successNotice(path);
   return {
-    done: query.done === '1',
+    done: notice !== undefined,
     error: error !== undefined && CODE.test(error) ? error : undefined,
-    inserted: count(query.inserted),
-    duplicates: count(query.duplicates),
+    inserted: notice?.counts?.inserted,
+    duplicates: notice?.counts?.duplicates,
   };
 }

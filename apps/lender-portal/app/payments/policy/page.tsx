@@ -11,7 +11,7 @@ export default async function PaymentPolicyRoute({
   if ('blocked' in page) return page.blocked;
   // The policy of the lender acted for only: the list is asked for that lender, never for every lender the person belongs to.
   const policy = page.lenderId ? await lpLoadPaymentPolicy(page.api, page.lenderId) : noLender;
-  const notice = noticeFrom(page.query);
+  const notice = await noticeFrom(page.query, '/payments/policy');
   return (
     <PageFrame me={page.me} current="/payments">
       <LpPaymentPolicyView

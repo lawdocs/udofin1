@@ -11,6 +11,7 @@ import {
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { currentSession, portalAuth } from '@/lib/auth';
+import { rememberSuccess } from '@/lib/flash';
 
 async function apiFor() {
   const session = await currentSession();
@@ -32,6 +33,8 @@ export async function setupAction(formData: FormData): Promise<void> {
   const api = await apiFor();
   if (!api) return redirect('/login');
   const outcome = await runPaymentSetupOperation(api, formData);
+  // The confirmation is written here, after the API accepted the change, not carried in the address.
+  if (outcome.ok) await rememberSuccess(returnTo);
   return redirect(paymentSetupNoticeUrl(returnTo, outcome));
 }
 
@@ -45,6 +48,7 @@ export async function setupDraftAction(formData: FormData): Promise<RemindersFor
   if (!api) return redirect('/login');
   const outcome = await runPaymentSetupOperation(api, formData);
   if (!outcome.ok) return outcome;
+  await rememberSuccess(returnTo);
   return redirect(paymentSetupNoticeUrl(returnTo, outcome));
 }
 

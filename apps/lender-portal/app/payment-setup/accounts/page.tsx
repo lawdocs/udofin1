@@ -32,7 +32,7 @@ export default async function PaymentAccountsRoute({
         loadPaymentSetupRegistryStatus(page.api),
       ])
     : [forbidden, forbidden, forbidden, forbidden];
-  const notice = noticeFrom(raw);
+  const notice = await noticeFrom(raw, '/payment-setup/accounts');
   return (
     <PageFrame me={page.session.me} current="/payment-setup">
       <PaymentSetupAccountsPage

@@ -1452,18 +1452,11 @@ describe('where a form may go back to', () => {
   });
 
   it('writes a success notice with the known decision and the new entry only, and none for a failure', () => {
-    expect(accountsFlashFor('/features?lenderId=x', { ok: true, result: 'applied' })).toEqual({
-      path: '/features',
-      result: 'applied',
-    });
-    expect(accountsFlashFor('/features', { ok: true, result: '<b>' })).toEqual({
-      path: '/features',
-    });
-    expect(accountsFlashFor('/accounts', { ok: true })).toEqual({ path: '/accounts' });
-    expect(accountsFlashFor('/accounts', { ok: true, created: { id: '123456789012' } })).toEqual({
-      path: '/accounts',
-    });
-    expect(accountsFlashFor('/features', { ok: false, code: 'self_approval' })).toBeUndefined();
+    expect(accountsFlashFor({ ok: true, result: 'applied' })).toEqual({ result: 'applied' });
+    expect(accountsFlashFor({ ok: true, result: '<b>' })).toEqual({});
+    expect(accountsFlashFor({ ok: true })).toEqual({});
+    expect(accountsFlashFor({ ok: true, created: { id: '123456789012' } })).toEqual({});
+    expect(accountsFlashFor({ ok: false, code: 'self_approval' })).toBeUndefined();
   });
 });
 
@@ -1583,10 +1576,7 @@ describe('the account number: typed once, posted once, to one route, and never a
     const url = accountRegisteredUrl(outcome);
     // The identifier of the new entry is the notice the server writes (accountsFlashFor), not part of the address.
     expect(url).toBe('/accounts');
-    expect(accountsFlashFor('/accounts', outcome)).toEqual({
-      path: '/accounts',
-      registered: REGISTRY_1,
-    });
+    expect(accountsFlashFor(outcome)).toEqual({ registered: REGISTRY_1 });
     for (const forbidden of [CANARY_ACCOUNT, CANARY_LAST_FOUR, CANARY_BRANCH_CODE, 'XXXXXX'])
       expect(url).not.toContain(forbidden);
     expect(accountRegisteredUrl({ ok: false, code: 'account_number_invalid' })).toBe(

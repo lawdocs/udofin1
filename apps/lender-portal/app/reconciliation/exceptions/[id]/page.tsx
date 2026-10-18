@@ -17,7 +17,7 @@ export default async function ExceptionRoute({
   const detail = await lpLoadExceptionDetail(page.api, id);
   // An exception that does not exist, or belongs to another lender, is the same answer: not found.
   if (!detail.ok && detail.status === 404) notFound();
-  const notice = noticeFrom(page.query);
+  const notice = await noticeFrom(page.query, `/reconciliation/exceptions/${id}`);
   return (
     <PageFrame me={page.me} current="/reconciliation">
       <LpExceptionDetailView

@@ -20,13 +20,13 @@ export default async function ImportRoute({
   const detail = await loadServicingImport(page.api, id);
   if (!detail.ok && detail.status === 404) notFound();
   const raw = await searchParams;
-  const notice = noticeFrom(raw);
+  const notice = await noticeFrom(raw, `/imports/${id}`);
   return (
     <PageFrame me={page.session.me} current="/imports">
       <ServicingImportPage
         detail={detail}
         ctx={{ action: servicingAction, returnTo: `/imports/${id}`, grants: page.grants }}
-        existing={raw.existing === '1'}
+        existing={notice.existing}
         done={notice.done}
         error={notice.error}
       />

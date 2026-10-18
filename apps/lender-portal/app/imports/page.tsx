@@ -28,7 +28,7 @@ export default async function ImportsRoute({
     loadServicingImports(page.api, query),
     loadServicingCorrections(page.api),
   ]);
-  const notice = noticeFrom(raw);
+  const notice = await noticeFrom(raw, '/imports');
   const correct = typeof raw.correct === 'string' ? raw.correct : undefined;
   return (
     <PageFrame me={page.session.me} current="/imports">

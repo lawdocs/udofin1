@@ -11,7 +11,7 @@ export default async function MandatePolicyRoute({
   if ('blocked' in page) return page.blocked;
   // The policy of the lender acted for only: the list is asked for that lender, never for every lender the person belongs to.
   const policy = page.lenderId ? await lpLoadMandatePolicy(page.api, page.lenderId) : noLender;
-  const notice = noticeFrom(page.query);
+  const notice = await noticeFrom(page.query, '/mandates/policy');
   return (
     <PageFrame me={page.me} current="/mandates">
       <LpMandatePolicyView

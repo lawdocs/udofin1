@@ -8,6 +8,7 @@ import {
 } from '@udofin/portal-kit';
 import { redirect } from 'next/navigation';
 import { currentSession, portalAuth } from '@/lib/auth';
+import { rememberSuccess } from '@/lib/flash';
 
 /**
  * Stages one import file (a preview only: nothing is applied). This action serves that one operation and no other, whatever
@@ -31,7 +32,10 @@ export async function stageImportAction(
   if (!outcome.ok) return { status: 'error', code: outcome.code };
   const stage = outcome.stage ?? ({ status: 'error', code: 'bad_response' } as const);
   if (stage.status === 'staged') {
-    return redirect(`/imports/${stage.batchId}${stage.existing ? '?existing=1' : ''}`);
+    const page = `/imports/${stage.batchId}`;
+    // "This exact file was already received" is said by the server, so it is a notice the server writes, not a flag in the address.
+    if (stage.existing) await rememberSuccess(page, { existing: true });
+    return redirect(page);
   }
   return stage;
 }

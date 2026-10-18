@@ -2,6 +2,7 @@ import { createApiClient } from '@udofin/auth-client';
 import { servicingGrants } from '@udofin/portal-kit';
 import { requireSession } from '@/components/session-gate';
 import { portalAuth } from '@/lib/auth';
+import { successNotice } from '@/lib/flash';
 
 /**
  * What every lender servicing page needs: the signed-in person (or the explanation to show instead), an API client that
@@ -18,10 +19,19 @@ export async function servicingSession() {
   return { session, api, grants: servicingGrants(session.me.memberships) } as const;
 }
 
-/** The result notice of the last action, read from the page address. */
-export function noticeFrom(query: Record<string, string | string[] | undefined>) {
+/**
+ * The result notice of the last action on this page. A success (and "this file was already received") is what the server wrote
+ * after the API accepted the change, for this page, a few seconds ago; the page address cannot claim one. An error is a closed
+ * code in the address that is shown only as a fixed sentence.
+ */
+export async function noticeFrom(
+  query: Record<string, string | string[] | undefined>,
+  path: string,
+) {
+  const notice = await successNotice(path);
   return {
-    done: query.done === '1',
+    done: notice !== undefined,
+    existing: notice?.existing === true,
     error: typeof query.error === 'string' ? query.error : undefined,
   };
 }

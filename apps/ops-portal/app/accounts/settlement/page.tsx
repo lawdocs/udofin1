@@ -9,6 +9,7 @@ import {
 } from '@udofin/portal-kit';
 import { connection } from 'next/server';
 import { PageFrame } from '@/components/page-frame';
+import { successNotice } from '@/lib/flash';
 import { platformAction, registerAccountAction } from '../actions';
 import { platformSession } from '../platform-session';
 
@@ -30,6 +31,8 @@ export default async function SettlementRoute({
       : Promise.resolve(null),
     loadPlatformLenderChoices(page.generic),
   ]);
+  // A success is what the server wrote for this page after the API accepted the change, never what the address says.
+  const flash = await successNotice('/accounts/settlement');
   return (
     <PageFrame me={page.session.me} current="/accounts">
       <AccountsSettlementPage
@@ -48,7 +51,7 @@ export default async function SettlementRoute({
           caps: page.caps,
           userId: page.userId,
         }}
-        notice={accountsNoticeFrom(raw)}
+        notice={accountsNoticeFrom(raw, flash)}
       />
     </PageFrame>
   );

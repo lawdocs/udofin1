@@ -14,7 +14,7 @@ export default async function BankCreditsRoute({
     page.caps.reconcile && page.lenderId
       ? await lpLoadSettlementAccounts(page.api, page.lenderId)
       : undefined;
-  const notice = noticeFrom(page.query);
+  const notice = await noticeFrom(page.query, '/reconciliation/bank-credits');
   return (
     <PageFrame me={page.me} current="/reconciliation">
       <LpBankCreditUploadView

@@ -9,6 +9,7 @@ import {
 } from '@udofin/portal-kit';
 import { redirect } from 'next/navigation';
 import { currentSession, portalAuth } from '@/lib/auth';
+import { rememberSuccess } from '@/lib/flash';
 
 /**
  * The single entry point for the lender servicing forms. A form names an allow-listed operation (see
@@ -27,5 +28,7 @@ export async function servicingAction(formData: FormData): Promise<void> {
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
   });
   const outcome = await runServicingOperation(api, formData);
+  // The confirmation is written here, after the API accepted the change, not carried in the address.
+  if (outcome.ok) await rememberSuccess(returnTo);
   return redirect(servicingNoticeUrl(returnTo, outcome));
 }

@@ -23,7 +23,6 @@ import {
   UdofinFeeMerchantInput,
 } from '@udofin/contracts';
 import { z, type ZodType } from 'zod';
-import { flashPathOf } from '../flash.js';
 import { type PortalKind } from '../onboarding/api.js';
 import { realDate } from '../servicing/format.js';
 import { type PlatformApi, type PlatformResult } from './client.js';
@@ -635,12 +634,10 @@ export function accountsNoticeUrl(returnTo: string, outcome: AccountsOutcome): s
  * known one) and, for a registration, the identifier of the new entry. Nothing a person typed. A failure writes no notice.
  */
 export function accountsFlashFor(
-  returnTo: string,
   outcome: AccountsOutcome,
-): { path: string; result?: string; registered?: string } | undefined {
+): { result?: string; registered?: string } | undefined {
   if (!outcome.ok) return undefined;
   return {
-    path: flashPathOf(returnTo),
     ...(outcome.result && DECISION_RESULTS.includes(outcome.result)
       ? { result: outcome.result }
       : {}),

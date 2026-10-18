@@ -11,7 +11,7 @@ export default async function ReconciliationSettingsRoute({
   if ('blocked' in page) return page.blocked;
   // The waiting times of the lender acted for only: the list is asked for that lender, never for every lender the person belongs to.
   const settings = page.lenderId ? await lpLoadReconSettings(page.api, page.lenderId) : noLender;
-  const notice = noticeFrom(page.query);
+  const notice = await noticeFrom(page.query, '/reconciliation/settings');
   return (
     <PageFrame me={page.me} current="/reconciliation">
       <LpReconciliationSettingsView
