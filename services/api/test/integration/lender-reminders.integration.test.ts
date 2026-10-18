@@ -1572,6 +1572,32 @@ describe.skipIf(!enabled)('lender reminders over HTTP', () => {
       ).toBe(before);
     });
 
+    it('refuses an Aadhaar-shaped number that only the table trigger catches (422 unsafe_free_text), and a credential-shaped phrase', async () => {
+      const before = await countOf(
+        'select count(*) as n from servicing.reminder_templates where lender_org_id = $1',
+        [ids.lenderA],
+      );
+      for (const text of [
+        'Reference 2345 6789 0123 for the installment due on {{due_date}}.',
+        'Your secret: abcdefgh must be kept safe before {{due_date}} please.',
+      ]) {
+        refused(text);
+        const res = await post(
+          '/v1/lender/reminder-templates',
+          ids.aAdmin,
+          templateBody({ body: text }),
+        );
+        expect([text, res.statusCode, code(res)]).toEqual([text, 422, 'unsafe_free_text']);
+        expect(res.body).not.toContain(text);
+      }
+      expect(
+        await countOf(
+          'select count(*) as n from servicing.reminder_templates where lender_org_id = $1',
+          [ids.lenderA],
+        ),
+      ).toBe(before);
+    });
+
     it('refuses a kind or language outside the closed lists before the database (422 validation_failed) and an extra field', async () => {
       for (const over of [
         { kind: 'marketing' },
@@ -1851,6 +1877,32 @@ describe.skipIf(!enabled)('lender reminders over HTTP', () => {
         ]);
         for (const value of Object.values(over))
           if (typeof value === 'string') expect(res.body).not.toContain(value);
+      }
+      expect(
+        await countOf(
+          'select count(*) as n from servicing.penal_charge_texts where lender_org_id = $1',
+          [ids.lenderA],
+        ),
+      ).toBe(before);
+    });
+
+    it('refuses an Aadhaar-shaped number in the reason or a sentence (422 unsafe_free_text)', async () => {
+      const before = await countOf(
+        'select count(*) as n from servicing.penal_charge_texts where lender_org_id = $1',
+        [ids.lenderA],
+      );
+      for (const over of [
+        { reason: 'Reference 2345 6789 0123 stated in the loan agreement' },
+        { sentenceEn: 'A charge per reference 2345 6789 0123 applies as in your agreement.' },
+        { sentenceHi: 'Reference 2345 6789 0123 applies as stated in your agreement.' },
+      ]) {
+        refused(JSON.stringify(over));
+        const res = await post('/v1/lender/penal-charge-texts', ids.aAdmin, penalBody(over));
+        expect([JSON.stringify(over), res.statusCode, code(res)]).toEqual([
+          JSON.stringify(over),
+          422,
+          'unsafe_free_text',
+        ]);
       }
       expect(
         await countOf(
@@ -2218,6 +2270,24 @@ describe.skipIf(!enabled)('lender reminders over HTTP', () => {
         await countOf(
           'select count(*) as n from servicing.communication_holds where lender_org_id = $1',
           [ids.lenderA],
+        ),
+      ).toBe(before);
+    });
+
+    it('refuses an Aadhaar-shaped number in a note (422 unsafe_free_text) and stores nothing', async () => {
+      const before = await countOf(
+        'select count(*) as n from servicing.communication_holds where loan_account_id = $1',
+        [loans.a4],
+      );
+      const note = 'Case reference 2345 6789 0123 was noted for the file';
+      refused(note);
+      const res = await place(ids.aAdmin, loans.a4, { reason: 'legal', note });
+      expect([res.statusCode, code(res)]).toEqual([422, 'unsafe_free_text']);
+      expect(res.body).not.toContain(note);
+      expect(
+        await countOf(
+          'select count(*) as n from servicing.communication_holds where loan_account_id = $1',
+          [loans.a4],
         ),
       ).toBe(before);
     });

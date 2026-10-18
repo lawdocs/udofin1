@@ -89,6 +89,13 @@ export const LR_DELIVERY_ERROR_CLASSES = [
   'unknown',
 ] as const;
 
+/** A channel. `sms` is an inert placeholder (no SMS provider exists): it is never sent, accepted or reported as delivered. */
+const Channel = z
+  .enum(LR_CHANNELS)
+  .describe(
+    'in_app and push carry messages. sms is an inert placeholder: no SMS provider exists, so an sms message is suppressed (sms_not_configured) and never sent.',
+  );
+
 /** A wall-clock time of day in IST, `HH:MM`. */
 const ClockTime = z.string().regex(/^([01][0-9]|2[0-3]):[0-5][0-9]$/);
 
@@ -128,7 +135,7 @@ export const LrPolicy = z.strictObject({
   status: z.enum(LR_ARTEFACT_STATUSES),
   offsetsDays: z.array(z.number().int()),
   overdueWeekly: z.boolean(),
-  channels: z.array(z.enum(LR_CHANNELS)),
+  channels: z.array(Channel),
   windowFrom: ClockTime,
   windowTo: ClockTime,
   maxPerDay: z.number().int(),
@@ -155,7 +162,7 @@ export const LrPolicyDraftInput = z.strictObject({
   lenderId: Id,
   offsetsDays: z.array(z.number().int().min(-1000).max(1000)).min(1).max(30),
   overdueWeekly: z.boolean(),
-  channels: z.array(z.enum(LR_CHANNELS)).min(1).max(6),
+  channels: z.array(Channel).min(1).max(6),
   windowFrom: ClockTime,
   windowTo: ClockTime,
   maxPerDay: z.number().int().min(0).max(1000),
@@ -336,7 +343,7 @@ export const LrReminderListQuery = z.strictObject({
   status: z.enum(LR_REMINDER_STATUSES).optional(),
   suppressReason: z.enum(LR_SUPPRESS_REASONS).optional(),
   kind: z.enum(LR_REMINDER_KINDS).optional(),
-  channel: z.enum(LR_CHANNELS).optional(),
+  channel: Channel.optional(),
   /** Scheduled at or after this instant (ISO 8601 with an offset; write `Z` or encode `+` as `%2B` in a URL). */
   from: Timestamp.optional(),
   /** Scheduled before this instant. */
@@ -360,7 +367,7 @@ export const LrReminder = z.strictObject({
   installmentSeq: z.number().int(),
   dueDate: DateOnly,
   offsetDays: z.number().int(),
-  channel: z.enum(LR_CHANNELS),
+  channel: Channel,
   kind: z.enum(LR_REMINDER_KINDS),
   scheduledFor: Timestamp,
   status: z.enum(LR_REMINDER_STATUSES),
@@ -392,7 +399,7 @@ export const LrReminderSummary = z.strictObject({
     z.strictObject({
       status: z.enum(LR_REMINDER_STATUSES),
       suppressReason: z.enum(LR_SUPPRESS_REASONS).nullable(),
-      channel: z.enum(LR_CHANNELS),
+      channel: Channel,
       count: z.number().int().min(0),
     }),
   ),
@@ -406,7 +413,7 @@ export const LrReminderSummary = z.strictObject({
  */
 export const LrDelivery = z.strictObject({
   id: Id,
-  channel: z.enum(LR_CHANNELS),
+  channel: Channel,
   state: z.enum(LR_DELIVERY_STATES),
   source: z.enum(LR_DELIVERY_SOURCES),
   providerRef: z.string().nullable(),
