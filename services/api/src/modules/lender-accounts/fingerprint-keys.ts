@@ -29,16 +29,25 @@ export function createFingerprintKeySource(input: {
   wrapped: Readonly<Record<number, EncryptedBlob>>;
 }): FingerprintKeySource {
   assertProviderAllowed(input.keyManager.descriptor, input.environment);
+  // A key is cached once it has been unwrapped; a load that is still running is shared by the callers that arrive meanwhile. A
+  // FAILED load is never kept: a networked key manager fails transiently (a timeout, a throttle), and a remembered failure
+  // would switch registration off until the process restarts even after the key manager recovered. The next request tries again.
   const loaded = new Map<number, Promise<FingerprintKey | undefined>>();
   return {
     keyFor(keyVersion) {
       const blob = input.wrapped[keyVersion];
       if (!blob) return Promise.resolve(undefined);
-      let pending = loaded.get(keyVersion);
-      if (!pending) {
-        pending = loadFingerprintKey(input.keyManager, blob, keyVersion).catch(() => undefined);
-        loaded.set(keyVersion, pending);
-      }
+      const cached = loaded.get(keyVersion);
+      if (cached) return cached;
+      const pending: Promise<FingerprintKey | undefined> = loadFingerprintKey(
+        input.keyManager,
+        blob,
+        keyVersion,
+      ).catch(() => {
+        if (loaded.get(keyVersion) === pending) loaded.delete(keyVersion);
+        return undefined;
+      });
+      loaded.set(keyVersion, pending);
       return pending;
     },
   };
