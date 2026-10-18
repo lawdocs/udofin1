@@ -61,5 +61,7 @@ export async function setupConfigDraftAction(
   const outcome = await runPaymentSetupOperation(api, formData, 'setup.config.draft');
   if (!outcome.ok) return outcome;
   revalidatePath('/payment-setup');
-  return outcome.drafted ? { ok: true, result: outcome.drafted } : { ok: false, code: 'bad_response' };
+  return outcome.drafted
+    ? { ok: true, result: outcome.drafted }
+    : { ok: false, code: 'bad_response' };
 }
