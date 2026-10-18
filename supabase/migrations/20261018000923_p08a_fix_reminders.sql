@@ -116,6 +116,26 @@ revoke all on function private.reminder_text_ok(text, boolean) from public;
 comment on function private.reminder_text_ok(text, boolean) is
   'The "service message only" screen on lender-written reminder text (wording, penal-charge sentence and reason, hold and release notes): 10 to 800 plain characters; no link or address (a scheme, www, an e-mail sign, or a dot straight before two letters, which also refuses short links and any domain whatever its top-level domain); no run of 8 or more digits once spaces, dots, commas, colons, semicolons, brackets, quotes and hyphens between digits are removed (Devanagari digits are mapped to ASCII first); no PAN-shaped token in any case, spaced or not; no promotional vocabulary (English list); only the variables lender_name, due_date, amount and penal_text. This is a screen for the shapes above, not a guarantee that a text holds no contact detail or personal data (a name or a spelled-out number is not caught): the approver reads the text. The Hindi wording is checked for the same shapes; the approver checks its meaning.';
 
+-- The screen is used by CHECK constraints, and PostgreSQL checks them again on every update of a row. A template, penal-charge text or hold note
+-- written before this migration under the earlier, weaker screen could therefore no longer be retired or released (the update would fail the check),
+-- which is the opposite of what the lender needs. The constraints below keep refusing unsafe text on every insert and on every change that keeps the
+-- row in use, and let a row leave use: a retired wording or sentence, a released hold. They are NOT VALID so that this migration cannot fail on rows
+-- that already exist (they can be validated later, after a review of those rows); new and changed rows are checked at once.
+alter table servicing.reminder_templates drop constraint reminder_templates_body_check;
+alter table servicing.reminder_templates
+  add constraint reminder_templates_body_check check (status = 'retired' or private.reminder_text_ok(body, true)) not valid;
+alter table servicing.penal_charge_texts
+  drop constraint penal_charge_texts_reason_check,
+  drop constraint penal_charge_texts_sentence_en_check,
+  drop constraint penal_charge_texts_sentence_hi_check;
+alter table servicing.penal_charge_texts
+  add constraint penal_charge_texts_reason_check check (length(trim(reason)) between 10 and 200 and (status = 'retired' or private.reminder_text_ok(reason, false))) not valid,
+  add constraint penal_charge_texts_sentence_en_check check (status = 'retired' or private.reminder_text_ok(sentence_en, false)) not valid,
+  add constraint penal_charge_texts_sentence_hi_check check (sentence_hi is null or status = 'retired' or private.reminder_text_ok(sentence_hi, false)) not valid;
+alter table servicing.communication_holds drop constraint communication_holds_note_check;
+alter table servicing.communication_holds
+  add constraint communication_holds_note_check check (note is null or (length(note) <= 200 and (released_at is not null or private.reminder_text_ok(note, false)))) not valid;
+
 -- ---------------------------------------------------------------------------------------------
 -- C. Quiet period after a payment (M41)
 -- ---------------------------------------------------------------------------------------------
@@ -293,6 +313,9 @@ comment on function servicing.plan_reminders(interval, integer) is
 -- ---------------------------------------------------------------------------------------------
 -- F. Claiming and recording (A23, M33, M34, M36, M37, M39, M40)
 -- ---------------------------------------------------------------------------------------------
+comment on table servicing.reminders is
+  'One planned message per loan, installment, offset, channel and policy version (unique, so an at-least-once planner cannot double-plan; the planner also never plans a message that already exists under an earlier policy version, and a candidate that already exists under the same policy in any state is never selected again). planned -> claimed (a worker holds a lease; the template, language, variables and hashes are frozen) -> sent | failed, or suppressed with a reason from a closed list. A retry (a failed attempt, or a lease that ran out) looks up the approved wording, the penal-charge text and the lender''s figures again and freezes the message again if they changed; a send report must carry the claim token (the attempt number) when it is given. An overdue message can only be claimed with an approved penal-charge text (check). A message outside the window is deferred to the next window, never dropped silently; one that is more than 48 hours late is suppressed (expired), and so is a pre-due or due-day message whose day has passed. A message stopped by a communication hold goes back to planned when the hold is released, if its time is still to come; no other suppressed message comes back. sms rows exist only as suppressed placeholders (sms_not_configured). Content is frozen at claim; the variables are the due date, the amount the LENDER reported and the lender''s display name. Written only by the servicing reminder functions. Owner: servicing module.';
+
 -- The claim scan pages through planned messages (and through claimed messages whose lease ran out) in (scheduled_for, id) order, so each page can stop
 -- early. These two partial indexes serve exactly that; they replace reminders_due (scheduled_for) where status = 'planned', which they cover.
 create index reminders_planned_keyset on servicing.reminders (scheduled_for, id) where status = 'planned';

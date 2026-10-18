@@ -5,7 +5,7 @@
 -- database WITHOUT the migration this file then fails assertion by assertion instead of aborting at the first statement that needs the new objects.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(102);
+select plan(109);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -631,12 +631,18 @@ select pg_temp.keep('hold11', servicing.place_communication_hold(pg_temp.lid(11)
 select pg_temp.as_owner();
 insert into servicing.reminders (lender_org_id, loan_account_id, borrower_id, policy_id, installment_seq, due_date, offset_days, channel, scheduled_for, status, suppress_reason)
 values (pg_temp.lx(), pg_temp.lid(11), pg_temp.got('b1')::uuid, pg_temp.got('pol_ret')::uuid, 2, pg_temp.d() + 31, -3, 'in_app', now() + interval '2 days', 'suppressed', 'hold');
+-- A message of another loan that its own (still active) hold stopped, scheduled for the future: releasing loan 11's hold must not touch it.
+insert into servicing.reminders (lender_org_id, loan_account_id, borrower_id, policy_id, installment_seq, due_date, offset_days, channel, scheduled_for, status, suppress_reason)
+values (pg_temp.lx(), pg_temp.lid(20), pg_temp.got('b1')::uuid, pg_temp.pol(), 5, pg_temp.d() + 31, -1, 'in_app', now() + interval '2 days', 'suppressed', 'hold');
 select is(pg_temp.st(11, 1, -1) || ',' || pg_temp.st(11, 1, 0) || ',' || pg_temp.st(11, 2, -3), 'suppressed:hold,suppressed:hold,suppressed:hold', 'loan 11: the hold stopped both planned messages (and a third one under a retired policy exists)');
+select pg_temp.as_user(pg_temp.u(6));
+select is(pg_temp.err(format($$select servicing.release_communication_hold(%L)$$, pg_temp.got('hold11'))), 'P0002|', 'another lender''s user cannot release this hold (it looks unknown to them)');
 select pg_temp.as_user(pg_temp.u(3));
 select is(servicing.release_communication_hold(pg_temp.got('hold11')::uuid, 'Complaint closed by the lender'), 'released', 'the hold is released');
 select pg_temp.as_owner();
 select is(pg_temp.st(11, 1, -1), 'planned', 'the message scheduled for after the release resumes (planned again)');
 select is(pg_temp.st(11, 1, 0), 'suppressed:hold', 'a message whose time passed during the hold stays stopped: nothing is sent late because a hold ended');
+select is(pg_temp.st(20, 5, -1), 'suppressed:hold', 'releasing the hold of one loan resumes nothing of another loan (tenant and loan scope)');
 select is(pg_temp.st(11, 2, -3), 'suppressed:hold', 'and a message of a policy that is no longer approved does not resume');
 select is((select (metadata ->> 'resumed')::integer from audit.events where action = 'reminder.hold.released' and metadata ->> 'hold_id' = pg_temp.got('hold11')), 1, 'the audit event counts how many messages resumed (a number, no text)');
 update servicing.reminders set scheduled_for = now() - interval '1 hour' where id = pg_temp.rid(11, 1, -1);
@@ -661,6 +667,32 @@ values (pg_temp.lx(), pg_temp.lid(9), pg_temp.got('b1')::uuid, pg_temp.got('pol1
 select pg_temp.as_system();
 select pg_temp.claim();
 select is(pg_temp.st(9, 1, -1), 'suppressed:policy_retired', 'a message that is still planned under a retired policy is stopped at the claim');
+
+-- ============================================================================================================================
+-- 8. Rows written under the earlier, weaker screen can still leave use (the screen is also a CHECK constraint, checked again on every update)
+-- ============================================================================================================================
+select pg_temp.as_owner();
+select pg_temp.mk_loan(37, pg_temp.lx(), pg_temp.got('b1')::uuid, 1, 31, 1, 475000, 0, 0);
+select pg_temp.keep('rtok_def', pg_get_functiondef('private.reminder_text_ok(text, boolean)'::regprocedure));
+create or replace function private.reminder_text_ok(p_text text, p_allow_placeholders boolean) returns boolean language sql immutable set search_path = '' as $fn$ select true $fn$;
+select pg_temp.as_user(pg_temp.u(3));
+select pg_temp.keep('leg_t', servicing.draft_reminder_template(pg_temp.lx(), 'due_day', 'hi', 'Pay at rzp.io/l/AbCd before {{due_date}} please')::text);
+select pg_temp.keep('leg_t2', servicing.draft_reminder_template(pg_temp.lx(), 'pre_due', 'hi', 'Pay at bit.ly/x7Kq2 before {{due_date}} please')::text);
+select pg_temp.keep('leg_p', servicing.draft_penal_charge_text(pg_temp.lx(), 'flat', 50000, null, true, true, 'Charge as per the loan agreement', 'Pay at pay.example.link/abc or call 1800-123-4567 now.')::text);
+select pg_temp.keep('leg_h', servicing.place_communication_hold(pg_temp.lid(37), 'complaint', 'Call 98765 43210 about this loan')::text);
+select pg_temp.as_user(pg_temp.u(4));
+select servicing.approve_reminder_template(pg_temp.got('leg_t')::uuid);
+select pg_temp.as_user(pg_temp.u(9));
+select servicing.approve_penal_charge_text(pg_temp.got('leg_p')::uuid);
+select pg_temp.as_owner();
+do $restore$ begin execute current_setting('t.rtok_def'); end $restore$;
+select is(private.reminder_text_ok('Pay at rzp.io/l/AbCd before {{due_date}} please', true), false, 'fixture: the real screen is back and refuses that wording');
+select pg_temp.as_user(pg_temp.u(3));
+select is(servicing.retire_reminder_template(pg_temp.got('leg_t')::uuid), 'retired', 'wording that was approved under the earlier screen and fails the new one can still be retired');
+select is(servicing.retire_penal_charge_text(pg_temp.got('leg_p')::uuid), 'retired', 'so can a penal-charge sentence');
+select is(servicing.release_communication_hold(pg_temp.got('leg_h')::uuid, 'Complaint closed by the lender'), 'released', 'and a hold whose note fails the new screen can still be released');
+select pg_temp.as_user(pg_temp.u(4));
+select is(pg_temp.err(format($$select servicing.approve_reminder_template(%L)$$, pg_temp.got('leg_t2'))), '23514|', 'but wording that fails the new screen cannot be approved');
 
 select * from finish();
 rollback;
