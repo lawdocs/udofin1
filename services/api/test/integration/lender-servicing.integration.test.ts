@@ -3358,6 +3358,56 @@ describe.skipIf(!enabled)('lender servicing over HTTP', () => {
       ).toBe(404);
     });
 
+    it('answers 409 to the losing side of a confirmation that raced it, and to a delay reason that lost to it, never 500 (A7)', async () => {
+      const taskId = taskIds.demat_pledge ?? '';
+      const confirmUrl = `/v1/lender/security-release/${taskId}/confirm`;
+      const delayUrl = `/v1/lender/security-release/${taskId}/delay-reason`;
+      // The winner: a confirmation that has updated the task but not yet committed. The loser reads the task as open (the
+      // winner's change is not visible yet), passes the status check and then waits for the row lock.
+      const winner = await admin.connect();
+      try {
+        await winner.query('begin');
+        await winner.query(
+          `update servicing.security_release_tasks
+              set status = 'confirmed_by_lender', lender_confirmation_ref = $2, confirmed_by = $3, confirmed_at = clock_timestamp()
+            where id = $1`,
+          [taskId, `REL-${RUN}-WIN`, ids.aDocs],
+        );
+        const waiting = async (fn: string) => {
+          for (let n = 0; n < 100; n++) {
+            const r = await q<{ n: string }>(
+              `select count(*)::text as n from pg_stat_activity
+                where wait_event_type = 'Lock' and datname = current_database() and query like $1`,
+              [`%${fn}%`],
+            );
+            if (r[0]?.n !== '0') return;
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+          throw new Error(`${fn} never waited for the lock`);
+        };
+        const loserConfirm = post(confirmUrl, ids.aDocs2, { confirmationRef: `REL-${RUN}-LOSE` });
+        await waiting('confirm_security_release');
+        const loserDelay = post(delayUrl, ids.aDocs3, {
+          reason: 'The depository has not yet acknowledged the release request.',
+        });
+        await waiting('set_security_release_delay_reason');
+        await winner.query('commit');
+        for (const res of [await loserConfirm, await loserDelay]) {
+          expect([res.statusCode, code(res)]).toEqual([409, 'already_confirmed']);
+          expect(res.body).not.toContain('P0001');
+        }
+      } finally {
+        await winner.query('rollback').catch(() => undefined);
+        winner.release();
+      }
+      expect(
+        await scalar<string>(
+          `select lender_confirmation_ref as v from servicing.security_release_tasks where id = $1`,
+          [taskId],
+        ),
+      ).toBe(`REL-${RUN}-WIN`);
+    });
+
     it('answers feature_disabled for a lender whose switch is off, when it has a task', async () => {
       // Lender C reported no closure; a task id of another lender is simply not found for it.
       const res = await post(
