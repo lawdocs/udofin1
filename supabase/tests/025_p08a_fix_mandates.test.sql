@@ -3,7 +3,7 @@
 -- negative controls that say so. Synthetic data only (labelled SAMPLE). Error codes are reported as SQLSTATE|hint.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(229);
+select plan(232);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -297,6 +297,23 @@ from servicing.schedule_snapshots s cross join (values (1, 3, 400000::bigint, 75
 select pg_temp.integrity(pg_temp.got('b1'), 'device');
 select pg_temp.integrity(pg_temp.got('b2'), 'device');
 select pg_temp.as_system();
+
+-- ============================================================================================================================
+-- 0. Grants: the new helpers are reachable by nobody; the redefined functions keep their grants
+-- ============================================================================================================================
+select ok((select bool_and(not has_function_privilege(r, f, 'execute'))
+           from unnest(array['private.report_shows_paid(uuid, date)', 'private.close_mandate_debits(uuid, text)', 'private.enqueue_mandate_cancel(uuid)',
+                             'private.check_mandate_debit_consistency()', 'private.check_mandate_event_consistency()']) f, unnest(array['anon', 'authenticated', 'service_role']) r),
+  'the new private helpers can be executed by no API role');
+select ok((select bool_and(has_function_privilege('service_role', f, 'execute') and not has_function_privilege('authenticated', f, 'execute') and not has_function_privilege('anon', f, 'execute'))
+           from unnest(array['payments.sweep_mandates(interval, interval, interval)', 'payments.plan_mandate_debits(interval)', 'payments.claim_pre_debit_notices(integer, interval)',
+                             'payments.record_pre_debit_notice(uuid, text, text)', 'payments.record_mandate_handoff(uuid, text, text, timestamptz)',
+                             'payments.apply_mandate_lookup(uuid, text, text, timestamptz)', 'payments.apply_debit_lookup(uuid, text, date, bigint, text, text, timestamptz)',
+                             'payments.mandates_needing_lookup(interval)', 'payments.request_cancel_for_closed_loans()', 'payments.mark_mandate_cancel_sent(uuid)']) f),
+  'the system functions stay system-only after the redefinition');
+select ok((select bool_and(has_function_privilege('authenticated', f, 'execute') and not has_function_privilege('anon', f, 'execute') and not has_function_privilege('service_role', f, 'execute'))
+           from unnest(array['payments.my_mandates()', 'payments.my_mandate_debits(uuid)', 'payments.request_mandate_cancellation(uuid)']) f),
+  'and the borrower functions stay borrower-only');
 
 -- ============================================================================================================================
 -- 1. A22: dead notices must not hide live ones (and are closed by the sweep)
