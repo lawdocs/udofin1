@@ -198,7 +198,8 @@ export const REMINDERS_OPERATIONS: Readonly<Record<string, RemindersOperation>> 
       if (!loanId) return bad('id_invalid');
       if (!reason) return bad();
       const noteText = str(form, 'note');
-      if (noteText !== undefined && noteText.length > 1000) return bad('note_invalid');
+      if (noteText !== undefined && (noteText.length < 10 || noteText.length > 200))
+        return bad('note_invalid');
       return post(
         api,
         `/v1/lender/loans/${loanId}/communication-hold`,
@@ -212,7 +213,8 @@ export const REMINDERS_OPERATIONS: Readonly<Record<string, RemindersOperation>> 
       const id = uuid(form, 'id');
       if (!id) return bad();
       const noteText = str(form, 'note');
-      if (noteText !== undefined && noteText.length > 1000) return bad('note_invalid');
+      if (noteText !== undefined && (noteText.length < 10 || noteText.length > 200))
+        return bad('note_invalid');
       return post(
         api,
         `/v1/lender/communication-holds/${id}/release`,

@@ -12,18 +12,22 @@ const MAX_LISTED = 1000;
 export function RowErrorsTable({
   errors,
   truncated,
+  rowNumbering = 'file_row',
 }: {
   errors: readonly LsImportRowError[];
   truncated: boolean;
+  /** What the numbers count: the lines of the refused file, or the position among the records of a stored batch. */
+  rowNumbering?: 'file_row' | 'record_position';
 }) {
   if (errors.length === 0) return null;
+  const byRecord = rowNumbering === 'record_position';
   return (
     <div>
       <table>
         <caption>Problems found, by row</caption>
         <thead>
           <tr>
-            <th scope="col">Row</th>
+            <th scope="col">{byRecord ? 'Record' : 'Row'}</th>
             <th scope="col">Kind</th>
             <th scope="col">What is wrong</th>
             <th scope="col">Column</th>
@@ -50,6 +54,12 @@ export function RowErrorsTable({
           ))}
         </tbody>
       </table>
+      {byRecord ? (
+        <p role="note">
+          These numbers count the records of the file in the order they were stored, not the lines
+          of the file.
+        </p>
+      ) : null}
       {truncated ? (
         <p role="note">
           Only the first {formatCount(MAX_LISTED)} problem rows are listed. Correct these and upload

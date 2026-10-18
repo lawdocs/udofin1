@@ -163,14 +163,12 @@ export const SETUP_OPERATIONS: Readonly<Record<string, SetupOperation>> = {
         bankName: str(form, 'bankName'),
         maskedRef: str(form, 'maskedRef'),
       });
-      if (!parsed.success)
-        return bad(
-          codeFor(parsed.error, {
-            maskedRef: 'masked_ref_invalid',
-            label: 'settlement_account_invalid',
-            bankName: 'settlement_account_invalid',
-          }),
-        );
+      if (!parsed.success) {
+        // The contract also refuses account details hidden in the label or the bank name; both answer with the one code the form explains.
+        const field = parsed.error.issues[0]?.path[0];
+        if (field === 'label' || field === 'bankName') return bad('settlement_account_invalid');
+        return bad(codeFor(parsed.error, { maskedRef: 'masked_ref_invalid' }));
+      }
       // A number must not hide in the label or the bank name: a run of six or more digits, a number split by spaces, hyphens,
       // dots or slashes (nine or more digits in all) and a PAN-shaped token are all refused before anything is sent.
       if (looksLikeAccountDetail(parsed.data.label) || looksLikeAccountDetail(parsed.data.bankName))

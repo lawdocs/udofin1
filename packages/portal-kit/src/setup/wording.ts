@@ -225,7 +225,7 @@ const ERROR: Readonly<Record<string, string>> = {
   path_not_allowed: 'That action is not available.',
   // Local checks made before anything is sent.
   masked_ref_invalid:
-    'Write only the masked reference: X characters followed by the last 2 to 4 digits. Never type a full account number.',
+    'Write only the masked reference: six capital X letters followed by the last four digits, for example XXXXXX1234. Never type a full account number.',
   secret_looks_like_value:
     'That looks like a secret value, not a name. Type only the name of the secret.',
   secrets_same: 'The two secret names must be different.',

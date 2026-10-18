@@ -404,6 +404,8 @@ export function ImportDetailPage({
       </div>
     );
   const { batch, errors, errorsTruncated } = detail.data;
+  // A stored batch is always numbered by record position (the API says so); the file lines are only known for a refused file.
+  const rowNumbering = detail.data.rowNumbering ?? 'record_position';
   const canApply = mayIn(ctx.grants, batch.lenderId, 'syncManage');
   const canDiscard = canApply || mayIn(ctx.grants, batch.lenderId, 'manualEntry');
   const correctable =
@@ -502,7 +504,7 @@ export function ImportDetailPage({
             </tbody>
           </table>
         ) : null}
-        <RowErrorsTable errors={errors} truncated={errorsTruncated} />
+        <RowErrorsTable errors={errors} truncated={errorsTruncated} rowNumbering={rowNumbering} />
       </Section>
 
       {batch.status === 'previewed' ? (

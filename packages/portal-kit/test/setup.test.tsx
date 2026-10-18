@@ -740,12 +740,24 @@ describe('the allow-listed operations', () => {
       ]);
     });
 
-    it.each(['XXXXXX1234', '****1234', 'XX12', 'XXXXXXXXXX123', 'X*X*X*123'])(
-      'accepts the masked reference %s',
+    it('accepts the one canonical masked reference, six X letters and four digits', async () => {
+      const { api, calls } = recorder();
+      expect(await runSetupOperation(api, formOf({ ...base, maskedRef: 'XXXXXX1234' }))).toEqual({
+        ok: true,
+      });
+      expect(calls).toHaveLength(1);
+    });
+
+    // The registry can only ever match XXXXXX plus four digits, so any other shape would be accepted and then never linkable.
+    it.each(['****1234', 'XX12', 'XXXXXXXXXX123', 'X*X*X*123', 'XXXX1234', 'XXXXXX34'])(
+      'sends nothing for the masked reference %s, which the registry could never match',
       async (maskedRef) => {
         const { api, calls } = recorder();
-        expect(await runSetupOperation(api, formOf({ ...base, maskedRef }))).toEqual({ ok: true });
-        expect(calls).toHaveLength(1);
+        expect(await runSetupOperation(api, formOf({ ...base, maskedRef }))).toEqual({
+          ok: false,
+          code: 'masked_ref_invalid',
+        });
+        expect(calls).toEqual([]);
       },
     );
 

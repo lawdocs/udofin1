@@ -1014,7 +1014,7 @@ describe('the allow-listed operations', () => {
             op: 'reminders.hold.place',
             loanAccountId: LOAN,
             reason: 'dispute',
-            note: ' paused ',
+            note: ' paused while the dispute is reviewed ',
           }),
         ),
       ).toEqual({ ok: true });
@@ -1022,7 +1022,7 @@ describe('the allow-listed operations', () => {
         {
           path: `/v1/lender/loans/${LOAN}/communication-hold`,
           key: REQUEST_ID,
-          body: { reason: 'dispute', note: 'paused' },
+          body: { reason: 'dispute', note: 'paused while the dispute is reviewed' },
         },
       ]);
     });
@@ -1046,7 +1046,8 @@ describe('the allow-listed operations', () => {
       [{ loanAccountId: '', reason: 'legal' }, 'id_invalid'],
       [{ loanAccountId: LOAN, reason: 'fun' }, 'validation_failed'],
       [{ loanAccountId: LOAN, reason: '' }, 'validation_failed'],
-      [{ loanAccountId: LOAN, reason: 'legal', note: 'n'.repeat(1001) }, 'note_invalid'],
+      [{ loanAccountId: LOAN, reason: 'legal', note: 'n'.repeat(201) }, 'note_invalid'],
+      [{ loanAccountId: LOAN, reason: 'legal', note: 'too short' }, 'note_invalid'],
     ])('sends nothing for a bad hold %j', async (fields, code) => {
       const { api, calls } = recorder();
       expect(
@@ -1063,13 +1064,17 @@ describe('the allow-listed operations', () => {
       await runRemindersOperation(api, formOf({ op: 'reminders.hold.release', id: HOLD }));
       await runRemindersOperation(
         api,
-        formOf({ op: 'reminders.hold.release', id: HOLD, note: ' done ' }),
+        formOf({
+          op: 'reminders.hold.release',
+          id: HOLD,
+          note: ' dispute closed, reminders may resume ',
+        }),
       );
       expect(calls).toEqual([
         { path: `/v1/lender/communication-holds/${HOLD}/release`, body: {}, key: REQUEST_ID },
         {
           path: `/v1/lender/communication-holds/${HOLD}/release`,
-          body: { note: 'done' },
+          body: { note: 'dispute closed, reminders may resume' },
           key: REQUEST_ID,
         },
       ]);

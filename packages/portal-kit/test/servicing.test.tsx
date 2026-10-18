@@ -1185,6 +1185,11 @@ describe('Import result', () => {
       ),
     );
     const table = screen.getByRole('table', { name: 'Problems found, by row' });
+    // A stored batch numbers its problems by record position, and the page says so (the lines of the file are not known then).
+    expect(within(table).getByRole('columnheader', { name: 'Record' })).toBeTruthy();
+    expect(
+      screen.getByText(/count the records of the file in the order they were stored/),
+    ).toBeTruthy();
     const whole = within(table).getByRole('row', { name: /Whole file/ });
     expect(within(whole).getByText('A required column is missing.')).toBeTruthy();
     expect(within(whole).getByText('status')).toBeTruthy();

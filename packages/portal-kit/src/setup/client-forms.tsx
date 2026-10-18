@@ -283,7 +283,7 @@ export function SettlementRequestForm({
             maxLength={24}
             pattern="[X*]{2,}[0-9]{2,4}"
             defaultValue={typedFirst(typed, 'maskedRef')}
-            hint="Capital X letters (or *) followed by only the last 2 to 4 digits, for example XXXXXX1234. Never type the full account number: this form does not accept it."
+            hint="Exactly six capital X letters followed by the last four digits, for example XXXXXX1234. Never type the full account number: this form does not accept it."
           />
         </>
       )}
