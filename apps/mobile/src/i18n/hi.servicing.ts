@@ -23,6 +23,7 @@ export const hiServicing: Record<keyof typeof enServicing, string> = {
   'loans.home.title': 'ऋण का विवरण',
   'loans.home.pay': 'भुगतान करें',
   'loans.home.autopay': 'ऑटो-पे चालू करें',
+  'loans.home.mandates': 'आपके ऑटो-पे मैंडेट',
   'loans.home.schedule': 'किस्तों की सूची',
   'loans.home.activity': 'खाते की गतिविधि',
   'loans.home.statements': 'विवरण और दस्तावेज़',

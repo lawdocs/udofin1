@@ -25,6 +25,7 @@ export const enServicing = {
   'loans.home.title': 'Loan details',
   'loans.home.pay': 'Pay',
   'loans.home.autopay': 'Set up auto-pay',
+  'loans.home.mandates': 'Your auto-pay mandates',
   'loans.home.schedule': 'Repayment schedule',
   'loans.home.activity': 'Account activity',
   'loans.home.statements': 'Statements and documents',

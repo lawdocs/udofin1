@@ -41,6 +41,7 @@ import {
   openRequestOfKind,
   parseStatementPeriod,
   payHref,
+  mandateListHref,
   payQuotationHref,
   paymentStatusHref,
   quoteModel,
@@ -926,6 +927,7 @@ describe('where the payment buttons go', () => {
       `/payments/status?paymentId=${PAYMENT_ID}`,
     );
     expect(payHref(LOAN_ID).pathname).toBe('/payments/pay');
+    expect(mandateListHref).toBe('/payments');
     expect(payQuotationHref(LOAN_ID).params).toEqual({ loanId: LOAN_ID, purpose: 'foreclosure' });
   });
 });
