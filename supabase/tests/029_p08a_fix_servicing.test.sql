@@ -4,7 +4,7 @@
 -- Synthetic data only (SAMPLE). Error codes are reported as SQLSTATE|hint.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(280);
+select plan(281);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -833,6 +833,8 @@ select is(pg_temp.err(format($$select servicing.record_foreclosure_quote(%L, 'q-
 select is(pg_temp.err(format($$select servicing.record_foreclosure_quote(%L, 'q-20', %L, %L, '10000.00', '500.00', '100.00', '200.00', '10800.00', 'lender_portal', %L, null)$$,
   pg_temp.lid('DL-20'), pg_temp.got('q20_as_of')::timestamptz, pg_temp.got('q20_until')::timestamptz, pg_temp.got('rq21'))), '55000|request_not_open',
   'M21: the request of ANOTHER loan is not open for this one (the scope guard)');
+select is(pg_temp.err(format($$select servicing.record_foreclosure_quote(%L, 'q-20-new', clock_timestamp() - interval '1 hour', clock_timestamp() + interval '1 day', '1.00', '0', '0', '0', '1.00', 'lender_portal', %L, null)$$,
+  pg_temp.lid('DL-20'), pg_temp.got('rq21'))), '55000|request_not_open', 'M21: a NEW quotation naming the request of another loan is refused as well (the scope of the request lookup)');
 select is(pg_temp.err(format($$select servicing.record_foreclosure_quote(%L, 'q-20', %L, %L, '10000.00', '500.00', '100.00', '200.00', '10800.00', 'lender_portal', %L, null)$$,
   pg_temp.lid('DL-20'), pg_temp.got('q20_as_of')::timestamptz, pg_temp.got('q20_until')::timestamptz, pg_temp.got('rq20'))), 'ok', 'A6: the same quotation sent again WITH the open request answers it');
 select is(pg_temp.q(format($$select status || ':' || (fulfilled_quote_id = %L)::text from servicing.document_requests where id = %L$$, pg_temp.got('q20'), pg_temp.got('rq20'))), 'fulfilled:true', 'the request is fulfilled with the quotation that already existed');
