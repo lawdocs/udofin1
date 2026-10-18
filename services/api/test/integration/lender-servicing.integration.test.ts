@@ -1276,6 +1276,8 @@ describe.skipIf(!enabled)('lender servicing over HTTP', () => {
     const state = {
       invalidBatch: '',
       invalidContent: '',
+      invalidKey: '',
+      invalidOp: '',
       imp1: rec('IMP1'),
       imp2: rec('IMP2'),
       committed: '',
@@ -1405,7 +1407,9 @@ describe.skipIf(!enabled)('lender servicing over HTTP', () => {
     it('stages a file the importer accepts but the database finds unmatched: invalid as a whole, no values kept, nothing applied', async () => {
       const unmatched = rec('NOAPP', { appRef: `SAMPLE-NOAPP-${RUN}` });
       state.invalidContent = JSON.stringify([state.imp1, unmatched]);
-      const res = await stage(rotateOp(), { content: state.invalidContent });
+      state.invalidKey = `it-invalid-${randomUUID()}`;
+      state.invalidOp = rotateOp();
+      const res = await stage(state.invalidOp, { content: state.invalidContent }, state.invalidKey);
       expect(res.statusCode).toBe(201);
       const outcome = out(res);
       const batch = outcome.batch;
@@ -1438,11 +1442,31 @@ describe.skipIf(!enabled)('lender servicing over HTTP', () => {
       const commit = await post(`/v1/lender/imports/${state.invalidBatch}/commit`, rotateOp(), {});
       expect([commit.statusCode, code(commit)]).toEqual([409, 'import_has_errors']);
       expect(await loanExists(ref('IMP1'))).toBe(false);
-      // The same file again returns the same batch, whoever sends it.
+      // The SAME request again (same user, same Idempotency-Key) replays the original answer.
+      const replay = await stage(
+        state.invalidOp,
+        { content: state.invalidContent },
+        state.invalidKey,
+      );
+      expect(replay.statusCode).toBe(201);
+      expect(replay.headers['idempotent-replayed']).toBe('true');
+      expect(out(replay).batch?.id).toBe(state.invalidBatch);
+      // The same bytes under a NEW key are a new batch, classified afresh: an invalid batch no longer holds the file's
+      // hash, so a lender can send the same file again once what it was waiting for (here, the application) exists (A4).
       const again = await stage(rotateOp(), { content: state.invalidContent });
-      expect(again.statusCode).toBe(200);
-      expect(out(again).existing).toBe(true);
-      expect(out(again).batch?.id).toBe(state.invalidBatch);
+      expect(again.statusCode).toBe(201);
+      expect(out(again).existing).toBe(false);
+      expect(out(again).batch?.id).not.toBe(state.invalidBatch);
+      expect(out(again).batch).toMatchObject({
+        status: 'invalid',
+        fileSha256: sha256(state.invalidContent),
+      });
+      // Both batches are kept (history is never deleted); the first is untouched.
+      expect(await batchesWith(sha256(state.invalidContent))).toBe(2);
+      const first = LsImportDetail.parse(
+        (await get(`/v1/lender/imports/${state.invalidBatch}`, ids.aViewer)).json(),
+      );
+      expect(first.batch.status).toBe('invalid');
     });
 
     it('shows the stored problems of a batch to the lender and to nobody else', async () => {

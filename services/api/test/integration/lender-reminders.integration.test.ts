@@ -1575,23 +1575,26 @@ describe.skipIf(!enabled)('lender reminders over HTTP', () => {
       ).toBe(before);
     });
 
-    it('refuses an Aadhaar-shaped number that only the table trigger catches (422 unsafe_free_text), and a credential-shaped phrase', async () => {
+    it('refuses an Aadhaar-shaped number (422 wording_invalid: the wording screen of migration 923 stops it first), and a credential-shaped phrase (422 unsafe_free_text)', async () => {
       const before = await countOf(
         'select count(*) as n from servicing.reminder_templates where lender_org_id = $1',
         [ids.lenderA],
       );
-      for (const text of [
-        'Reference 2345 6789 0123 for the installment due on {{due_date}}.',
+      for (const [text, expected] of [
+        ['Reference 2345 6789 0123 for the installment due on {{due_date}}.', 'wording_invalid'],
         // Built at run time so no credential-shaped phrase sits in the source for a secret scanner to find.
-        `Your ${['pass', 'word'].join('')}: lowercase must be kept safe before {{due_date}} please.`,
-      ]) {
+        [
+          `Your ${['pass', 'word'].join('')}: lowercase must be kept safe before {{due_date}} please.`,
+          'unsafe_free_text',
+        ],
+      ] as const) {
         refused(text);
         const res = await post(
           '/v1/lender/reminder-templates',
           ids.aAdmin,
           templateBody({ body: text }),
         );
-        expect([text, res.statusCode, code(res)]).toEqual([text, 422, 'unsafe_free_text']);
+        expect([text, res.statusCode, code(res)]).toEqual([text, 422, expected]);
         expect(res.body).not.toContain(text);
       }
       expect(
@@ -1890,7 +1893,7 @@ describe.skipIf(!enabled)('lender reminders over HTTP', () => {
       ).toBe(before);
     });
 
-    it('refuses an Aadhaar-shaped number in the reason or a sentence (422 unsafe_free_text)', async () => {
+    it('refuses an Aadhaar-shaped number in the reason or a sentence (422 wording_invalid)', async () => {
       const before = await countOf(
         'select count(*) as n from servicing.penal_charge_texts where lender_org_id = $1',
         [ids.lenderA],
@@ -1905,7 +1908,7 @@ describe.skipIf(!enabled)('lender reminders over HTTP', () => {
         expect([JSON.stringify(over), res.statusCode, code(res)]).toEqual([
           JSON.stringify(over),
           422,
-          'unsafe_free_text',
+          'wording_invalid',
         ]);
       }
       expect(
@@ -2284,7 +2287,7 @@ describe.skipIf(!enabled)('lender reminders over HTTP', () => {
       ).toBe(before);
     });
 
-    it('refuses an Aadhaar-shaped number in a note (422 unsafe_free_text) and stores nothing', async () => {
+    it('refuses an Aadhaar-shaped number in a note (422 hold_invalid) and stores nothing', async () => {
       const before = await countOf(
         'select count(*) as n from servicing.communication_holds where loan_account_id = $1',
         [loans.a4],
@@ -2292,7 +2295,7 @@ describe.skipIf(!enabled)('lender reminders over HTTP', () => {
       const note = 'Case reference 2345 6789 0123 was noted for the file';
       refused(note);
       const res = await place(ids.aAdmin, loans.a4, { reason: 'legal', note });
-      expect([res.statusCode, code(res)]).toEqual([422, 'unsafe_free_text']);
+      expect([res.statusCode, code(res)]).toEqual([422, 'hold_invalid']);
       expect(res.body).not.toContain(note);
       expect(
         await countOf(

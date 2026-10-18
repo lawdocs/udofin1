@@ -862,14 +862,16 @@ describe.skipIf(!enabled)('borrower servicing over HTTP', () => {
         a(6),
       );
       await intent('A1', ids.lenderA, 'b1', pRecvIntent, 7, 'overdue', 'succeeded', 950_000, a(7));
-      // What the provider reported: money for iRecv (and a refund of it), a different amount for iAttn, the right amount for iPosted.
-      const ppRecv = await providerPayment('A1', ids.lenderA, pRecvIntent, 7, 950_000);
-      await providerPayment('A1', ids.lenderA, pAttnIntent, 5, 400_000);
+      // What the provider reported: money for iRecv, a different amount for iAttn (and a refund of that payment: any refund, partial
+      // included, makes the borrower stage needs_attention, so it is attached to a payment that needs attention already and leaves
+      // iRecv as the plain provider_received), the right amount for iPosted.
+      await providerPayment('A1', ids.lenderA, pRecvIntent, 7, 950_000);
+      const ppAttn = await providerPayment('A1', ids.lenderA, pAttnIntent, 5, 400_000);
       await providerPayment('A1', ids.lenderA, pPostedIntent, 6, 1_200_000);
       await c.query(
         `insert into payments.payment_adjustments (id, lender_org_id, provider_payment_id, kind, object_ref, amount_minor, source_event_id, occurred_at)
          values ($1::uuid, $2::uuid, $3::uuid, 'refund', $4, 100000, gen_random_uuid(), $5::timestamptz)`,
-        [adjustment, ids.lenderA, ppRecv, `${CANARY.providerPaymentRef}-REFUND`, a(5, 900)],
+        [adjustment, ids.lenderA, ppAttn, `${CANARY.providerPaymentRef}-REFUND`, a(5, 900)],
       );
       // The lender's own receipt for iPosted carries the provider's payment reference: that is what makes it lender_posted.
       await receipt('A1', ids.lenderA, rPosted, 4, {
@@ -2447,7 +2449,8 @@ describe.skipIf(!enabled)('borrower servicing over HTTP', () => {
         dueBasis: {
           ruleKey: 'servicing.security_release_sla_days',
           ruleVersion,
-          evidenceStatus: 'confirmed',
+          // The paragraph text is confirmed but its application to the listed product categories is not (migration 925, U44).
+          evidenceStatus: 'likely',
         },
       });
       expect(lien?.confirmedAt).not.toBeNull();

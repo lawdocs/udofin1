@@ -574,11 +574,13 @@ describe.skipIf(!enabled)('provider callback receiver over a real database', () 
     if (typeof value !== 'string') throw new Error('no event id');
     return value;
   };
+  // The replay namespace is one per payment configuration ('pc_' and the configuration id, migration 920): a delivery id is looked up
+  // by its own value, which is unique to the delivery.
   const seenCount = async (deliveryId: string) =>
     (
       await one<{ n: string }>(
-        `select count(*)::text as n from ops.seen_webhooks where source = 'provider_' || substr(md5($1::text), 1, 16) and message_id = $2`,
-        [PROVIDER, deliveryId],
+        `select count(*)::text as n from ops.seen_webhooks where source like 'pc\\_%' and message_id = $1`,
+        [deliveryId],
       )
     ).n;
   const outboxOf = (eventRowId: string) =>
