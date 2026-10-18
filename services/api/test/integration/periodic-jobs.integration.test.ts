@@ -19,7 +19,11 @@ import {
 } from '@udofin/adapters';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createJobsStore, type JobsStore } from '../../src/system/jobs.js';
+import {
+  createJobsStore,
+  RECONCILIATION_LOOKBACK_DAYS,
+  type JobsStore,
+} from '../../src/system/jobs.js';
 import { createSystemPool, type SystemPool } from '../../src/system/pool.js';
 import { OutboxWorker, type WorkerLogger } from '../../src/workers/outbox-worker.js';
 import { createPgOutboxStore } from '../../src/workers/pg-outbox-store.js';
@@ -1275,6 +1279,50 @@ describe.skipIf(!enabled)('scheduled jobs and servicing handlers against a real 
       expect(
         await scalar<number>(`select count(*)::int as v from payments.reconciliation_runs`),
       ).toBe(before);
+    });
+
+    it('keeps a lender in the daily run after its configuration is suspended or retired, while it has recent payments or settlement batches; drops it when it has none in the window (A43)', async () => {
+      const covered = async () => (await store.activeCollectionConfigs()).map((c) => c.configId);
+      const setStatus = (status: 'active' | 'suspended' | 'retired') =>
+        transaction(async (c) => {
+          await c.query(`set local session_replication_role = replica`);
+          await c.query(
+            `update payments.lender_payment_configs set status = $2, status_changed_at = now(), status_reason = 'SAMPLE fixture status' where id = $1::uuid`,
+            [cfg.P, status],
+          );
+        });
+      // Shifts what lender P has taken and reported by whole days (the append-only protections are bypassed for the fixture only).
+      const shift = (days: number) =>
+        transaction(async (c) => {
+          await c.query(`set local session_replication_role = replica`);
+          await c.query(
+            `update payments.provider_payments set created_at = created_at + make_interval(days => $2), captured_at = captured_at + make_interval(days => $2) where config_id = $1::uuid`,
+            [cfg.P, days],
+          );
+          await c.query(
+            `update payments.settlement_batches set report_date = report_date + $2::integer where config_id = $1::uuid`,
+            [cfg.P, days],
+          );
+        });
+      expect(await covered()).toContain(cfg.P);
+      // The switch-off lender's configuration has taken no payment: it is not covered.
+      expect(await covered()).not.toContain(cfg.Q);
+      try {
+        for (const status of ['suspended', 'retired'] as const) {
+          await setStatus(status);
+          // It used to drop out here, exactly when something had gone wrong with it.
+          expect(await covered(), status).toContain(cfg.P);
+        }
+        // Its last payment and report are far outside the look-back window: nothing is in flight, so it drops out.
+        await shift(-(RECONCILIATION_LOOKBACK_DAYS + 10));
+        expect(await covered()).not.toContain(cfg.P);
+        // Active with the switch on, it is covered without any activity, as before.
+        await setStatus('active');
+        expect(await covered()).toContain(cfg.P);
+      } finally {
+        await shift(RECONCILIATION_LOOKBACK_DAYS + 10);
+        await setStatus('active');
+      }
     });
 
     it('the run never writes a money row', async () => {

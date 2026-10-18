@@ -4,6 +4,14 @@
 // Import boundary: only src/system and src/workers may import the system pool, and so this module.
 import { type SystemPool } from './pool.js';
 
+/**
+ * How far back reconciliation still looks for a lender whose configuration is no longer active: a configuration with a provider
+ * payment or a settlement batch within this many Indian calendar days stays in the daily run. It covers the provider's settlement
+ * lag, the waiting times before a missing item becomes an exception, and a month-end cycle; after that the lender has nothing new
+ * in flight and a suspended or retired configuration drops out.
+ */
+export const RECONCILIATION_LOOKBACK_DAYS = 45;
+
 export type ReminderChannelName = 'in_app' | 'push' | 'sms';
 
 export interface ClaimedReminder {
@@ -143,6 +151,13 @@ export interface JobsStore {
   revalidatePaymentConfigs(): Promise<{ checked: number; notOk: number; suspended: number }>;
   purgeHandoffLinks(): Promise<number>;
   // Reconciliation
+  /**
+   * The payment configurations reconciliation covers: every active configuration of a lender whose payments switch is on, and, in
+   * ANY state (suspended, retired) and whatever the switch says, every configuration that took a provider payment or reported a
+   * settlement batch within RECONCILIATION_LOOKBACK_DAYS. Reconciliation must not stop at the moment something goes wrong: a
+   * suspended or retired configuration still has captured-but-unsettled payments, late settlements and a destination to check.
+   * (The name is older than this rule.)
+   */
   activeCollectionConfigs(): Promise<readonly PaymentConfigFacts[]>;
   reconciledDates(lenderOrgId: string, dates: readonly string[]): Promise<ReadonlySet<string>>;
   recordSettlementReport(
@@ -470,8 +485,20 @@ export function createJobsStore(pool: SystemPool): JobsStore {
 
     // -- Reconciliation -------------------------------------------------------------------------------------------------
     async activeCollectionConfigs() {
+      // Neither payments.record_settlement_report nor payments.run_reconciliation asks for an active configuration or a switch, so
+      // the selection does not either. The window is counted in Indian calendar days, like the report dates.
       const found = await rows<ConfigRow>(
-        `${CONFIG_SELECT} where c.status = 'active' and private.feature_enabled(c.lender_org_id, 'payments') order by c.lender_org_id, c.id`,
+        `${CONFIG_SELECT}
+          where (c.status = 'active' and private.feature_enabled(c.lender_org_id, 'payments'))
+             or exists (select 1 from payments.provider_payments pp
+                         where pp.config_id = c.id and pp.lender_org_id = c.lender_org_id
+                           and (coalesce(pp.captured_at, pp.created_at) at time zone 'Asia/Kolkata')::date
+                               >= (clock_timestamp() at time zone 'Asia/Kolkata')::date - $1::integer)
+             or exists (select 1 from payments.settlement_batches b
+                         where b.config_id = c.id and b.lender_org_id = c.lender_org_id
+                           and b.report_date >= (clock_timestamp() at time zone 'Asia/Kolkata')::date - $1::integer)
+          order by c.lender_org_id, c.id`,
+        [RECONCILIATION_LOOKBACK_DAYS],
       );
       return found.map(configFacts);
     },
