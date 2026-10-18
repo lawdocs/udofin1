@@ -108,9 +108,9 @@ revoke all on function private.servicing_reject_unsafe_text() from public;
 comment on function private.servicing_reject_unsafe_text() is
   'Row trigger: refuses a lender-typed text column (named in the trigger arguments) that fails private.servicing_text_safe. Hint unsafe_free_text.';
 
-create trigger reject_unsafe_text before insert or update on servicing.import_batches
+create trigger unsafe_text before insert or update on servicing.import_batches
   for each row execute function private.servicing_reject_unsafe_text('reject_reason');
-create trigger reject_unsafe_text before insert or update on servicing.sync_conflicts
+create trigger unsafe_text before insert or update on servicing.sync_conflicts
   for each row execute function private.servicing_reject_unsafe_text('resolution_note');
 
 -- ---------------------------------------------------------------------------------------------
