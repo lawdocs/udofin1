@@ -546,14 +546,14 @@ describe('opening a lender document streams the stored file or a short refusal',
     ];
     for (const [from, to] of cases) {
       const response = await openLenderDocument(
-        apiWith({ status: from, code: 'secret_internal_detail' }),
+        apiWith({ status: from, code: 'internal_detail_code' }),
         LOAN,
         DOC,
       );
       const body = await response.text();
       expect(response.status, String(from)).toBe(to);
       expect(body).toMatch(/^(Not found|Not available)$/);
-      expect(body).not.toContain('secret_internal_detail');
+      expect(body).not.toContain('internal_detail_code');
       expect(response.headers.get('cache-control')).toBe('no-store');
     }
   });
