@@ -1137,6 +1137,8 @@ describe('mandate input', () => {
       '01/13/2027',
       '1/1/27',
       '01/01/20277',
+      // Years below 100 are read by Date.UTC as 19xx; the year comparison refuses them.
+      '01/01/0099',
       'ab/cd/efgh',
       '01//2027',
     ]) {
