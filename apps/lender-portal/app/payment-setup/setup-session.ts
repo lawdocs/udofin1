@@ -1,5 +1,5 @@
 import { createApiClient } from '@udofin/auth-client';
-import { paymentSetupGrants } from '@udofin/portal-kit';
+import { flashIsDone, paymentSetupGrants } from '@udofin/portal-kit';
 import { requireSession } from '@/components/session-gate';
 import { portalAuth } from '@/lib/auth';
 import { successNotice } from '@/lib/flash';
@@ -35,7 +35,7 @@ export async function noticeFrom(
   path: string,
 ) {
   return {
-    done: (await successNotice(path)) !== undefined,
+    done: flashIsDone(await successNotice(path)),
     error: typeof query.error === 'string' ? query.error : undefined,
   };
 }

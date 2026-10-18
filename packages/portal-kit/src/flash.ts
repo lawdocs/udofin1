@@ -124,3 +124,13 @@ export function openFlash(
     ...(x === 1 ? { existing: true as const } : {}),
   };
 }
+
+/**
+ * Whether the notice confirms a change that was recorded ("done"). The notice that a file had already been received is a
+ * different statement, shown on its own: nothing was recorded by it.
+ */
+export const flashIsDone = (flash: Flash | undefined): boolean =>
+  flash !== undefined && flash.existing !== true;
+
+/** Whether the notice says that the file just sent had been received before. */
+export const flashIsExisting = (flash: Flash | undefined): boolean => flash?.existing === true;

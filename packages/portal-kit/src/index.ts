@@ -20,6 +20,8 @@ export * from './setup/index.js';
 export {
   FLASH_TTL_SECONDS,
   flashCookieName,
+  flashIsDone,
+  flashIsExisting,
   flashPathOf,
   openFlash,
   sealFlash,

@@ -14,7 +14,7 @@ import {
   ReturnCodeClassList,
   SettlementAccountPage,
 } from '@udofin/contracts';
-import { type Flash } from '../flash.js';
+import { flashIsDone, type Flash } from '../flash.js';
 import { type OnboardingApi } from '../onboarding/api.js';
 import { type PlatformApi } from './client.js';
 import { type LenderChoice } from './types.js';
@@ -151,7 +151,7 @@ export function noticeFrom(
   flash: Flash | undefined,
 ) {
   return {
-    done: flash !== undefined,
+    done: flashIsDone(flash),
     error: one(raw.error),
     result: flash?.result,
     reasons: one(raw.reasons),

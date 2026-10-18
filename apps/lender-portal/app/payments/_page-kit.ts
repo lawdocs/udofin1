@@ -1,6 +1,7 @@
 import { createApiClient } from '@udofin/auth-client';
 import {
   LP_LIST_KEYS,
+  flashIsDone,
   lpAskedLender,
   lpCapabilitiesFrom,
   lpKeepParams,
@@ -85,7 +86,7 @@ export async function noticeFrom(query: LpParams, path: string) {
   const error = firstParam(query.error);
   const notice = await successNotice(path);
   return {
-    done: notice !== undefined,
+    done: flashIsDone(notice),
     error: error !== undefined && CODE.test(error) ? error : undefined,
     inserted: notice?.counts?.inserted,
     duplicates: notice?.counts?.duplicates,

@@ -1,5 +1,5 @@
 import { createApiClient } from '@udofin/auth-client';
-import { servicingGrants } from '@udofin/portal-kit';
+import { flashIsDone, flashIsExisting, servicingGrants } from '@udofin/portal-kit';
 import { requireSession } from '@/components/session-gate';
 import { portalAuth } from '@/lib/auth';
 import { successNotice } from '@/lib/flash';
@@ -29,9 +29,10 @@ export async function noticeFrom(
   path: string,
 ) {
   const notice = await successNotice(path);
+  // "This file was already received" is not a change that was recorded: it is shown on its own and never as "done".
   return {
-    done: notice !== undefined,
-    existing: notice?.existing === true,
+    done: flashIsDone(notice),
+    existing: flashIsExisting(notice),
     error: typeof query.error === 'string' ? query.error : undefined,
   };
 }

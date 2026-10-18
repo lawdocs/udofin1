@@ -7,6 +7,8 @@ import { describe, expect, it } from 'vitest';
 import {
   FLASH_TTL_SECONDS,
   flashCookieName,
+  flashIsDone,
+  flashIsExisting,
   flashPathOf,
   openFlash,
   sealFlash,
@@ -191,5 +193,22 @@ describe('the cookie and the path', () => {
     expect(flashPathOf('/loans/requests?lenderId=x&cursor=y')).toBe('/loans/requests');
     expect(flashPathOf('/loans')).toBe('/loans');
     expect(flashPathOf('/accounts?error=x')).toBe('/accounts');
+  });
+});
+
+describe('what a notice says', () => {
+  it('confirms a recorded change when there is a notice, and only then', () => {
+    expect(flashIsDone(undefined)).toBe(false);
+    expect(flashIsDone({ path: '/loans' })).toBe(true);
+    expect(flashIsDone({ path: '/accounts', registered: ENTRY })).toBe(true);
+    expect(flashIsDone({ path: '/features', result: 'applied' })).toBe(true);
+  });
+
+  it('keeps "the file had been received before" apart from "a change was recorded"', () => {
+    const received = { path: '/imports/x', existing: true as const };
+    expect(flashIsExisting(received)).toBe(true);
+    expect(flashIsDone(received)).toBe(false);
+    expect(flashIsExisting({ path: '/loans' })).toBe(false);
+    expect(flashIsExisting(undefined)).toBe(false);
   });
 });
