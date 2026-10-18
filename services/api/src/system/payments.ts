@@ -100,6 +100,12 @@ export interface PaymentsProcessor {
     expiresAt: string | null,
   ): Promise<string>;
   markMandateCancelSent(mandateId: string): Promise<void>;
+  /**
+   * Queues a `mandate.cancel` event under a key of its own, for a cancellation the borrower asked for while the hand-off was in
+   * flight (the event queued when the request was made may already have run before the provider reference existed). The same
+   * key twice queues one event. Idempotent: a mandate whose cancellation was already sent is skipped by the handler.
+   */
+  enqueueMandateCancel(mandateId: string): Promise<void>;
 }
 
 /** The SQLSTATE and hint of a database error, nothing else (a message can carry data). */
@@ -311,6 +317,15 @@ export function createPaymentsProcessor(pool: SystemPool): PaymentsProcessor {
     markMandateCancelSent: async (mandateId) => {
       await pool.withSystem((tx) =>
         tx.query('select payments.mark_mandate_cancel_sent($1::uuid)', [mandateId]),
+      );
+    },
+
+    enqueueMandateCancel: async (mandateId) => {
+      await pool.withSystem((tx) =>
+        tx.query(
+          `select ops.enqueue_event('mandate.cancel', jsonb_build_object('mandate_id', $1::text), null, $2)`,
+          [mandateId, `mandate.cancel:${mandateId}:after_handoff`],
+        ),
       );
     },
   };

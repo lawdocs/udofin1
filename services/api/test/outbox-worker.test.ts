@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   OutboxWorker,
   PermanentError,
+  RetryableError,
   type OutboxEvent,
   type OutboxStore,
   type WorkerLogger,
@@ -99,6 +100,32 @@ describe('OutboxWorker', () => {
     expect(summary.retried).toBe(1);
     expect(calls[0]).toMatchObject({ code: 'handler_error', permanent: false });
     expect(logs.join('')).not.toContain('9876543210');
+  });
+
+  it('retries a RetryableError and stores its closed code, so a cancellation that dies is visible by what it was', async () => {
+    logs.length = 0;
+    const { store, calls } = fakeStore([event(), event()]);
+    let n = 0;
+    const summary = await new OutboxWorker({
+      store,
+      workerId: 'w',
+      log,
+      handlers: {
+        'test.event': {
+          schema,
+          run: () =>
+            Promise.reject(
+              new RetryableError(n++ === 0 ? 'mandate_cancel_not_delivered' : 'Has Spaces 123'),
+            ),
+        },
+      },
+    }).runOnce();
+    expect(summary).toMatchObject({ retried: 2, dead: 0 });
+    expect(calls.map((c) => [c.code, c.permanent]).sort()).toEqual([
+      ['handler_error', false],
+      ['mandate_cancel_not_delivered', false],
+    ]);
+    expect(logs.join('')).toContain('mandate_cancel_not_delivered');
   });
 
   it('treats PermanentError as terminal and sanitises its code', async () => {

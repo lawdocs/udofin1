@@ -1388,14 +1388,29 @@ describe.skipIf(!enabled)('payments worker over a real database', () => {
       const scripted = createMockMandateProvider('test');
       overrides.set(A.configId, { mandate: scripted });
       try {
-        // Two jobs: the hand-off and the cancel. Neither reaches the provider.
-        expect(await drain()).toMatchObject({ claimed: 2, completed: 2, dead: 0 });
+        // Two jobs: the hand-off and the cancel. Neither reaches the provider. The hand-off is done; the cancel has no provider
+        // reference to send, so it is NOT dropped: it waits (retried) until the sweep has closed the draft (A24).
+        expect(await drain()).toMatchObject({ claimed: 2, completed: 1, retried: 1, dead: 0 });
+        expect(await eventOf(id)).toMatchObject({
+          event_type: 'mandate.cancel',
+          status: 'pending',
+          last_error_code: 'mandate_cancel_not_delivered',
+        });
+        expect(await mandateRow(id)).toMatchObject({ status: 'draft', cancel_sent_at: null });
+        // The sweep closes a draft the borrower cancelled; the waiting cancel then finds nothing live and ends.
+        await systemPool.withSystem((tx) => tx.query(`select payments.sweep_mandates()`));
+        expect(await mandateRow(id)).toMatchObject({ status: 'cancelled' });
+        await admin.query(
+          `update ops.outbox_events set available_at = now() where event_type = 'mandate.cancel' and payload ->> 'mandate_id' = $1`,
+          [id],
+        );
+        expect(await drain()).toMatchObject({ claimed: 1, completed: 1, dead: 0 });
       } finally {
         overrides.delete(A.configId);
       }
       expect(scripted.requests).toHaveLength(0);
       expect(scripted.cancelRequests).toHaveLength(0);
-      expect(await mandateRow(id)).toMatchObject({ status: 'draft', cancel_sent_at: null });
+      expect(await mandateRow(id)).toMatchObject({ status: 'cancelled', cancel_sent_at: null });
     });
 
     it('a cancellation request reaches the provider and is marked sent; the mandate is NOT cancelled by it', async () => {
@@ -1429,7 +1444,7 @@ describe.skipIf(!enabled)('payments worker over a real database', () => {
       expect(mock.cancelRequests).toHaveLength(1);
     });
 
-    it('an unanswered cancellation is not marked as sent; the sweep will report it', async () => {
+    it('an unanswered cancellation is not marked as sent and is retried; after the last attempt it is dead with a closed code, never silent; an operator can run it again (A24)', async () => {
       const id = await requestMandate(A, 6);
       expect(await drain()).toMatchObject({ claimed: 1, completed: 1, dead: 0 });
       expect((await mandateRow(id)).status).toBe('registration_pending');
@@ -1442,14 +1457,84 @@ describe.skipIf(!enabled)('payments worker over a real database', () => {
       };
       overrides.set(A.configId, { mandate: silent });
       try {
-        expect(await drain()).toMatchObject({ claimed: 1, completed: 1, dead: 0 });
+        expect(await drain()).toMatchObject({ claimed: 1, completed: 0, retried: 1, dead: 0 });
+        expect(await eventOf(id)).toMatchObject({
+          event_type: 'mandate.cancel',
+          status: 'pending',
+          last_error_code: 'mandate_cancel_not_delivered',
+        });
+        expect(await mandateRow(id)).toMatchObject({
+          cancel_sent_at: null,
+          status: 'registration_pending',
+        });
+        // The last attempt: the event dies, with a closed code and an error line.
+        await admin.query(
+          `update ops.outbox_events set available_at = now(), attempts = max_attempts - 1
+            where event_type = 'mandate.cancel' and payload ->> 'mandate_id' = $1`,
+          [id],
+        );
+        expect(await drain()).toMatchObject({ claimed: 1, completed: 0, dead: 1 });
+        expect(await eventOf(id)).toMatchObject({
+          event_type: 'mandate.cancel',
+          status: 'dead',
+          last_error_code: 'mandate_cancel_not_delivered',
+        });
+        expect(
+          logLines.some((line) => line.includes('could not be delivered after the last attempt')),
+        ).toBe(true);
       } finally {
         overrides.delete(A.configId);
       }
-      expect(await mandateRow(id)).toMatchObject({
-        cancel_sent_at: null,
-        status: 'registration_pending',
-      });
+      expect((await mandateRow(id)).cancel_sent_at).toBeNull();
+      // The provider answers again: the same event, run again with the same operation key, is acknowledged.
+      // (Requeueing queues the finished hand-off job too, which finds the mandate past its draft and does nothing.)
+      await requeue(id);
+      expect(await drain()).toMatchObject({ claimed: 2, completed: 2, dead: 0 });
+      expect((await mandateRow(id)).cancel_sent_at).not.toBeNull();
+    });
+
+    it('a cancellation requested while the provider call of the hand-off ran keeps the link away and is sent once the reference exists (A24)', async () => {
+      const id = await requestMandate(A, 7);
+      // The borrower asks to cancel while the provider is still answering the hand-off call.
+      const base = createMockMandateProvider('test');
+      const during: MandateProviderPort = {
+        ...base,
+        createMandateRequest: async (ctx, request) => {
+          const result = await base.createMandateRequest(ctx, request);
+          await asBorrower(
+            A.borrowerUser,
+            `select payments.request_mandate_cancellation($1::uuid)`,
+            [id],
+          );
+          return result;
+        },
+      };
+      overrides.set(A.configId, { mandate: during });
+      try {
+        // Jobs: the hand-off; the cancel queued by the request (it runs after the hand-off or retries); the cancel queued again
+        // by the hand-off once it saw the request. Everything that can run now does; nothing is dead.
+        const first = await drain();
+        expect(first.dead).toBe(0);
+        expect(await mandateRow(id)).toMatchObject({ status: 'registration_pending' });
+        // No link was kept for a mandate the borrower asked to cancel, and the hand-off queued the cancellation again.
+        expect(await linkRow('mandate', id)).toBeUndefined();
+        expect(
+          await q(`select 1 from ops.outbox_events where dedupe_key = $1`, [
+            `mandate.cancel:${id}:after_handoff`,
+          ]),
+        ).toHaveLength(1);
+        await admin.query(
+          `update ops.outbox_events set available_at = now() where event_type = 'mandate.cancel' and status = 'pending' and payload ->> 'mandate_id' = $1`,
+          [id],
+        );
+        expect(await drain()).toMatchObject({ dead: 0 });
+      } finally {
+        overrides.delete(A.configId);
+      }
+      expect((await mandateRow(id)).cancel_sent_at).not.toBeNull();
+      expect(base.cancelRequests).toEqual([
+        { providerMandateRef: `MOCK-MANDATE-${id}`, operationKey: id },
+      ]);
     });
   });
 

@@ -26,6 +26,7 @@ import {
   type OutboxEvent,
   type WorkerLogger,
   PermanentError,
+  RetryableError,
 } from '../src/workers/outbox-worker.js';
 import {
   createPaymentsHandlers,
@@ -359,6 +360,8 @@ interface FakeProcessor extends PaymentsProcessor {
   mandate: MandateRecord | undefined;
   failures: Partial<Record<string, Error>>;
   results: { handoff: string; applied: ApplyEventResult };
+  /** Runs when a hand-off has been recorded: lets a test change the mandate as the borrower would while the provider call ran. */
+  afterHandoff: (() => void) | undefined;
 }
 
 function fakeProcessor(init: {
@@ -372,6 +375,7 @@ function fakeProcessor(init: {
     mandate: 'mandate' in init ? init.mandate : mandateRecord(),
     failures: {},
     results: { handoff: 'registration_pending', applied: { outcome: 'applied', reason: 'x' } },
+    afterHandoff: undefined,
     loadIntent(id) {
       calls.push(['loadIntent', id]);
       return Promise.resolve(p.intent);
@@ -409,11 +413,17 @@ function fakeProcessor(init: {
       const failure =
         p.failures[`recordMandateHandoff:${outcome}`] ?? p.failures.recordMandateHandoff;
       if (failure) return Promise.reject(failure);
+      p.afterHandoff?.();
       return Promise.resolve(p.results.handoff);
     },
     markMandateCancelSent(id) {
       calls.push(['markMandateCancelSent', id]);
       const failure = p.failures.markMandateCancelSent;
+      return failure ? Promise.reject(failure) : Promise.resolve();
+    },
+    enqueueMandateCancel(id) {
+      calls.push(['enqueueMandateCancel', id]);
+      const failure = p.failures.enqueueMandateCancel;
       return failure ? Promise.reject(failure) : Promise.resolve();
     },
   };
@@ -1128,7 +1138,12 @@ describe('mandate.handoff', () => {
         maskedAccountRef: 'XXXXXX1234',
       },
     ]);
-    expect(names(processor)).toEqual(['loadMandate', 'recordMandateHandoff', 'storeHandoffLink']);
+    expect(names(processor)).toEqual([
+      'loadMandate',
+      'recordMandateHandoff',
+      'loadMandate',
+      'storeHandoffLink',
+    ]);
     expect(processor.calls[1]).toEqual([
       'recordMandateHandoff',
       MANDATE,
@@ -1136,7 +1151,7 @@ describe('mandate.handoff', () => {
       `MOCK-MANDATE-${MANDATE}`,
       null,
     ]);
-    const stored = processor.calls[2]?.[1] as {
+    const stored = processor.calls[3]?.[1] as {
       kind: string;
       subjectId: string;
       keyVersion: string;
@@ -1318,7 +1333,7 @@ describe('mandate.handoff', () => {
   it('without a keyring or without a link the hand-off is still recorded', async () => {
     const a = setup({}, { mandate: mandatePort() }, { keyring: undefined });
     await a.run('mandate.handoff', { mandate_id: MANDATE });
-    expect(names(a.processor)).toEqual(['loadMandate', 'recordMandateHandoff']);
+    expect(names(a.processor)).toEqual(['loadMandate', 'recordMandateHandoff', 'loadMandate']);
     const base = mandatePort();
     const port: MandateProviderPort = {
       ...base,
@@ -1331,7 +1346,7 @@ describe('mandate.handoff', () => {
     };
     const b = setup({}, { mandate: port });
     await b.run('mandate.handoff', { mandate_id: MANDATE });
-    expect(names(b.processor)).toEqual(['loadMandate', 'recordMandateHandoff']);
+    expect(names(b.processor)).toEqual(['loadMandate', 'recordMandateHandoff', 'loadMandate']);
   });
 
   it('keeps the provider expiry for the record and the link', async () => {
@@ -1348,7 +1363,48 @@ describe('mandate.handoff', () => {
     const { processor, run } = setup({}, { mandate: port });
     await run('mandate.handoff', { mandate_id: MANDATE });
     expect(processor.calls[1]?.[4]).toBe(plus(3 * HOUR));
-    expect((processor.calls[2]?.[1] as { expiresAt: string }).expiresAt).toBe(plus(3 * HOUR));
+    expect((processor.calls[3]?.[1] as { expiresAt: string }).expiresAt).toBe(plus(3 * HOUR));
+  });
+
+  it('a cancellation requested while the provider call ran keeps no link and queues the cancellation again (A24)', async () => {
+    const provider = mandatePort();
+    const { processor, logs, run } = setup({}, { mandate: provider });
+    // The borrower taps cancel while the hand-off call is in flight: the cancellation event queued then ran with no provider
+    // reference (the draft had none) and was a no-op, and the hand-off now completes as registration_pending.
+    processor.afterHandoff = () => {
+      processor.mandate = mandateRecord({
+        status: 'registration_pending',
+        providerMandateRef: `MOCK-MANDATE-${MANDATE}`,
+        cancelRequested: true,
+      });
+    };
+    await run('mandate.handoff', { mandate_id: MANDATE });
+    expect(names(processor)).toEqual([
+      'loadMandate',
+      'recordMandateHandoff',
+      'loadMandate',
+      'enqueueMandateCancel',
+    ]);
+    expect(processor.calls.at(-1)).toEqual(['enqueueMandateCancel', MANDATE]);
+    expect(names(processor)).not.toContain('storeHandoffLink');
+    expect(logs.lines.some((l) => l.fields.why === 'cancel_requested_during_handoff')).toBe(true);
+  });
+
+  it('keeps the link and queues nothing when no cancellation was requested during the call, or it was already sent', async () => {
+    const a = setup({}, { mandate: mandatePort() });
+    await a.run('mandate.handoff', { mandate_id: MANDATE });
+    expect(names(a.processor)).toContain('storeHandoffLink');
+    expect(names(a.processor)).not.toContain('enqueueMandateCancel');
+    const b = setup({}, { mandate: mandatePort() });
+    b.processor.afterHandoff = () => {
+      b.processor.mandate = mandateRecord({
+        status: 'registration_pending',
+        cancelRequested: true,
+        cancelSent: true,
+      });
+    };
+    await b.run('mandate.handoff', { mandate_id: MANDATE });
+    expect(names(b.processor)).not.toContain('enqueueMandateCancel');
   });
 
   it('is safe to run twice', async () => {
@@ -1401,14 +1457,12 @@ describe('mandate.cancel', () => {
     expect(logs.text()).not.toContain('MOCK-MANDATE-LIVE-1');
   });
 
-  it('sends nothing when no cancellation was requested, it was sent already, the mandate is finished, or the provider has no reference', async () => {
+  it('sends nothing when no cancellation was requested, it was sent already, or the mandate is finished', async () => {
     for (const mandate of [
       { ...live(), cancelRequested: false },
       { ...live(), cancelSent: true },
       { ...live(), status: 'cancelled' },
       { ...live(), status: 'revoked' },
-      { ...live(), status: 'draft', providerMandateRef: null },
-      { ...live(), status: 'requires_reconciliation', providerMandateRef: null },
     ]) {
       const provider = await knowing();
       const { processor, run } = setup({ mandate }, { mandate: provider });
@@ -1418,41 +1472,115 @@ describe('mandate.cancel', () => {
     }
   });
 
-  it('an unknown, unconfigured, refused or unknown-to-the-provider answer is NOT marked as sent', async () => {
+  /** The retry the outbox performs: the handler fails with the closed code, and it never marks the cancellation as sent. */
+  const retried = async (run: () => Promise<void>) => {
+    const failure = await run().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(RetryableError);
+    expect((failure as RetryableError).code).toBe('mandate_cancel_not_delivered');
+  };
+
+  it('a mandate the provider has no reference for yet (a draft, or an unknown hand-off outcome) is retried, not dropped (A24)', async () => {
+    for (const status of ['draft', 'requires_reconciliation'] as const) {
+      const provider = await knowing();
+      const { processor, logs, run } = setup(
+        { mandate: { ...live(), status, providerMandateRef: null } },
+        { mandate: provider },
+      );
+      await retried(() => run('mandate.cancel', { mandate_id: MANDATE }));
+      expect(provider.cancelRequests).toHaveLength(0);
+      expect(names(processor)).toEqual(['loadMandate']);
+      expect(logs.lines.at(-1)).toMatchObject({
+        level: 'warn',
+        fields: { why: 'no_provider_reference_yet', mandateStatus: status },
+      });
+    }
+  });
+
+  it('an answer that does not acknowledge the request (unknown, unconfigured, not found) is retried and NOT marked as sent (A24)', async () => {
     for (const result of [
       { outcome: 'unknown', reason: 'timeout' },
+      { outcome: 'unknown', reason: 'network' },
+      { outcome: 'unknown', reason: 'provider_error' },
       { outcome: 'not_configured' },
       { outcome: 'not_found' },
-      { outcome: 'unsupported' },
-      { outcome: 'rejected', reason: 'invalid_request' },
     ] as const) {
       const port: MandateProviderPort = {
         ...mandatePort(),
         cancelMandate: () => Promise.resolve(result),
       };
       const { processor, logs, run } = setup({ mandate: live() }, { mandate: port });
-      await run('mandate.cancel', { mandate_id: MANDATE });
+      await retried(() => run('mandate.cancel', { mandate_id: MANDATE }));
       expect(names(processor)).toEqual(['loadMandate']);
       expect(logs.lines.at(-1)?.fields.outcome).toBe(result.outcome);
     }
   });
 
-  it('a call that outlasts the bound is not marked as sent', async () => {
+  it('a definite refusal is permanent: not retried, loud, and nothing is opened (A24)', async () => {
+    for (const result of [
+      { outcome: 'unsupported' },
+      { outcome: 'rejected', reason: 'invalid_request' },
+      { outcome: 'rejected', reason: 'rail_not_supported' },
+    ] as const) {
+      const port: MandateProviderPort = {
+        ...mandatePort(),
+        cancelMandate: () => Promise.resolve(result),
+      };
+      const { processor, logs, run } = setup({ mandate: live() }, { mandate: port });
+      const failure = await run('mandate.cancel', { mandate_id: MANDATE }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(failure).toBeInstanceOf(PermanentError);
+      expect((failure as PermanentError).code).toBe('mandate_cancel_refused');
+      expect(names(processor)).toEqual(['loadMandate']);
+      expect(logs.lines.at(-1)).toMatchObject({
+        level: 'error',
+        fields: { outcome: result.outcome },
+      });
+    }
+  });
+
+  it('on the last attempt the failure is an error line, so a dead-lettered cancellation is not silent (A24)', async () => {
+    const port: MandateProviderPort = {
+      ...mandatePort(),
+      cancelMandate: () => Promise.resolve({ outcome: 'unknown', reason: 'timeout' }),
+    };
+    const { logs, run } = setup({ mandate: live() }, { mandate: port });
+    await retried(() =>
+      run('mandate.cancel', { mandate_id: MANDATE }, event({ attempts: 8, max_attempts: 8 })),
+    );
+    const last = logs.lines.at(-1);
+    expect(last?.level).toBe('error');
+    expect(last?.message).toContain('could not be delivered after the last attempt');
+    expect(last?.message).toContain('operator must cancel');
+    // Earlier attempts only warn.
+    const early = setup({ mandate: live() }, { mandate: port });
+    await retried(() =>
+      early.run('mandate.cancel', { mandate_id: MANDATE }, event({ attempts: 3, max_attempts: 8 })),
+    );
+    expect(early.logs.lines.at(-1)?.level).toBe('warn');
+    expect(logs.text()).not.toContain('MOCK-MANDATE-LIVE-1');
+  });
+
+  it('a call that outlasts the bound is retried and not marked as sent', async () => {
     const port: MandateProviderPort = {
       ...mandatePort(),
       cancelMandate: () => new Promise(() => undefined),
     };
     const { processor, run } = setup({ mandate: live() }, { mandate: port }, { timeoutMs: 25 });
-    await run('mandate.cancel', { mandate_id: MANDATE });
+    await retried(() => run('mandate.cancel', { mandate_id: MANDATE }));
     expect(names(processor)).toEqual(['loadMandate']);
   });
 
-  it('an unusable provider or a missing configuration is left to the sweep; a suspended configuration still cancels', async () => {
+  it('an unusable provider or a missing configuration is retried, not dropped; a suspended configuration still cancels', async () => {
     const a = setup({ mandate: live() }, {});
-    await a.run('mandate.cancel', { mandate_id: MANDATE });
+    await retried(() => a.run('mandate.cancel', { mandate_id: MANDATE }));
     expect(names(a.processor)).toEqual(['loadMandate']);
     const b = setup({ mandate: { ...live(), config: undefined } }, { mandate: mandatePort() });
-    await b.run('mandate.cancel', { mandate_id: MANDATE });
+    await retried(() => b.run('mandate.cancel', { mandate_id: MANDATE }));
     expect(names(b.processor)).toEqual(['loadMandate']);
     const provider = await knowing();
     const c = setup(
