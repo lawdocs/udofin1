@@ -1199,9 +1199,12 @@ describe.skipIf(!enabled)(
             providerCaptured: true,
             providerSettled: n >= 1,
             bankConfirmed: n >= 2,
+            // A confirmed bank stage rests on the credit the LENDER reported; nothing else can confirm it.
+            bankConfirmationBasis: n >= 2 ? 'lender_reported_credit' : null,
             lenderPosted: n >= 3,
           });
           expect(keys(pp?.stage)).toEqual([
+            'bankConfirmationBasis',
             'bankConfirmed',
             'lenderPosted',
             'providerCaptured',
@@ -1891,7 +1894,59 @@ describe.skipIf(!enabled)(
           matched: { settlement: 3, bank: 2, receipt: 1 },
           notReconcilable: ['lms_receipts'],
           settledToNonLender: { items: 1, minor: 300_000 },
-          settings: { settlementLagDays: 3, receiptLagHours: 72 },
+          // One batch went to another account: 300,000 gross, 296,460 net. A report exists and every batch states its destination, but
+          // a finding is not a zero, so there is no evidence to show.
+          settlementEvidence: {
+            settlementReportExists: true,
+            offAccountBatches: 1,
+            offAccountNetMinor: 296_460,
+            destinationUnstatedBatches: 0,
+            destinationUnstatedMinor: 0,
+            destinationUnstatedNetMinor: 0,
+            zeroIsEvidence: false,
+          },
+          settings: { settlementLagDays: 3, receiptLagHours: 72, abovePlatformDefault: false },
+        });
+      });
+
+      it('reads what an older run did not record as null, never as zero or false (so a zero there is not shown as evidence)', async () => {
+        const c = await admin.connect();
+        try {
+          await c.query('begin');
+          await c.query('set local session_replication_role = replica');
+          await c.query(
+            `insert into payments.reconciliation_runs (lender_org_id, run_date, run_no, inputs_sha256, counts, report)
+             values ($1::uuid, date '2001-02-03', 1, repeat('0', 64), '{}'::jsonb,
+                     '{"run_date":"2001-02-03","settled_to_non_lender":{"items":0,"minor":0},"settings":{"settlement_lag_days":3,"receipt_lag_hours":72}}'::jsonb)`,
+            [ids.lenderB],
+          );
+          await c.query('commit');
+        } catch (error) {
+          await c.query('rollback');
+          throw error;
+        } finally {
+          c.release();
+        }
+        const res = await get(
+          `/v1/lender/reconciliation/summary?lenderId=${ids.lenderB}&date=2001-02-03`,
+          ids.bViewer,
+        );
+        expect(res.statusCode, res.body).toBe(200);
+        const report = res.json<{ report: Record<string, unknown> }>().report;
+        expect(report.settledToNonLender).toEqual({ items: 0, minor: 0 });
+        expect(report.settlementEvidence).toEqual({
+          settlementReportExists: null,
+          offAccountBatches: null,
+          offAccountNetMinor: null,
+          destinationUnstatedBatches: null,
+          destinationUnstatedMinor: null,
+          destinationUnstatedNetMinor: null,
+          zeroIsEvidence: null,
+        });
+        expect(report.settings).toEqual({
+          settlementLagDays: 3,
+          receiptLagHours: 72,
+          abovePlatformDefault: null,
         });
       });
 
@@ -2062,13 +2117,21 @@ describe.skipIf(!enabled)(
           aal: 'aal1',
         });
         expect([aal1.statusCode, code(aal1)]).toEqual([401, 'mfa_required']);
+        // The contract carries the database's range (1 to 7 days, 1 to 168 hours), so a value outside it never reaches the database.
         for (const bad of [
           { ...body, settlementLagDays: 0 },
+          { ...body, settlementLagDays: 8 },
           { ...body, settlementLagDays: 31 },
+          { ...body, receiptLagHours: 0 },
+          { ...body, receiptLagHours: 169 },
           { ...body, receiptLagHours: 721 },
+          { ...body, receiptLagHours: 1_000_000 },
         ]) {
           const res = await post('/v1/lender/reconciliation/settings', ids.aPayer, bad);
-          expect([res.statusCode, code(res)]).toEqual([422, 'settings_invalid']);
+          expect([res.statusCode, code(res)], JSON.stringify(bad)).toEqual([
+            422,
+            'validation_failed',
+          ]);
         }
         expect(
           (await post('/v1/lender/reconciliation/settings', ids.aPayer, { ...body, extra: 1 }))
@@ -2079,6 +2142,32 @@ describe.skipIf(!enabled)(
             await get('/v1/lender/reconciliation/settings', ids.aViewer),
           )[0]?.settlementLagDays,
         ).toBe(5);
+      });
+
+      it('accept the ends of the range the database accepts, and the database agrees', async () => {
+        for (const [days, hours] of [
+          [1, 1],
+          [7, 168],
+        ] as const) {
+          const res = await post('/v1/lender/reconciliation/settings', ids.aPayer, {
+            lenderId: ids.lenderA,
+            settlementLagDays: days,
+            receiptLagHours: hours,
+          });
+          expect([days, hours, res.statusCode]).toEqual([days, hours, 200]);
+          expect(
+            rowsOf<{ settlementLagDays: number; receiptLagHours: number }>(
+              await get(`/v1/lender/reconciliation/settings?lenderId=${ids.lenderA}`, ids.aViewer),
+            ),
+          ).toMatchObject([{ settlementLagDays: days, receiptLagHours: hours }]);
+        }
+        // restore the values the following tests were written for
+        const restore = await post('/v1/lender/reconciliation/settings', ids.aPayer, {
+          lenderId: ids.lenderA,
+          settlementLagDays: 5,
+          receiptLagHours: 96,
+        });
+        expect(restore.statusCode).toBe(200);
       });
     });
 

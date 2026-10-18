@@ -74,6 +74,15 @@ export const STAGE_SOURCE_WORDS: Readonly<Record<keyof typeof STAGE_WORDS, strin
     'Source: a receipt from your own loan system carries our payment reference, for the same amount.',
 };
 
+/**
+ * What a confirmed bank stage rests on. The credit is the lender's own report: Udofin holds no bank statement and does not check
+ * the credit against the bank, so the stage is a match between two reports, not a statement from the bank.
+ */
+export const BANK_CONFIRMATION_BASIS_WORDS: Words = {
+  lender_reported_credit:
+    'This rests on the bank credit your own organisation reported. Udofin holds no bank statement of its own and has not checked the credit against the bank.',
+};
+
 export const EVENT_OBJECT_KIND_WORDS: Words = {
   payment: 'Payment',
   refund: 'Refund',
@@ -116,6 +125,15 @@ export const EVENT_REASON_WORDS: Words = {
   intent_succeeded: 'payment request marked as received by the provider',
   intent_already_succeeded: 'payment request was already marked as received',
   payment_status_recorded: 'provider status recorded',
+  payment_ref_conflict:
+    'the same provider payment reference was already used for another payment request',
+  reversal_on_payment_object:
+    'a refund, dispute or return was reported on a payment object; nothing was changed',
+  amount_differs_from_capture: 'the amount differs from the payment already captured',
+  ambiguous_payment:
+    'the request has more than one provider payment and the refund or dispute names none',
+  loan_not_active: 'money arrived for a loan that is no longer active',
+  quote_expired: 'money arrived for a foreclosure quotation that had already lapsed',
 };
 
 export const EVENT_PROCESSING_CLASS_WORDS: Words = {

@@ -134,6 +134,7 @@ const stage = (over: Partial<Stage> = {}): Stage => ({
   providerCaptured: true,
   providerSettled: false,
   bankConfirmed: false,
+  bankConfirmationBasis: null,
   lenderPosted: false,
   settlementDestinationOk: null,
   ...over,
@@ -302,7 +303,16 @@ const report = (over: Partial<ReconSummary['report']> = {}): ReconSummary['repor
   matched: { settlement: 8, bank: 7, receipt: 6 },
   notReconcilable: [],
   settledToNonLender: { items: 0, minor: 0 },
-  settings: { settlementLagDays: 3, receiptLagHours: 72 },
+  settlementEvidence: {
+    settlementReportExists: true,
+    offAccountBatches: 0,
+    offAccountNetMinor: 0,
+    destinationUnstatedBatches: 0,
+    destinationUnstatedMinor: 0,
+    destinationUnstatedNetMinor: 0,
+    zeroIsEvidence: true,
+  },
+  settings: { settlementLagDays: 3, receiptLagHours: 72, abovePlatformDefault: false },
   ...over,
 });
 
@@ -1249,8 +1259,38 @@ describe('payment detail: four separate stages', () => {
 
   it('says when no destination was reported and shows no banner', () => {
     const { container } = show(detail({ stage: stage({ settlementDestinationOk: null }) }));
-    expect(text(container)).toContain('has not reported a settlement destination');
+    expect(text(container)).toContain('has not stated a settlement destination');
+    expect(text(container)).toContain('not treated as your verified account');
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('says a bank-confirmed stage rests on the lender’s own report of the credit, never on a bank statement', () => {
+    const { container } = show(
+      detail({
+        stage: stage({
+          stage: 'bank_confirmed',
+          providerSettled: true,
+          bankConfirmed: true,
+          bankConfirmationBasis: 'lender_reported_credit',
+          settlementDestinationOk: true,
+        }),
+      }),
+    );
+    const bank = text(row(container, 'Bank confirmed'));
+    expect(bank).toContain('Recorded');
+    expect(bank).toContain('rests on the bank credit your own organisation reported');
+    expect(bank).toContain('Udofin holds no bank statement of its own');
+    expect(text(container)).toContain(
+      'Furthest stage the API records: Bank confirmed (resting on a bank credit you reported)',
+    );
+  });
+
+  it('adds no basis sentence to a stage that is not bank confirmed', () => {
+    const { container } = show(
+      detail({ stage: stage({ stage: 'provider_settled', providerSettled: true }) }),
+    );
+    expect(text(row(container, 'Bank confirmed'))).not.toContain('rests on');
+    expect(text(container)).not.toContain('resting on a bank credit');
   });
 
   it('shows no stages for a payment that is not a first, successful capture', () => {
@@ -1332,6 +1372,37 @@ describe('payment detail: four separate stages', () => {
     expect(body).toContain('attempt 2');
     expect(body).toContain('retry after 17 Oct 2026, 14:05 IST');
     expect(body).toContain('Recorded only, changes nothing');
+  });
+
+  it('words every processing reason the database can write for an event, and shows no raw reason it does not know', () => {
+    const reasons: [string, string][] = [
+      ['payment_ref_conflict', 'already used for another payment request'],
+      ['reversal_on_payment_object', 'nothing was changed'],
+      ['amount_differs_from_capture', 'differs from the payment already captured'],
+      ['ambiguous_payment', 'names none'],
+      ['loan_not_active', 'no longer active'],
+      ['quote_expired', 'had already lapsed'],
+    ];
+    const { container } = show(
+      detail(),
+      reasons.map(([reasonClass], n) =>
+        event({
+          id: uid(100 + n),
+          processing: {
+            outcome: 'exception',
+            reasonClass,
+            attempt: 1,
+            deferredUntil: null,
+            processedAt: STAMP,
+          },
+        }),
+      ),
+    );
+    const body = text(container);
+    for (const [reasonClass, words] of reasons) {
+      expect(body, reasonClass).toContain(words);
+      expect(body, reasonClass).not.toContain(reasonClass);
+    }
   });
 
   it('answers a missing payment and a failed event load plainly', () => {
@@ -1688,40 +1759,179 @@ describe('reconciliation', () => {
     expect(text(container)).toContain('unverified defaults');
   });
 
-  it('shows the standing line with zero items as good news without a banner', () => {
+  it('shows a zero as evidence only when the run says it is: a report existed and every batch stated its destination', () => {
     const { container } = render(
       <LpReconciliationReportView summary={ok(summary())} date="2026-10-16" />,
     );
-    expect(text(container)).toContain('Settled to a non-lender account: 0 items, ₹0.00');
-    expect(text(container)).toContain('Zero is the expected figure');
-    expect(text(container)).not.toContain('Zero here is not evidence');
+    const body = text(container);
+    expect(body).toContain('Nothing settled to another account: 0 items, ₹0.00');
+    expect(body).toContain('Every settlement batch this run could check names your verified');
+    expect(body).not.toContain('not evidence');
+    expect(body).not.toContain('Destination not stated');
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('does not let a zero stand as evidence when the settlement report was missing', () => {
     const { container } = render(
       <LpReconciliationReportView
-        summary={ok(summary({ notReconcilable: ['settlement_reports'] }))}
+        summary={ok(
+          summary({
+            notReconcilable: ['settlement_reports'],
+            settlementEvidence: {
+              ...report().settlementEvidence,
+              zeroIsEvidence: false,
+              settlementReportExists: false,
+            },
+          }),
+        )}
         date="2026-10-16"
       />,
     );
-    expect(text(container)).toContain('Zero here is not evidence');
-    expect(text(container)).not.toContain('Zero is the expected figure');
+    const body = text(container);
+    expect(body).toContain('Settled to another account: 0 items, ₹0.00 found');
+    expect(body).toContain('not evidence');
+    expect(body).toContain('No provider settlement report was available to this run');
+    expect(body).not.toContain('Nothing settled to another account');
+  });
+
+  it('does not let a zero stand as evidence when a batch did not state its destination, and says so in words', () => {
+    const { container } = render(
+      <LpReconciliationReportView
+        summary={ok(
+          summary({
+            settlementEvidence: {
+              ...report().settlementEvidence,
+              destinationUnstatedBatches: 2,
+              destinationUnstatedMinor: 150000,
+              destinationUnstatedNetMinor: 147000,
+              zeroIsEvidence: false,
+            },
+          }),
+        )}
+        date="2026-10-16"
+      />,
+    );
+    const body = text(container);
+    expect(body).toContain('not evidence');
+    expect(body).not.toContain('Nothing settled to another account');
+    expect(body).toContain('did not state where the money went');
+    expect(body).toContain(
+      'Destination not stated: 2 settlement batch(es), ₹1,500.00 gross (₹1,470.00 net)',
+    );
+    expect(body).toContain(
+      'not counted as settled to your account and are not counted as settled elsewhere',
+    );
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('does not take a zero from a report that does not record the evidence (an older run) as evidence', () => {
+    const { container } = render(
+      <LpReconciliationReportView
+        summary={ok(
+          summary({
+            settlementEvidence: {
+              settlementReportExists: null,
+              offAccountBatches: null,
+              offAccountNetMinor: null,
+              destinationUnstatedBatches: null,
+              destinationUnstatedMinor: null,
+              destinationUnstatedNetMinor: null,
+              zeroIsEvidence: null,
+            },
+          }),
+        )}
+        date="2026-10-16"
+      />,
+    );
+    const body = text(container);
+    expect(body).toContain('not evidence');
+    expect(body).toContain('does not record whether a settlement report existed');
+    expect(body).not.toContain('Nothing settled to another account');
+    expect(body).not.toContain('Destination not stated');
   });
 
   it('raises a critical banner when anything settled to a non-lender account', () => {
     render(
       <LpReconciliationReportView
-        summary={ok(summary({ settledToNonLender: { items: 2, minor: 345600 } }))}
+        summary={ok(
+          summary({
+            settledToNonLender: { items: 2, minor: 345600 },
+            settlementEvidence: {
+              ...report().settlementEvidence,
+              offAccountBatches: 1,
+              offAccountNetMinor: 340000,
+              zeroIsEvidence: false,
+            },
+          }),
+        )}
         date="2026-10-16"
       />,
     );
     const alert = screen.getByRole('alert');
     expect(alert.textContent).toContain('Critical');
     expect(alert.textContent).toContain('2 item(s), ₹3,456.00');
+    expect(alert.textContent).toContain('(₹3,400.00 net was paid out)');
     expect(
       within(alert).getByRole('link', { name: 'Critical exceptions' }).getAttribute('href'),
     ).toBe('/reconciliation/exceptions?severity=critical');
+  });
+
+  it('names batches with an unstated destination beside a finding, without counting them as settled elsewhere', () => {
+    const { container } = render(
+      <LpReconciliationReportView
+        summary={ok(
+          summary({
+            settledToNonLender: { items: 1, minor: 100000 },
+            settlementEvidence: {
+              ...report().settlementEvidence,
+              offAccountBatches: 1,
+              offAccountNetMinor: 98000,
+              destinationUnstatedBatches: 1,
+              destinationUnstatedMinor: 50000,
+              destinationUnstatedNetMinor: 49000,
+              zeroIsEvidence: false,
+            },
+          }),
+        )}
+        date="2026-10-16"
+      />,
+    );
+    expect(screen.getByRole('alert').textContent).toContain('1 item(s), ₹1,000.00');
+    expect(text(container)).toContain(
+      'Destination not stated: 1 settlement batch(es), ₹500.00 gross (₹490.00 net)',
+    );
+  });
+
+  it('says when a waiting time is longer than the platform default, and only then', () => {
+    const above = render(
+      <LpReconciliationReportView
+        summary={ok(
+          summary({
+            settings: { settlementLagDays: 7, receiptLagHours: 72, abovePlatformDefault: true },
+          }),
+        )}
+        date="2026-10-16"
+      />,
+    );
+    expect(text(above.container)).toContain(
+      'longer than the platform’s default (3 days, 72 hours)',
+    );
+    expect(text(above.container)).toContain('7 days');
+    above.unmount();
+    for (const abovePlatformDefault of [false, null]) {
+      const { container, unmount } = render(
+        <LpReconciliationReportView
+          summary={ok(
+            summary({
+              settings: { settlementLagDays: 3, receiptLagHours: 72, abovePlatformDefault },
+            }),
+          )}
+          date="2026-10-16"
+        />,
+      );
+      expect(text(container)).not.toContain('longer than the platform’s default');
+      unmount();
+    }
   });
 
   it('raises the banner for money without items and for items without money', () => {
@@ -1761,7 +1971,11 @@ describe('reconciliation', () => {
           summary({
             paymentsConsidered: null,
             matched: { settlement: null, bank: null, receipt: null },
-            settings: { settlementLagDays: null, receiptLagHours: null },
+            settings: {
+              settlementLagDays: null,
+              receiptLagHours: null,
+              abovePlatformDefault: null,
+            },
           }),
         )}
         date="2026-10-16"
@@ -1800,7 +2014,8 @@ describe('reconciliation', () => {
     expect(screen.getByRole('alert').textContent).toContain('Critical');
     expect(body).toContain('Not your verified settlement account (XXXXXX9999)');
     expect(body).toContain('Your verified settlement account (XXXXXX4321)');
-    expect(body).toContain('Destination not reported');
+    expect(body).toContain('Destination not stated');
+    expect(body).not.toContain('Destination not reported');
     expect(body).toContain('the provider’s figures do not add up');
     expect(body).toContain('₹9,764.00');
   });
@@ -1977,6 +2192,20 @@ describe('waiting times', () => {
     expect(text(container)).toContain('Unverified default');
     expect(text(container)).toContain('not set its own waiting times');
     expect(container.querySelector('form')).toBeNull();
+  });
+
+  it('names the range the database accepts next to each waiting time, and says the limits are the platform’s own', () => {
+    const { container } = render(
+      <LpReconciliationSettingsView
+        settings={ok({ items: [] })}
+        ctx={ctx(['payment.configure'], { returnTo: '/reconciliation/settings' })}
+      />,
+    );
+    const body = text(container);
+    expect(body).toContain('your bank credit (1 to 7)');
+    expect(body).toContain('post a receipt (1 to 168)');
+    expect(body).toContain('1 to 7 days and 1 to 168 hours');
+    expect(body).toContain('not taken from any agreement');
   });
 
   it('shows the form to a role that can configure, with the current values', () => {

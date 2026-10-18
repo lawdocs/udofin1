@@ -10,6 +10,7 @@ import { lpIsUuid, type LpResult } from './data.js';
 import { lpCount, lpDateTimeIst, lpRupees, lpRupeesPlain } from './format.js';
 import {
   ADJUSTMENT_KIND_WORDS,
+  BANK_CONFIRMATION_BASIS_WORDS,
   EVENT_OBJECT_KIND_WORDS,
   EVENT_OUTCOME_WORDS,
   EVENT_PROCESSING_CLASS_WORDS,
@@ -266,15 +267,28 @@ function StageTable({ stage }: { stage: NonNullable<ProviderPaymentRow['stage']>
             <tr key={name}>
               <th scope="row">{STAGE_WORDS[name]}</th>
               <td>{recorded[name] ? 'Recorded' : 'No record yet'}</td>
-              <td>{STAGE_SOURCE_WORDS[name]}</td>
+              <td>
+                {STAGE_SOURCE_WORDS[name]}
+                {name === 'bank_confirmed' && stage.bankConfirmed && stage.bankConfirmationBasis ? (
+                  <>
+                    {' '}
+                    <strong>
+                      {lpWord(BANK_CONFIRMATION_BASIS_WORDS, stage.bankConfirmationBasis)}
+                    </strong>
+                  </>
+                ) : null}
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
       <p className="muted">
-        Furthest stage the API records: {STAGE_WORDS[stage.stage]}. “No record yet” also appears
-        when the lender has not supplied that input (for example no bank credits uploaded); the
-        reconciliation report lists the inputs a run could not check.
+        Furthest stage the API records: {STAGE_WORDS[stage.stage]}
+        {stage.stage === 'bank_confirmed' && stage.bankConfirmationBasis
+          ? ' (resting on a bank credit you reported)'
+          : ''}
+        . “No record yet” also appears when the lender has not supplied that input (for example no
+        bank credits uploaded); the reconciliation report lists the inputs a run could not check.
       </p>
       {stage.settlementDestinationOk === false ? (
         <CriticalBanner title="Settled to an account that is not your verified account">
@@ -286,7 +300,10 @@ function StageTable({ stage }: { stage: NonNullable<ProviderPaymentRow['stage']>
       ) : stage.settlementDestinationOk === true ? (
         <p>The destination the provider reported is your verified settlement account.</p>
       ) : (
-        <p>The provider has not reported a settlement destination for this payment.</p>
+        <p>
+          The provider has not stated a settlement destination for this payment, so it is not
+          treated as your verified account.
+        </p>
       )}
     </>
   );
