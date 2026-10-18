@@ -3,7 +3,7 @@
 -- without it). Synthetic data only (labelled SAMPLE). Error codes are reported as SQLSTATE|hint.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(144);
+select plan(146);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -628,6 +628,11 @@ select pg_temp.as_owner();
 insert into payments.settlement_batches (lender_org_id, config_id, provider, batch_ref, settlement_ref, period_from, period_to, destination_masked_ref, destination_ok, gross_minor, fee_minor, tax_minor, net_minor,
                                          parts_mismatch, item_count, content_sha256, report_date)
 values (pg_temp.lx(), pg_temp.got('cfg')::uuid, 'mock_gateway', 'B-OLD', pg_temp.utr(95), pg_temp.d() - 4, pg_temp.d() - 4, 'XXXXXX1111', true, 123456, 0, 0, 123456, false, 0, pg_temp.sha('b-old'), pg_temp.d());
+-- Two more rows written without the function (as a row of an older version, or a direct write, would be): no stated destination, and a tie flag of true.
+insert into payments.settlement_batches (lender_org_id, config_id, provider, batch_ref, settlement_ref, period_from, period_to, destination_masked_ref, destination_ok, gross_minor, fee_minor, tax_minor, net_minor,
+                                         parts_mismatch, item_count, content_sha256, report_date, items_total_mismatch)
+values (pg_temp.lx(), pg_temp.got('cfg')::uuid, 'mock_gateway', 'B-NULLD', pg_temp.utr(97), pg_temp.d() - 4, pg_temp.d() - 4, null, null, 1000, 0, 0, 1000, false, 0, pg_temp.sha('b-nulld'), pg_temp.d(), false),
+       (pg_temp.lx(), pg_temp.got('cfg')::uuid, 'mock_gateway', 'B-BADT', pg_temp.utr(98), pg_temp.d() - 4, pg_temp.d() - 4, 'XXXXXX1111', true, 1000, 0, 0, 1000, false, 0, pg_temp.sha('b-badt'), pg_temp.d(), true);
 select pg_temp.as_user(pg_temp.u(3));
 select pg_temp.credits('fde10000-0000-4000-8000-000000000001', format('[{"valueDate":"%s","amountMinor":"123456","utr":"%s"}]', pg_temp.d() - 3, pg_temp.utr(95)));
 select pg_temp.as_system();
@@ -635,6 +640,10 @@ select pg_temp.keep('run7', pg_temp.run() ->> 'run_id');
 select pg_temp.as_owner();
 select is((select count(*) from payments.reconciliation_matches m join payments.settlement_batches b on b.id = m.settlement_batch_id where m.run_id = pg_temp.got('run7')::uuid and b.batch_ref = 'B-OLD'), 0::bigint,
   'a batch recorded before the tie was checked (flag unknown) is never confirmed by a credit');
+select is(pg_temp.exc_sev_owner('settlement_account_mismatch', 'settlement_batch_id', (select id from payments.settlement_batches where batch_ref = 'B-NULLD')), 'warning/platform',
+  'U15: the run itself tells the platform about a batch with no verified destination, whoever wrote the row');
+select is(pg_temp.exc_sev_owner('event_payload_conflict', 'settlement_batch_id', (select id from payments.settlement_batches where batch_ref = 'B-BADT')), 'warning/platform',
+  'U13: the run itself tells the platform about a batch whose items do not add up, whoever wrote the row');
 -- The run's own guard against one bank reference on two batches (here with the table rule removed inside this transaction, to prove the run and the view do
 -- not rely on it). Two batches carry bank reference 96; payment 14 is listed in the first; ONE credit of 4,750.00 arrived for that reference.
 select is(pg_temp.err('drop index payments.settlement_batches_config_utr'), 'ok', 'fixture: the table rule is removed inside this transaction (rolled back at the end)');
