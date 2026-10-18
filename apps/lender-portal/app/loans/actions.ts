@@ -5,6 +5,7 @@ import {
   runServicingOperation,
   safeServicingReturnPath,
   servicingNoticeUrl,
+  servicingTimeoutMs,
 } from '@udofin/portal-kit';
 import { redirect } from 'next/navigation';
 import { currentSession, portalAuth } from '@/lib/auth';
@@ -18,9 +19,12 @@ export async function servicingAction(formData: FormData): Promise<void> {
   const returnTo = safeServicingReturnPath(formData.get('returnTo'));
   const session = await currentSession();
   if (session.state !== 'ok') return redirect('/login');
+  // Applying an import and registering a document take longer than a small write (the same file was given 60 s to stage).
+  const timeoutMs = servicingTimeoutMs(formData.get('op'));
   const api = createApiClient({
     baseUrl: portalAuth().apiBaseUrl,
     getAccessToken: () => Promise.resolve(session.accessToken),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
   });
   const outcome = await runServicingOperation(api, formData);
   return redirect(servicingNoticeUrl(returnTo, outcome));

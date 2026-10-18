@@ -379,6 +379,8 @@ const ERROR: Readonly<Record<string, string>> = {
   conflict: 'That is not possible in the current state.',
   rate_limited: 'Too many requests. Wait a minute and try again.',
   network_error: 'The service could not be reached. Try again.',
+  result_unknown:
+    'The service did not answer in time, so it is not known whether this was done. Reload the page to see the current state before trying again.',
   bad_response: 'The service gave an answer this page could not use. Try again.',
   path_not_allowed: 'That action is not available.',
   file_required: 'Choose a file first.',

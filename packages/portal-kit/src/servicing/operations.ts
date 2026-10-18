@@ -347,6 +347,22 @@ export type ServicingOutcome = { ok: true; stage?: StageState } | { ok: false; c
 const KEY = /^[A-Za-z0-9._:-]{16,128}$/;
 const STAGE_OPERATION = 'servicing.import.stage';
 const COMMIT_OPERATION = 'servicing.import.commit';
+const REGISTER_OPERATION = 'servicing.document.register';
+
+/**
+ * How long the portal waits for the API on the operations that carry or process a whole file. Staging checks every record,
+ * applying writes them, and registering a document posts a PDF of up to 8 MiB as a JSON body of about 11 MB. The generic client
+ * limit (10 s) cut these off while the API was still working and showed a false failure. The limit is bounded: a call that
+ * takes longer than this is reported as "result unknown", never waited for without end.
+ */
+export const SERVICING_LONG_TIMEOUT_MS = 60_000;
+
+/** The API timeout an operation needs, or undefined for the client's own default (small writes). */
+export function servicingTimeoutMs(name: unknown): number | undefined {
+  return name === STAGE_OPERATION || name === COMMIT_OPERATION || name === REGISTER_OPERATION
+    ? SERVICING_LONG_TIMEOUT_MS
+    : undefined;
+}
 
 /**
  * Runs the operation a form names. Unknown operations are refused without any call to the API. A caller that serves one
@@ -369,7 +385,16 @@ export async function runServicingOperation(
     return { ok: false, code: 'path_not_allowed' };
   if (typeof key !== 'string' || !KEY.test(key)) return { ok: false, code: 'validation_failed' };
   const result = await operation.run(api, form, key);
-  if (!result.ok) return { ok: false, code: safeErrorCode(result.code) };
+  if (!result.ok) {
+    // A write that got no answer (timeout or a dropped connection) may still have been applied: the person is told to check,
+    // never that nothing happened.
+    if (
+      (name === COMMIT_OPERATION || name === REGISTER_OPERATION) &&
+      result.code === 'network_error'
+    )
+      return { ok: false, code: 'result_unknown' };
+    return { ok: false, code: safeErrorCode(result.code) };
+  }
   const outcome = LsImportOutcome.safeParse(result.data);
   // A commit that fails inside the database is an HTTP 200 whose batch says "failed": nothing was applied, so it is not
   // reported as done.

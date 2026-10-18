@@ -1,7 +1,11 @@
 'use server';
 
 import { createApiClient } from '@udofin/auth-client';
-import { runServicingOperation, type ServicingStageState } from '@udofin/portal-kit';
+import {
+  runServicingOperation,
+  SERVICING_LONG_TIMEOUT_MS,
+  type ServicingStageState,
+} from '@udofin/portal-kit';
 import { redirect } from 'next/navigation';
 import { currentSession, portalAuth } from '@/lib/auth';
 
@@ -19,8 +23,9 @@ export async function stageImportAction(
   const api = createApiClient({
     baseUrl: portalAuth().apiBaseUrl,
     getAccessToken: () => Promise.resolve(session.accessToken),
-    // A file of ten thousand records takes the API several seconds to check.
-    timeoutMs: 60_000,
+    // A file of ten thousand records takes the API several seconds to check. Applying it and registering a document use the
+    // same limit (see servicingTimeoutMs).
+    timeoutMs: SERVICING_LONG_TIMEOUT_MS,
   });
   const outcome = await runServicingOperation(api, formData, 'servicing.import.stage');
   if (!outcome.ok) return { status: 'error', code: outcome.code };

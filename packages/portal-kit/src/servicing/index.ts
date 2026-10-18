@@ -41,6 +41,8 @@ export {
 } from './data.js';
 export {
   runServicingOperation,
+  servicingTimeoutMs,
+  SERVICING_LONG_TIMEOUT_MS,
   safeServicingReturnPath,
   noticeUrl as servicingNoticeUrl,
   SERVICING_OPERATIONS,
