@@ -40,6 +40,8 @@ export interface DeliveryEvent {
   readonly currency: 'INR' | null;
   readonly occurredAt: string;
   readonly merchantRef?: string;
+  /** Refund and chargeback: the provider's reference of the payment concerned (the database reads the key `parentPaymentRef`). */
+  readonly parentPaymentRef?: string;
 }
 
 /** What the receiver hands to the database for one delivery. No body, header, signature, token or address is in here. */
@@ -157,6 +159,9 @@ export function toDeliveryJson(delivery: ProviderDelivery): Record<string, unkno
             occurredAt: delivery.event.occurredAt,
             ...(delivery.event.merchantRef !== undefined
               ? { merchantRef: delivery.event.merchantRef }
+              : {}),
+            ...(delivery.event.parentPaymentRef !== undefined
+              ? { parentPaymentRef: delivery.event.parentPaymentRef }
               : {}),
           },
         }

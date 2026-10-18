@@ -216,6 +216,7 @@ function toDeliveryEvent(event: NormalisedProviderEvent): DeliveryEvent {
     currency: event.currency,
     occurredAt: event.occurredAt,
     ...(event.merchantRef !== undefined ? { merchantRef: event.merchantRef } : {}),
+    ...(event.parentPaymentRef !== undefined ? { parentPaymentRef: event.parentPaymentRef } : {}),
   };
 }
 

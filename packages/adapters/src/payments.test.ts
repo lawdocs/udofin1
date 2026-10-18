@@ -337,6 +337,43 @@ describe('mock webhook scheme mock-standard-webhooks-v1', () => {
     expect(forged.outcome).toBe('unverified');
   });
 
+  it('reads the parent payment of a refund or chargeback only: a bad one is an invalid identifier, other kinds carry none', () => {
+    const refundBody = {
+      ...base,
+      object_kind: 'refund',
+      object_ref: 'R1',
+      status: 'refunded',
+      amount: '10.00',
+      currency: 'INR',
+    };
+    expect(
+      verified(signedWith(JSON.stringify({ ...refundBody, parent_payment_ref: 'PAY-1' })))
+        .parentPaymentRef,
+    ).toBe('PAY-1');
+    expect(
+      verified(
+        signedWith(
+          JSON.stringify({ ...refundBody, object_kind: 'chargeback', parent_payment_ref: 'PAY-1' }),
+        ),
+      ).parentPaymentRef,
+    ).toBe('PAY-1');
+    expect(verified(signedWith(JSON.stringify(refundBody))).parentPaymentRef).toBeUndefined();
+    // a payment or a settlement that names a parent does not carry it on
+    for (const kind of ['payment', 'settlement'])
+      expect(
+        verified(
+          signedWith(JSON.stringify({ ...base, object_kind: kind, parent_payment_ref: 'PAY-1' })),
+        ).parentPaymentRef,
+        kind,
+      ).toBeUndefined();
+    for (const parent of ['has space', '', '-leading', 'x'.repeat(200), 5]) {
+      expect(
+        signedWith(JSON.stringify({ ...refundBody, parent_payment_ref: parent })),
+        String(parent),
+      ).toMatchObject({ outcome: 'invalid', reason: 'invalid_identifier' });
+    }
+  });
+
   it('refuses an amount without a currency, so INR is always confirmed', () => {
     expect(signedWith(JSON.stringify({ ...base, amount: '10.50' }))).toMatchObject({
       outcome: 'invalid',
@@ -399,6 +436,20 @@ describe('scripted deliveries', () => {
     expect((refund?.rank ?? 0) > (cap?.rank ?? 99)).toBe(true);
     const [, dispute] = events('chargeback');
     expect(dispute).toMatchObject({ objectKind: 'chargeback', status: 'disputed' });
+  });
+  it('a refund and a chargeback name the payment they concern (parentPaymentRef), distinct from their own object ref', () => {
+    const [, refund] = events('refund');
+    expect(refund?.parentPaymentRef).toBe(params.paymentRef);
+    expect(refund?.objectRef).toBe(`${params.paymentRef}-REFUND`);
+    const [, dispute] = events('chargeback');
+    expect(dispute?.parentPaymentRef).toBe(params.paymentRef);
+    expect(dispute?.objectRef).toBe(`${params.paymentRef}-DISPUTE`);
+    // also the refund that arrives before the capture
+    const [early] = events('out_of_order_refund_first');
+    expect(early?.parentPaymentRef).toBe(params.paymentRef);
+    // a payment names no parent
+    for (const scenario of ['success', 'duplicate_event', 'partial_amount'] as const)
+      for (const event of events(scenario)) expect(event.parentPaymentRef).toBeUndefined();
   });
   it('unknown outcome sends nothing at all', () => {
     expect(script('unknown_outcome')).toEqual([]);

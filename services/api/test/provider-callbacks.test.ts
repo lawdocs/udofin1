@@ -398,6 +398,43 @@ describe('pure parts', () => {
     );
   });
 
+  it('carries the parent payment of a refund and of a chargeback all the way to the JSON the database reads, and none for a payment', () => {
+    const resolved = resolveWebhookVerifier(MOCK_CONFIG, 'test');
+    if (!resolved.ok) throw new Error('mock verifier expected');
+    const eventJson = (delivery: MockDelivery) => {
+      const described = describeVerification(
+        resolved.verifier.verify(delivery.rawBody, delivery.headers, { secret: SECRET, now: NOW }),
+      );
+      if (!described.event) throw new Error('verified delivery expected');
+      return toDeliveryJson({
+        provider: MOCK_PAYMENT_PROVIDER_KEY,
+        outcome: 'verified',
+        reasonClass: 'none',
+        deliveryId: delivery.headers['webhook-id'],
+        payloadSha256: sha256('x'),
+        scheme: MOCK_PAYMENT_WEBHOOK_SCHEME,
+        signaturePresent: true,
+        timestampSkewSeconds: 0,
+        bodyBytes: delivery.rawBody.length,
+        ipHmac: 'a'.repeat(64),
+        event: described.event,
+      }).event as Record<string, unknown>;
+    };
+    const refund = eventJson(deliveries('refund')[1] as MockDelivery);
+    expect(refund).toMatchObject({
+      objectKind: 'refund',
+      objectRef: 'SAMPLE-PAY-1-REFUND',
+      parentPaymentRef: 'SAMPLE-PAY-1',
+    });
+    const dispute = eventJson(deliveries('chargeback')[1] as MockDelivery);
+    expect(dispute).toMatchObject({
+      objectKind: 'chargeback',
+      objectRef: 'SAMPLE-PAY-1-DISPUTE',
+      parentPaymentRef: 'SAMPLE-PAY-1',
+    });
+    expect(Object.keys(eventJson(captured()))).not.toContain('parentPaymentRef');
+  });
+
   it('has fixed problem documents that carry nothing from the request', () => {
     expect(providerHookProblem(401, 'req-1')).toEqual({ ...UNIFORM_401, instance: 'req-1' });
     expect(providerHookProblem(409, 'r')).toMatchObject({ status: 409, code: 'unmatched' });
