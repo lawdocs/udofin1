@@ -840,7 +840,10 @@ select pg_temp.as_user(pg_temp.u(1));
 select is(pg_temp.err(format($$select payments.request_mandate(%L, %L, 'enach_api', 100000, %L, %L, 'XXXXXX9999')$$, pg_temp.mid(40), pg_temp.lid(8), pg_temp.d() + 1, pg_temp.d() + 100)), '55000|loan_not_active',
   'a mandate cannot be asked for on a closed loan');
 select pg_temp.as_owner();
--- config_ambiguous: a second ACTIVE configuration of lender X (a copy of the first with its own keys).
+-- config_ambiguous: a second ACTIVE configuration of lender X (a copy of the first with its own keys). The accounts fix (migration 924) forbids two active
+-- configurations with a unique index, so real data cannot reach this state; the check in request_mandate stays as defence in depth, and this test removes the
+-- index inside its own transaction (rolled back at the end) to prove the check still refuses.
+drop index payments.lender_payment_configs_one_active;
 create temp table sm_cfg_copy as select * from payments.lender_payment_configs where lender_org_id = pg_temp.lx() and status = 'active';
 update sm_cfg_copy set id = gen_random_uuid(), endpoint_token_hash = encode(sha256(convert_to('SAMPLE-TOKEN-SECOND', 'UTF8')), 'hex'), idempotency_key = 'sample-second-config-0001';
 select pg_temp.set_replica(true);
