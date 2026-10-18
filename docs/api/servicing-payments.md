@@ -142,6 +142,29 @@ How a client should read it:
 | GET    | `/v1/lender/reconciliation/settlement-batches/{id}/items` | The payments listed in one settlement batch, in the order they were stored                       | `listLenderSettlementItems`          |
 | GET    | `/v1/lender/reconciliation/summary`                       | The newest reconciliation run of a lender for a date, with its counts and report                 | `getLenderReconciliationSummary`     |
 
+## Lender: reminders
+
+| Method | Path                                          | What it does                                                                                        | Operation                        |
+| ------ | --------------------------------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------- |
+| GET    | `/v1/lender/communication-holds`              | Pauses on reminders for your loans, newest first                                                    | `listLenderCommunicationHolds`   |
+| POST   | `/v1/lender/communication-holds/{id}/release` | Release a hold                                                                                      | `releaseLenderCommunicationHold` |
+| POST   | `/v1/lender/loans/{id}/communication-hold`    | Pause reminders for one loan                                                                        | `placeLenderCommunicationHold`   |
+| GET    | `/v1/lender/penal-charge-texts`               | Your penal-charge disclosure versions as you submitted them, newest first                           | `listLenderPenalChargeTexts`     |
+| POST   | `/v1/lender/penal-charge-texts`               | Draft your penal-charge disclosure: the figure, your two attestations, the reason and the sentences | `draftLenderPenalChargeText`     |
+| POST   | `/v1/lender/penal-charge-texts/{id}/approve`  | Approve a drafted penal-charge text (a different person than the drafter)                           | `approveLenderPenalChargeText`   |
+| POST   | `/v1/lender/penal-charge-texts/{id}/retire`   | Retire a draft or approved penal-charge text                                                        | `retireLenderPenalChargeText`    |
+| GET    | `/v1/lender/reminder-policies`                | Your reminder policy versions (draft, approved, retired), newest first                              | `listLenderReminderPolicies`     |
+| POST   | `/v1/lender/reminder-policies`                | Draft the next version of your reminder policy                                                      | `draftLenderReminderPolicy`      |
+| POST   | `/v1/lender/reminder-policies/{id}/approve`   | Approve a drafted reminder policy (a different person than the drafter)                             | `approveLenderReminderPolicy`    |
+| POST   | `/v1/lender/reminder-policies/{id}/retire`    | Retire a draft or approved reminder policy                                                          | `retireLenderReminderPolicy`     |
+| GET    | `/v1/lender/reminder-templates`               | Your reminder wording versions per kind and language, newest first                                  | `listLenderReminderTemplates`    |
+| POST   | `/v1/lender/reminder-templates`               | Draft the next version of your wording for a kind and language                                      | `draftLenderReminderTemplate`    |
+| POST   | `/v1/lender/reminder-templates/{id}/approve`  | Approve a drafted reminder wording (a different person than the drafter)                            | `approveLenderReminderTemplate`  |
+| POST   | `/v1/lender/reminder-templates/{id}/retire`   | Retire a draft or approved reminder wording                                                         | `retireLenderReminderTemplate`   |
+| GET    | `/v1/lender/reminders`                        | Planned, sent and suppressed reminders for your loans, newest scheduled first                       | `listLenderReminders`            |
+| GET    | `/v1/lender/reminders/summary`                | How many reminders of your lender are in each status, suppression reason and channel                | `getLenderReminderSummary`       |
+| GET    | `/v1/lender/reminders/{id}/deliveries`        | The attempt log of one reminder, oldest first                                                       | `listLenderReminderDeliveries`   |
+
 ## Lender: feature switches
 
 | Method | Path                  | What it does                                                                                       | Operation                |
