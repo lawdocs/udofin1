@@ -5,7 +5,7 @@
 -- database WITHOUT the migration this file then fails assertion by assertion instead of aborting at the first statement that needs the new objects.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(109);
+select plan(111);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -198,6 +198,8 @@ select is(private.reminder_text_ok('Pay at pay.example.link/abc or call now plea
 select is(private.reminder_text_ok('Please call 98765 43210 about the installment due {{due_date}}', true), false, 'a ten-digit phone number written with a space is refused');
 select is(private.reminder_text_ok('Please call 1800-123-4567 about the installment due {{due_date}}', true), false, 'a toll-free number written with hyphens is refused');
 select is(private.reminder_text_ok('Please call 98.765.43210 about the installment due', true), false, 'a phone number written with dots is refused');
+select is(private.reminder_text_ok('A separate charge applies from 01.04.2026 as per your agreement', false), false, 'a date written with dots is refused (8 digits once the separators go): the lender writes the month in words');
+select is(private.reminder_text_ok('A separate charge applies from 1 April 2026 as per your agreement', false), true, 'and the same date with the month in words passes');
 select is(private.reminder_text_ok('कृपया ' || chr(2409) || chr(2414) || chr(2407) || chr(2406) || chr(2413) || chr(2412) || chr(2411) || chr(2408) || chr(2415) || chr(2406) || ' पर संपर्क करें', true), false,
   'a ten-digit number written in Devanagari digits is refused');
 select is((select bool_and(not private.reminder_text_ok('भुगतान संख्या ' || repeat(chr(2406 + g), 8), false)) from generate_series(0, 9) g), true,
