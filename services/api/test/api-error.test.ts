@@ -31,3 +31,44 @@ describe('mapDatabaseError: the losing side of a concurrent change (A7)', () => 
     expect(mapDatabaseError(dbError('23514'))?.code).toBe('conflict');
   });
 });
+
+describe('mapDatabaseError: the hints of the accounts and activation fixes (SQL migration 20261018000924)', () => {
+  // [hint, SQLSTATE the function raises, expected HTTP status]. The status follows the SQLSTATE: 55000 is a conflict, 22023 is
+  // an unprocessable request.
+  const cases: [string, string, number][] = [
+    ['platform_hold', '55000', 409],
+    ['active_config_exists', '55000', 409],
+    ['own_account_list_not_attested', '55000', 409],
+    ['own_account_list_incomplete', '55000', 409],
+    ['too_many_claims', '22023', 422],
+    ['merchant_already_claimed', '55000', 409],
+  ];
+
+  it.each(cases)(
+    'maps %s (%s) to %i with the hint as the code and no detail',
+    (hint, state, status) => {
+      const mapped = mapDatabaseError({ code: state, hint, message: 'a row: lender 1234567890' });
+      expect([mapped?.status, mapped?.code]).toEqual([status, hint]);
+      // Nothing from the database message reaches the caller.
+      expect(mapped?.detail).toBeUndefined();
+      expect(JSON.stringify(mapped)).not.toContain('1234567890');
+    },
+  );
+
+  it('maps the uniqueness violation of a second active configuration to the same stable code', () => {
+    const mapped = mapDatabaseError({ code: '23505', hint: 'active_config_exists' });
+    expect([mapped?.status, mapped?.code]).toEqual([409, 'active_config_exists']);
+  });
+
+  it('answers 403 self_approval when the same platform person tries to lift their own hold', () => {
+    const mapped = mapDatabaseError({ code: '42501', hint: 'self_approval' });
+    expect([mapped?.status, mapped?.code]).toEqual([403, 'self_approval']);
+  });
+
+  it('does not invent a code for a hint that is not on the list', () => {
+    expect(mapDatabaseError({ code: '55000', hint: 'platform_hold_typo' })?.code).toBe('conflict');
+    expect(mapDatabaseError({ code: '22023', hint: 'too_many_claims_typo' })?.code).toBe(
+      'invalid_request',
+    );
+  });
+});

@@ -334,6 +334,15 @@ const RULE_HINTS: Readonly<Record<string, { showMessage: boolean }>> = {
   validity_order: { showMessage: false },
   window_invalid: { showMessage: false },
   wording_invalid: { showMessage: false },
+  // Accounts and activation review fixes (SQL migration 20261018000924). The HTTP status follows the SQLSTATE the function
+  // raises (55000 answers 409, 22023 answers 422): platform_hold, active_config_exists, own_account_list_not_attested and
+  // own_account_list_incomplete are 55000 (409); too_many_claims is 22023 (422). None shows a message: a message could carry
+  // a row, and the code says what the caller needs.
+  platform_hold: { showMessage: false },
+  active_config_exists: { showMessage: false },
+  own_account_list_not_attested: { showMessage: false },
+  own_account_list_incomplete: { showMessage: false },
+  too_many_claims: { showMessage: false },
 };
 
 /**
