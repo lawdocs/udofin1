@@ -12,7 +12,7 @@ import { type OnboardingApi } from '../onboarding/api.js';
 import { parseRupeesToPaise } from '../servicing/format.js';
 import { safeErrorCode } from '../servicing/wording.js';
 import { RAIL_LIMIT_ROWS, type DraftedConfig } from './types.js';
-import { looksLikeSecretValue } from './wording.js';
+import { looksLikeAccountDetail, looksLikeSecretValue } from './wording.js';
 
 export type { DraftedConfig };
 
@@ -171,8 +171,9 @@ export const SETUP_OPERATIONS: Readonly<Record<string, SetupOperation>> = {
             bankName: 'settlement_account_invalid',
           }),
         );
-      // The database also refuses a run of six or more digits in the label or the bank name (so a number cannot hide there).
-      if (/[0-9]{6,}/.test(parsed.data.label) || /[0-9]{6,}/.test(parsed.data.bankName))
+      // A number must not hide in the label or the bank name: a run of six or more digits, a number split by spaces, hyphens,
+      // dots or slashes (nine or more digits in all) and a PAN-shaped token are all refused before anything is sent.
+      if (looksLikeAccountDetail(parsed.data.label) || looksLikeAccountDetail(parsed.data.bankName))
         return bad('settlement_account_invalid');
       return post(api, '/v1/lender/settlement-accounts', parsed.data, key);
     },

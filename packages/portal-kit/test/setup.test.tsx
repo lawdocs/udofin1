@@ -779,6 +779,37 @@ describe('the allow-listed operations', () => {
       expect(calls).toEqual([]);
     });
 
+    // A number can be hidden from a run-of-six rule by splitting it with spaces, hyphens, dots or slashes.
+    it.each([
+      ['spaced digits in the label', { label: 'Collections 1234 5678 9012 3456' }],
+      ['hyphenated digits in the bank name', { bankName: 'Example Bank A/c 0012-3456-7890-1234' }],
+      ['dotted digits in the label', { label: 'Collections 1234.5678.9012' }],
+      ['slashed digits in the bank name', { bankName: 'Bank 123/456/789' }],
+      ['nine digits in short groups', { label: 'Acct 12 34 56 78 9' }],
+      ['PAN in the label', { label: 'Owner ABCDE1234F' }],
+      ['lower-case PAN in the label', { label: 'Owner abcde1234f' }],
+      ['mixed-case PAN in the bank name', { bankName: 'Sample Bank AbCdE1234f' }],
+      ['a contiguous run of six digits (as before)', { label: 'Account 123456' }],
+    ])('sends nothing for %s', async (_why, change) => {
+      const { api, calls } = recorder();
+      expect(await runSetupOperation(api, formOf({ ...base, ...change }))).toEqual({
+        ok: false,
+        code: 'settlement_account_invalid',
+      });
+      expect(calls).toEqual([]);
+    });
+
+    it.each([
+      ['a year range', { label: 'Collections 2026-27' }],
+      ['a short branch code', { bankName: 'Sample Bank, branch 04/11' }],
+      ['eight digits split by spaces', { label: 'Account 12 34 56 78' }],
+      ['a word that is nearly a PAN', { label: 'Operating account ABCDE12' }],
+    ])('still accepts %s', async (_why, change) => {
+      const { api, calls } = recorder();
+      expect(await runSetupOperation(api, formOf({ ...base, ...change }))).toEqual({ ok: true });
+      expect(calls).toHaveLength(1);
+    });
+
     it('sends nothing for a missing label, bank or lender', async () => {
       const { api, calls } = recorder();
       expect(await runSetupOperation(api, formOf({ ...base, label: '' }))).toEqual({
@@ -2062,6 +2093,14 @@ describe('Merchants and settlement accounts', () => {
       expect(ops(container)).toEqual(['setup.settlement.request']);
       expect(text(container)).toMatch(/No provider is available to claim a merchant at yet/);
     });
+  });
+
+  it('says in the hints of the label and the bank name that spaces and hyphens do not hide a number', () => {
+    const { container } = view();
+    const words = text(container);
+    expect(words).toMatch(/Do not put an account number, a PAN or any other personal number in it/);
+    expect(words).toMatch(/No account number or other personal number/);
+    expect(words.match(/not even with spaces or hyphens between the digits/g)).toHaveLength(2);
   });
 
   it('says it never takes a full account number, and has no field for one', () => {
