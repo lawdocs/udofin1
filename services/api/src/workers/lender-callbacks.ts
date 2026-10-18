@@ -21,6 +21,8 @@ export interface CallbackDeps {
   /** Resolves the NAME of a secret to its value (environment variables or a secrets manager). Never logged. */
   secret(name: string): string | undefined;
   environment: AppEnvironment;
+  /** Tests only: where the log lines go (otherwise the logger is off in the test environment). */
+  logStream?: { write(line: string): void };
 }
 
 const MESSAGE_ID = /^[A-Za-z0-9._:-]{8,100}$/;
@@ -28,6 +30,23 @@ const MESSAGE_ID = /^[A-Za-z0-9._:-]{8,100}$/;
 const LENDER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Never a real secret: used only to spend the same effort on lenders that do not exist as on ones that do. */
 const DECOY_SECRET = 'v1,whsec_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
+
+function problemBody(status: number, code: string, requestId: string) {
+  return {
+    type: 'about:blank',
+    title:
+      status === 401
+        ? 'Unauthorized'
+        : status === 404
+          ? 'Not Found'
+          : status >= 500
+            ? 'Service Unavailable'
+            : 'Error',
+    status,
+    code,
+    instance: requestId,
+  };
+}
 
 function problem(
   reply: FastifyReply,
@@ -38,13 +57,7 @@ function problem(
   return reply
     .code(status)
     .type(PROBLEM_CONTENT_TYPE)
-    .send({
-      type: 'about:blank',
-      title: status === 401 ? 'Unauthorized' : status >= 500 ? 'Service Unavailable' : 'Error',
-      status,
-      code,
-      instance: requestId,
-    });
+    .send(problemBody(status, code, requestId));
 }
 
 export async function buildCallbackApp(
@@ -52,11 +65,23 @@ export async function buildCallbackApp(
   deps: CallbackDeps,
 ): Promise<FastifyInstance> {
   const app = Fastify({
-    logger: config.APP_ENV === 'test' ? false : loggerOptions(config),
+    logger: deps.logStream
+      ? { ...loggerOptions(config), stream: deps.logStream }
+      : config.APP_ENV === 'test'
+        ? false
+        : loggerOptions(config),
     bodyLimit: 262_144,
     requestTimeout: 15_000,
     trustProxy: (_a: string, hop: number) => hop < config.TRUST_PROXY_HOPS,
     genReqId: () => randomUUID(),
+    // A malformed URL (a bad percent escape) and the other errors Fastify raises before a route is chosen get a fixed answer. The
+    // default would echo the raw path, which on this receiver can be a lender's routing id.
+    frameworkErrors: (_error, request, reply) => {
+      void (reply as unknown as FastifyReply)
+        .code(400)
+        .type(PROBLEM_CONTENT_TYPE)
+        .send(problemBody(400, 'bad_request', request.id));
+    },
   });
   const parseJson = app.getDefaultJsonParser('error', 'error');
   app.addContentTypeParser('application/json', { parseAs: 'string' }, (request, body, done) => {
@@ -79,6 +104,15 @@ export async function buildCallbackApp(
       status && status < 500 ? 'bad_request' : 'internal_error',
       request.id,
     );
+  });
+
+  // A request that matches no route (a doubled slash, another letter case, a missing segment: the usual ways a dashboard gets the
+  // URL wrong) answers one fixed 404. Without this handler Fastify writes "Route POST:<path> not found" at info level and echoes
+  // it in the response, and the path of this receiver's route carries the lender's routing id. The warning left here has a fixed
+  // reason and no URL, so an operator still learns that something is calling a wrong address.
+  app.setNotFoundHandler((request, reply) => {
+    request.log.warn({ reason: 'route_not_found' }, 'callback receiver: no such route');
+    return problem(reply, 404, 'not_found', request.id);
   });
 
   app.get('/health/live', () => ({ status: 'ok' }));

@@ -185,3 +185,80 @@ describe('review SEC-2: a malformed lender id never reaches the database', () =>
     expect(res.json()).toMatchObject({ code: 'invalid_signature' });
   });
 });
+
+describe('A29: a misrouted URL is not written to the log and not echoed', () => {
+  const buildLogged = async (lines: string[], id: string) => {
+    app = await buildCallbackApp(
+      loadConfig({ APP_ENV: 'local', LOG_LEVEL: 'trace', RATE_LIMIT_MAX_PER_MINUTE: '100000' }),
+      {
+        routing,
+        secret: () => SECRET,
+        environment: 'test',
+        logStream: { write: (line) => void lines.push(line) },
+      },
+    );
+    lenders.set(id, context({}));
+    return app;
+  };
+
+  it('answers one fixed 404 and logs no path (the usual dashboard mistakes: doubled slash, other case, missing segment)', async () => {
+    const lines: string[] = [];
+    const id = randomUUID();
+    const instance = await buildLogged(lines, id);
+    const misses = [
+      { method: 'POST' as const, url: `//v1/hooks/lenders/${id}` },
+      { method: 'POST' as const, url: `/V1/hooks/lenders/${id}` },
+      { method: 'POST' as const, url: `/hooks/lenders/${id}?x=1` },
+      { method: 'POST' as const, url: `/v1/hooks/lender/${id}` },
+      { method: 'POST' as const, url: `/v1/hooks/lenders/${id}/` },
+      { method: 'POST' as const, url: `/v1/hooks/lenders/${id}/extra` },
+      { method: 'GET' as const, url: `/v1/hooks/lenders/${id}` },
+    ];
+    for (const miss of misses) {
+      const res = await instance.inject({
+        ...miss,
+        headers: { 'content-type': 'application/json' },
+        payload: miss.method === 'POST' ? '{}' : undefined,
+      });
+      expect([miss.url, res.statusCode]).toEqual([miss.url, 404]);
+      expect(res.json()).toMatchObject({ status: 404, code: 'not_found', title: 'Not Found' });
+      expect(res.body, miss.url).not.toContain(id);
+      expect(res.body).not.toContain('not found:');
+    }
+    const log = lines.join('\n');
+    expect(log).not.toContain(id);
+    // The framework's "Route ... not found" line (which carries the path) is gone; what is left is a fixed warning without the URL.
+    const entries = lines.map((line) => JSON.parse(line) as { level: string; msg?: string });
+    expect(entries.filter((entry) => /not found/i.test(entry.msg ?? ''))).toEqual([]);
+    expect(
+      entries.filter((entry) => entry.msg === 'callback receiver: no such route'),
+    ).toHaveLength(misses.length);
+  });
+
+  it('answers a malformed URL (a bad percent escape) with a fixed 400 that does not echo the path', async () => {
+    const lines: string[] = [];
+    const id = randomUUID();
+    const instance = await buildLogged(lines, id);
+    const res = await instance.inject({ method: 'POST', url: `/v1/hooks/lenders/${id}%zz` });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ status: 400, code: 'bad_request' });
+    expect(res.body).not.toContain(id);
+    expect(lines.join('\n')).not.toContain(id);
+  });
+
+  it('control: a refusal on the real route that logs the lender id does reach the capture, so the absence above means something', async () => {
+    const lines: string[] = [];
+    const id = randomUUID();
+    const instance = await buildLogged(lines, id);
+    lenders.set(id, context({ kind: 'api' }));
+    const res = await instance.inject({
+      method: 'POST',
+      url: `/v1/hooks/lenders/${id}`,
+      headers: { 'content-type': 'application/json', ...signed() },
+      payload: body,
+    });
+    expect(res.statusCode).toBe(401);
+    expect(lines.join('\n')).toContain(id);
+    expect(lines.join('\n')).toContain('callback_scheme_not_configured');
+  });
+});
