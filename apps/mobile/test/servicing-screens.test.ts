@@ -234,6 +234,10 @@ describe('statements and messages', () => {
     expect(content).toBeGreaterThan(-1);
     expect(content).toBeLessThan(check);
     expect(check).toBeLessThan(viewer);
+    // A file that fails the check stops here: the viewer is only reached after the `if (problem !== null)` block returned.
+    expect(source).toMatch(
+      /if \(problem !== null\) \{[\s\S]*?return;\s*\}\s*const outcome = await openPdf\(/,
+    );
     expect(source).toContain("'view'");
     expect(source).not.toMatch(/Linking|WebBrowser|openURL|uri:/);
   });

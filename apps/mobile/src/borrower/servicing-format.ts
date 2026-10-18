@@ -99,12 +99,9 @@ export function isCalendarDate(value: string): boolean {
   const month = Number(match[2]);
   const day = Number(match[3]);
   if (month < 1 || month > 12 || day < 1) return false;
+  // A day past the end of the month rolls the date into the next month, so comparing the year and the month finds it.
   const check = new Date(Date.UTC(year, month - 1, day));
-  return (
-    check.getUTCFullYear() === year &&
-    check.getUTCMonth() === month - 1 &&
-    check.getUTCDate() === day
-  );
+  return check.getUTCFullYear() === year && check.getUTCMonth() === month - 1;
 }
 
 /**

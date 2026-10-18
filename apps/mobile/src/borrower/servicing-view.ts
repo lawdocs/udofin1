@@ -175,10 +175,12 @@ export interface LoanHomeModel {
 export function loanHomeModel(loan: SvcLoan, language: Language): LoanHomeModel {
   const lender = loan.lenderDisplayName;
   const facts: TextRef[] = [
-    ref('loans.fact.sanctioned', { amount: formatAmount(loan.sanctionedAmountMinor) }),
+    ref('loans.fact.sanctioned', { lender, amount: formatAmount(loan.sanctionedAmountMinor) }),
   ];
   if (loan.disbursedAmountMinor !== null) {
-    facts.push(ref('loans.fact.disbursed', { amount: formatAmount(loan.disbursedAmountMinor) }));
+    facts.push(
+      ref('loans.fact.disbursed', { lender, amount: formatAmount(loan.disbursedAmountMinor) }),
+    );
   }
   // Both are the lender's own words about the loan: the status held here follows the lender's reports forward only.
   const figures = figuresModel(loan, language);
@@ -190,7 +192,10 @@ export function loanHomeModel(loan: SvcLoan, language: Language): LoanHomeModel 
     loanId: loan.loanId,
     lender,
     reference: ref('loans.card.reference', { ref: loan.lenderLoanRef }),
-    status: { label: ref('loans.status.label'), value: ref(loanStatusKey(loan.loanStatus)) },
+    status: {
+      label: ref('loans.status.label', { lender }),
+      value: ref(loanStatusKey(loan.loanStatus)),
+    },
     reportedStatus:
       differs && loan.reportedStatus !== null
         ? {
@@ -238,7 +243,10 @@ export function loanCardModel(loan: SvcLoan, language: Language): LoanCardModel 
     loanId: loan.loanId,
     lender,
     reference: ref('loans.card.reference', { ref: loan.lenderLoanRef }),
-    status: { label: ref('loans.status.label'), value: ref(loanStatusKey(loan.loanStatus)) },
+    status: {
+      label: ref('loans.status.label', { lender }),
+      value: ref(loanStatusKey(loan.loanStatus)),
+    },
     summary,
   };
 }

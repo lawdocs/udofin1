@@ -33,7 +33,7 @@ export const hiServicing: Record<keyof typeof enServicing, string> = {
   'loans.card.nextDue': 'अगली देय तिथि: {date}',
   'loans.card.nextDueNone': 'अगली देय तिथि: {lender} ने नहीं बताई',
   'loans.card.nextDueAmount': 'अगली देय राशि: {amount}',
-  'loans.status.label': 'ऋण की स्थिति',
+  'loans.status.label': 'ऋण की स्थिति ({lender} के अनुसार)',
   'loans.status.reportedBy': '{lender} की ताज़ा रिपोर्ट में लिखा है',
   'loans.status.active': 'चालू',
   'loans.status.closed': 'बंद',
@@ -43,8 +43,8 @@ export const hiServicing: Record<keyof typeof enServicing, string> = {
   'loans.status.unknown': 'ऐप के इस संस्करण में उपलब्ध नहीं',
   'loans.status.writtenOffNote':
     'यह ऋण के बारे में {lender} की अपनी स्थिति है। इसका आपके लिए क्या अर्थ है, यह {lender} से पूछें।',
-  'loans.fact.sanctioned': 'स्वीकृत राशि: {amount}',
-  'loans.fact.disbursed': 'वितरित राशि: {amount}',
+  'loans.fact.sanctioned': 'स्वीकृत राशि ({lender} के अनुसार): {amount}',
+  'loans.fact.disbursed': 'वितरित राशि ({lender} के अनुसार): {amount}',
 
   // ---- figures reported by the lender -----------------------------------------------------------------------------
   'loans.fig.asReported': '{lender} द्वारा {date} को बताया गया',

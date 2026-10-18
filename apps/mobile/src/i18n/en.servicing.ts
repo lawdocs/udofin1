@@ -35,7 +35,7 @@ export const enServicing = {
   'loans.card.nextDue': 'Next due date: {date}',
   'loans.card.nextDueNone': 'Next due date: not reported by {lender}',
   'loans.card.nextDueAmount': 'Next due amount: {amount}',
-  'loans.status.label': 'Loan status',
+  'loans.status.label': 'Loan status (per {lender})',
   'loans.status.reportedBy': 'Latest report from {lender} says',
   'loans.status.active': 'Active',
   'loans.status.closed': 'Closed',
@@ -45,8 +45,8 @@ export const enServicing = {
   'loans.status.unknown': 'Not available in this version of the app',
   'loans.status.writtenOffNote':
     "This is {lender}'s own status for the loan. Ask {lender} what it means for you.",
-  'loans.fact.sanctioned': 'Sanctioned amount: {amount}',
-  'loans.fact.disbursed': 'Disbursed amount: {amount}',
+  'loans.fact.sanctioned': 'Sanctioned amount (per {lender}): {amount}',
+  'loans.fact.disbursed': 'Disbursed amount (per {lender}): {amount}',
 
   // ---- figures reported by the lender -----------------------------------------------------------------------------
   'loans.fig.asReported': 'As reported by {lender} on {date}',

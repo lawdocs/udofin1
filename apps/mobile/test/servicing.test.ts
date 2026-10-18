@@ -176,6 +176,10 @@ describe('money, dates and times', () => {
     expect(isCalendarDate('2026-10-18')).toBe(true);
     expect(isCalendarDate('2028-02-29')).toBe(true);
     expect(isCalendarDate('2026-02-29')).toBe(false);
+    expect(isCalendarDate('2026-04-31')).toBe(false);
+    expect(isCalendarDate('2026-04-30')).toBe(true);
+    expect(isCalendarDate('2026-04-00')).toBe(false);
+    expect(isCalendarDate('0050-01-01')).toBe(false);
     expect(isCalendarDate('2026-13-01')).toBe(false);
     expect(isCalendarDate('2026-1-1')).toBe(false);
     expect(isCalendarDate('')).toBe(false);
@@ -514,11 +518,13 @@ describe('the loan home and the loan card', () => {
     const model = loanHomeModel(loan(), 'en');
     expect(model.lender).toBe(LENDER);
     expect(say(model.reference)).toBe('Loan reference: SAMPLE-LN-0001');
-    expect(`${say(model.status.label)}: ${say(model.status.value)}`).toBe('Loan status: Active');
+    expect(`${say(model.status.label)}: ${say(model.status.value)}`).toBe(
+      `Loan status (per ${LENDER}): Active`,
+    );
     expect(model.reportedStatus).toBeNull();
     expect(model.facts.map((f) => say(f))).toEqual([
-      'Sanctioned amount: ₹5,00,000',
-      'Disbursed amount: ₹5,00,000',
+      `Sanctioned amount (per ${LENDER}): ₹5,00,000`,
+      `Disbursed amount (per ${LENDER}): ₹5,00,000`,
     ]);
   });
 
