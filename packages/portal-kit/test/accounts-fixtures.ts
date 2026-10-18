@@ -19,7 +19,7 @@ import {
 import { vi } from 'vitest';
 import { type z } from 'zod';
 import { type AccountsContext } from '../src/accounts/common.js';
-import { type PlatformApi, type PlatformResult } from '../src/accounts/client.js';
+import { type PlatformApi } from '../src/accounts/client.js';
 import { platformCaps } from '../src/accounts/data.js';
 
 // People: the signed-in person, and someone else.
@@ -387,20 +387,20 @@ export function recordingApi(
       reads.push(path);
       return Promise.resolve(
         Object.hasOwn(readAnswers, path)
-          ? ({
+          ? {
               ok: true as const,
               status: 200,
               data: readAnswers[path] as never,
-            } as PlatformResult<never>)
-          : ({ ok: false as const, status: 404, code: 'not_found' } as PlatformResult<never>),
+            }
+          : { ok: false as const, status: 404, code: 'not_found' },
       );
     },
     post: (path, _schema, body, requestId) => {
       calls.push({ path, body, requestId });
       return Promise.resolve(
         failWith
-          ? ({ ok: false as const, ...failWith } as PlatformResult<never>)
-          : ({ ok: true as const, status: 200, data: answer as never } as PlatformResult<never>),
+          ? { ok: false as const, ...failWith }
+          : { ok: true as const, status: 200, data: answer as never },
       );
     },
   };

@@ -480,9 +480,9 @@ describe('the platform client sends only the routes the screens use', () => {
     new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
   const make = (respond: (url: string, init: RequestInit) => Response | Promise<Response>) => {
     const calls: { url: string; init: RequestInit }[] = [];
-    const fetchStub = vi.fn((url: string | URL | Request, init?: RequestInit) => {
-      calls.push({ url: String(url), init: init ?? {} });
-      return Promise.resolve(respond(String(url), init ?? {}));
+    const fetchStub = vi.fn((url: string, init?: RequestInit) => {
+      calls.push({ url, init: init ?? {} });
+      return Promise.resolve(respond(url, init ?? {}));
     });
     const client = createPlatformClient({
       baseUrl: 'https://api.example/',
@@ -630,7 +630,7 @@ describe('the platform client sends only the routes the screens use', () => {
     const client = createPlatformClient({
       baseUrl: 'https://api.example',
       getAccessToken: () => Promise.resolve(null),
-      fetch: fetchStub as unknown as typeof fetch,
+      fetch: fetchStub,
     });
     expect(await client.get('/v1/platform/features', any)).toEqual({
       ok: false,
@@ -732,10 +732,7 @@ describe('the platform client sends only the routes the screens use', () => {
     const client = createPlatformClient({
       baseUrl: 'https://api.example',
       getAccessToken: () => Promise.resolve(ACCESS),
-      fetch: (() =>
-        Promise.reject(
-          new Error(`connect failed while sending ${CANARY_ACCOUNT}`),
-        )) as unknown as typeof fetch,
+      fetch: () => Promise.reject(new Error(`connect failed while sending ${CANARY_ACCOUNT}`)),
     });
     const result = await client.post(
       '/v1/platform/accounts',
@@ -1515,7 +1512,9 @@ describe('the account number: typed once, posted once, to one route, and never a
     expect(calls).toHaveLength(1);
     expect(calls[0]?.url).toBe('https://api.example/v1/platform/accounts');
     expect(calls[0]?.init.method).toBe('POST');
-    expect(count(String(calls[0]?.init.body), CANARY_ACCOUNT)).toBe(1);
+    const sent = calls[0]?.init.body;
+    expect(typeof sent).toBe('string');
+    expect(count(typeof sent === 'string' ? sent : '', CANARY_ACCOUNT)).toBe(1);
     expect(calls[0]?.url).not.toContain(CANARY_ACCOUNT);
     expect(everywhere(calls[0]?.init.headers)).not.toContain(CANARY_ACCOUNT);
     expect(everywhere(calls[0]?.init.headers)).not.toContain(CANARY_BRANCH_CODE);
@@ -1623,7 +1622,7 @@ describe('the account number: typed once, posted once, to one route, and never a
       const client = createPlatformClient({
         baseUrl: 'https://api.example',
         getAccessToken: () => Promise.resolve('sample-access-value'),
-        fetch: (() =>
+        fetch: () =>
           Promise.resolve(
             new Response(
               JSON.stringify({
@@ -1633,7 +1632,7 @@ describe('the account number: typed once, posted once, to one route, and never a
               }),
               { status: 422 },
             ),
-          )) as unknown as typeof fetch,
+          ),
       });
       const outcome = await runAccountRegistration(client, formOf(fields), 'ops');
       expect(outcome).toEqual({ ok: false, code });
@@ -1654,10 +1653,7 @@ describe('the account number: typed once, posted once, to one route, and never a
     const wire = createPlatformClient({
       baseUrl: 'https://api.example',
       getAccessToken: () => Promise.resolve('sample-access-value'),
-      fetch: (() =>
-        Promise.reject(
-          new Error(`socket closed after ${CANARY_ACCOUNT}`),
-        )) as unknown as typeof fetch,
+      fetch: () => Promise.reject(new Error(`socket closed after ${CANARY_ACCOUNT}`)),
     });
     const viaClient = await runAccountRegistration(wire, formOf(fields), 'ops');
     expect(viaClient).toEqual({ ok: false, code: 'network_error' });
