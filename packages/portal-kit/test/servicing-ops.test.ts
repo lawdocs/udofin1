@@ -1396,12 +1396,13 @@ describe('where an action returns to', () => {
     }
   });
 
-  it('adds the result to the address and replaces an older result', () => {
-    expect(noticeUrl('/loans', { ok: true })).toBe('/loans?done=1');
+  it('puts nothing about a success in the address, a short error code for a failure, and drops an older result', () => {
+    expect(noticeUrl('/loans', { ok: true })).toBe('/loans');
     expect(noticeUrl('/loans?status=active', { ok: false, code: 'import_has_errors' })).toBe(
       '/loans?status=active&error=import_has_errors',
     );
-    expect(noticeUrl('/imports?error=forbidden', { ok: true })).toBe('/imports?done=1');
+    expect(noticeUrl('/imports?error=forbidden', { ok: true })).toBe('/imports');
+    expect(noticeUrl('/imports?done=1&cursor=a', { ok: true })).toBe('/imports?cursor=a');
     expect(noticeUrl('/imports?done=1&cursor=a', { ok: false, code: 'mfa_required' })).toBe(
       '/imports?cursor=a&error=mfa_required',
     );

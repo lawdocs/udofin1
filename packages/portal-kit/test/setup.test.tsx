@@ -1367,8 +1367,11 @@ describe('the allow-listed operations', () => {
         expect(safeSetupReturnPath(path), String(path)).toBe('/payment-setup');
     });
 
-    it('adds the result as done=1 or a short error code and nothing else', () => {
-      expect(setupNoticeUrl('/payment-setup', { ok: true })).toBe('/payment-setup?done=1');
+    it('puts nothing about a success in the address, only a short error code for a failure', () => {
+      expect(setupNoticeUrl('/payment-setup', { ok: true })).toBe('/payment-setup');
+      expect(setupNoticeUrl('/payment-setup?done=1&lenderId=abc', { ok: true })).toBe(
+        '/payment-setup?lenderId=abc',
+      );
       expect(
         setupNoticeUrl('/payment-setup/accounts?lenderId=abc', {
           ok: false,

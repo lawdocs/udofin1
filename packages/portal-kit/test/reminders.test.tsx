@@ -1130,9 +1130,10 @@ describe('the allow-listed operations', () => {
         expect(safeRemindersReturnPath(path), String(path)).toBe('/reminders');
     });
 
-    it('adds the result as done=1 or a short error code and nothing else', () => {
-      expect(remindersNoticeUrl('/reminders/policy', { ok: true })).toBe(
-        '/reminders/policy?done=1',
+    it('puts nothing about a success in the address, only a short error code for a failure', () => {
+      expect(remindersNoticeUrl('/reminders/policy', { ok: true })).toBe('/reminders/policy');
+      expect(remindersNoticeUrl('/reminders/holds?done=1&lenderId=abc', { ok: true })).toBe(
+        '/reminders/holds?lenderId=abc',
       );
       expect(
         remindersNoticeUrl('/reminders/policy?lenderId=abc', { ok: false, code: 'self_approval' }),

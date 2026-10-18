@@ -23,6 +23,7 @@ import {
   UdofinFeeMerchantInput,
 } from '@udofin/contracts';
 import { z, type ZodType } from 'zod';
+import { flashPathOf } from '../flash.js';
 import { type PortalKind } from '../onboarding/api.js';
 import { realDate } from '../servicing/format.js';
 import { type PlatformApi, type PlatformResult } from './client.js';
@@ -610,31 +611,50 @@ export function safeAccountsReturnPath(value: unknown): string {
   return typeof value === 'string' && allowed.test(value) ? value : '/accounts';
 }
 
-/** The page address to go back to after an action, with the result as `done=1` or a short `error` code (nothing else). */
+/**
+ * The page address to go back to after an action: the same filters, and for a failure a short `error` code and the unmet
+ * prerequisites as closed codes (nothing else). A success adds nothing to the address: the confirmation (and the decision a
+ * feature request ended in) is written by the server action as a short-lived cookie, see `accountsFlashFor` and flash.ts, because
+ * anything in an address can be written by anybody.
+ */
 export function accountsNoticeUrl(returnTo: string, outcome: AccountsOutcome): string {
   const [path = '/accounts', query = ''] = returnTo.split('?', 2);
   const kept = query
     .split('&')
     .filter((part) => part !== '' && !/^(done|error|result|reasons|registered)=/.test(part));
-  if (outcome.ok) {
-    kept.push('done=1');
-    if (outcome.result && DECISION_RESULTS.includes(outcome.result))
-      kept.push(`result=${outcome.result}`);
-  } else {
+  if (!outcome.ok) {
     kept.push(`error=${encodeURIComponent(safeErrorCode(outcome.code))}`);
     const reasons = outcome.reasons ? reasonCodesFrom(outcome.reasons.join(',')) : [];
     if (reasons.length > 0) kept.push(`reasons=${reasons.join(',')}`);
   }
-  return `${path}?${kept.join('&')}`;
+  return kept.length > 0 ? `${path}?${kept.join('&')}` : path;
 }
 
 /**
- * Where the registration goes next. A success carries the registry id (an identifier) so the page can read the entry and show
- * its masked reference; a failure carries a code. Nothing a person typed is ever part of the address.
+ * What a successful action writes as the notice of the page it returns to: the decision a feature request ended in (only a
+ * known one) and, for a registration, the identifier of the new entry. Nothing a person typed. A failure writes no notice.
+ */
+export function accountsFlashFor(
+  returnTo: string,
+  outcome: AccountsOutcome,
+): { path: string; result?: string; registered?: string } | undefined {
+  if (!outcome.ok) return undefined;
+  return {
+    path: flashPathOf(returnTo),
+    ...(outcome.result && DECISION_RESULTS.includes(outcome.result)
+      ? { result: outcome.result }
+      : {}),
+    ...(outcome.created && UUID.test(outcome.created.id) ? { registered: outcome.created.id } : {}),
+  };
+}
+
+/**
+ * Where the registration goes next: back to the registry. A failure carries a code. The identifier of the new entry reaches the
+ * page as a notice written by the server action (see `accountsFlashFor`), never in the address. Nothing a person typed is ever
+ * part of the address.
  */
 export function accountRegisteredUrl(outcome: AccountsOutcome): string {
-  if (outcome.ok && outcome.created && UUID.test(outcome.created.id))
-    return `/accounts?registered=${outcome.created.id}`;
+  if (outcome.ok && outcome.created && UUID.test(outcome.created.id)) return '/accounts';
   return outcome.ok
     ? '/accounts?error=bad_response'
     : `/accounts?error=${encodeURIComponent(safeErrorCode(outcome.code))}`;

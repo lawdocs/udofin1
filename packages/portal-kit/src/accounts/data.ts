@@ -14,6 +14,7 @@ import {
   ReturnCodeClassList,
   SettlementAccountPage,
 } from '@udofin/contracts';
+import { type Flash } from '../flash.js';
 import { type OnboardingApi } from '../onboarding/api.js';
 import { type PlatformApi } from './client.js';
 import { type LenderChoice } from './types.js';
@@ -134,20 +135,25 @@ export const withoutCursor = (query: AccountsQuery): AccountsQuery => {
   return rest;
 };
 
-/** The id of a registry entry that was just registered, read from the page address (an identifier, never a number). */
-export const registeredIdFrom = (
-  raw: Record<string, string | string[] | undefined>,
-): string | undefined => {
-  const value = one(raw.registered);
-  return isId(value) ? value : undefined;
-};
+/**
+ * The id of a registry entry that was just registered. It comes from the notice the server action wrote for this page (see
+ * flash.ts), never from the address: an address can name any entry and would make the page say it was just registered.
+ */
+export const registeredIdFrom = (flash: Flash | undefined): string | undefined => flash?.registered;
 
-/** The notice of the last action, read from the page address. */
-export function noticeFrom(raw: Record<string, string | string[] | undefined>) {
+/**
+ * The notice of the last action. Whether it succeeded, and the decision a feature request ended in, come from the notice the
+ * server wrote for this page (`flash`), never from the address. An error and the unmet prerequisites are closed codes in the
+ * address, shown only as fixed sentences; a forged one can claim a failure, never a success.
+ */
+export function noticeFrom(
+  raw: Record<string, string | string[] | undefined>,
+  flash: Flash | undefined,
+) {
   return {
-    done: one(raw.done) === '1',
+    done: flash !== undefined,
     error: one(raw.error),
-    result: one(raw.result),
+    result: flash?.result,
     reasons: one(raw.reasons),
   };
 }

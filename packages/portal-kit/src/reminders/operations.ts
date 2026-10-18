@@ -255,10 +255,14 @@ export function safeRemindersReturnPath(value: unknown): string {
   return typeof value === 'string' && allowed.test(value) ? value : '/reminders';
 }
 
-/** The page address to go back to after an action, with the result as `done=1` or a short `error` code (nothing else). */
+/**
+ * The page address to go back to after an action: the same filters, and for a failure a short `error` code (nothing else). A
+ * success adds nothing to the address: the confirmation is written by the server action as a short-lived cookie (see flash.ts),
+ * because anything in an address can be written by anybody.
+ */
 export function remindersNoticeUrl(returnTo: string, outcome: RemindersOutcome): string {
   const [path = '/reminders', query = ''] = returnTo.split('?', 2);
   const kept = query.split('&').filter((part) => part !== '' && !/^(done|error)=/.test(part));
-  kept.push(outcome.ok ? 'done=1' : `error=${encodeURIComponent(safeErrorCode(outcome.code))}`);
-  return `${path}?${kept.join('&')}`;
+  if (!outcome.ok) kept.push(`error=${encodeURIComponent(safeErrorCode(outcome.code))}`);
+  return kept.length > 0 ? `${path}?${kept.join('&')}` : path;
 }
