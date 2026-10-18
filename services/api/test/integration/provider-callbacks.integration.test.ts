@@ -897,16 +897,37 @@ describe.skipIf(!enabled)('provider callback receiver over a real database', () 
         });
       expect(await apply(capturedRow)).toBe('applied');
       expect(await apply(refundRow)).toBe('applied');
-      expect(
-        await q(
-          `select a.kind, a.amount_minor::text as amount_minor, p.provider_payment_ref
-             from payments.payment_adjustments a join payments.provider_payments p on p.id = a.provider_payment_id
-            where p.intent_id = $1`,
-          [made.intent],
-        ),
-      ).toEqual([
-        { kind: 'refund', amount_minor: '475000', provider_payment_ref: made.paymentRef },
-      ]);
+      try {
+        expect(
+          await q(
+            `select a.kind, a.amount_minor::text as amount_minor, p.provider_payment_ref
+               from payments.payment_adjustments a join payments.provider_payments p on p.id = a.provider_payment_id
+              where p.intent_id = $1`,
+            [made.intent],
+          ),
+        ).toEqual([
+          { kind: 'refund', amount_minor: '475000', provider_payment_ref: made.paymentRef },
+        ]);
+      } finally {
+        // The files share one database and others assert that no refund exists: leave none behind (the table is append-only, so the
+        // delete runs with triggers off, scoped to this test's own payment).
+        const c = await admin.connect();
+        try {
+          await c.query('begin');
+          await c.query('set local session_replication_role = replica');
+          await c.query(
+            `delete from payments.payment_adjustments
+              where provider_payment_id in (select id from payments.provider_payments where intent_id = $1::uuid)`,
+            [made.intent],
+          );
+          await c.query('commit');
+        } catch (error) {
+          await c.query('rollback');
+          throw error;
+        } finally {
+          c.release();
+        }
+      }
     });
   });
 

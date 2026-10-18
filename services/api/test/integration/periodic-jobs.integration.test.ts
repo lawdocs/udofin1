@@ -796,6 +796,58 @@ describe.skipIf(!enabled)('scheduled jobs and servicing handlers against a real 
       expect(await asBorrower(ids.b2, `select * from servicing.my_reminders()`)).toEqual([]);
     });
 
+    it('a report for a claim that is no longer the worker’s is refused by the database and changes nothing; the claim token is how it knows (M40)', async () => {
+      const [reminder] = await q<{ id: string; attempts: number }>(
+        `select id::text, attempts from servicing.reminders
+          where loan_account_id = $1::uuid and channel = 'in_app' and status = 'sent' order by id limit 1`,
+        [loan.a1],
+      );
+      if (!reminder) throw new Error('no sent reminder to use');
+      const before = await deliveries(loan.a1);
+      // As if the lease ran out and another worker claimed the message a second time (token = the attempt number now).
+      await transaction(async (client) => {
+        await client.query(`set local session_replication_role = replica`);
+        await client.query(
+          `update servicing.reminders set status = 'claimed', attempts = attempts + 1, claimed_until = now() + interval '5 minutes' where id = $1::uuid`,
+          [reminder.id],
+        );
+      });
+      try {
+        // The first worker's late report carries the old token.
+        expect(
+          await store.recordReminderAttempt(reminder.id, 'accepted', null, null, reminder.attempts),
+        ).toBe('not_claimed');
+        expect(await deliveries(loan.a1)).toEqual(before);
+        expect(
+          await scalar<string>(`select status as v from servicing.reminders where id = $1::uuid`, [
+            reminder.id,
+          ]),
+        ).toBe('claimed');
+        // A message that is not claimed at all (already sent, or stopped by a hold) is refused the same way, whatever the token.
+        const [other] = await q<{ id: string; attempts: number }>(
+          `select id::text, attempts from servicing.reminders
+            where loan_account_id = $1::uuid and channel = 'push' and status = 'sent' order by id limit 1`,
+          [loan.a1],
+        );
+        if (!other) throw new Error('no second sent reminder');
+        expect(
+          await store.recordReminderAttempt(other.id, 'accepted', null, null, other.attempts),
+        ).toBe('not_claimed');
+        // Any other database refusal is still an error, not a quiet answer.
+        await expect(
+          store.recordReminderAttempt(randomUUID(), 'accepted', null, null, 1),
+        ).rejects.toMatchObject({ code: 'P0002' });
+      } finally {
+        await transaction(async (client) => {
+          await client.query(`set local session_replication_role = replica`);
+          await client.query(
+            `update servicing.reminders set status = 'sent', attempts = $2::int, claimed_until = null where id = $1::uuid`,
+            [reminder.id, reminder.attempts],
+          );
+        });
+      }
+    });
+
     it('push outside local and test answers not_configured: the reminder is suppressed (channel_not_configured), never recorded as sent', async () => {
       await makeDue(loan.a2);
       const production = periodic({
