@@ -1712,6 +1712,7 @@ describe('servicing event handlers', () => {
       'servicing.import.committed',
       'servicing.loan_closed',
       'servicing.sync_conflict.opened',
+      'servicing.sync_quarantine.opened',
     ]);
   });
 
@@ -1731,6 +1732,19 @@ describe('servicing event handlers', () => {
     const conflict = handlers['servicing.sync_conflict.opened']?.schema;
     expect(conflict?.safeParse({ conflict_id: ID(1), lender_org_id: LENDER }).success).toBe(true);
     expect(conflict?.safeParse({ conflict_id: ID(1) }).success).toBe(false);
+    const quarantine = handlers['servicing.sync_quarantine.opened']?.schema;
+    expect(quarantine?.safeParse({ quarantine_id: ID(1), lender_org_id: LENDER }).success).toBe(
+      true,
+    );
+    expect(quarantine?.safeParse({ quarantine_id: ID(1) }).success).toBe(false);
+    expect(quarantine?.safeParse({ lender_org_id: LENDER }).success).toBe(false);
+    expect(
+      quarantine?.safeParse({ quarantine_id: 'not-a-uuid', lender_org_id: LENDER }).success,
+    ).toBe(false);
+    expect(
+      quarantine?.safeParse({ quarantine_id: ID(1), lender_org_id: LENDER, loan_ref: 'L-1' })
+        .success,
+    ).toBe(false);
   });
 
   it('servicing.loan_closed suppresses the loan reminders and requests mandate cancellation, in one call', async () => {
@@ -1766,6 +1780,22 @@ describe('servicing event handlers', () => {
       event,
     );
     expect(store.calls).toHaveLength(0);
+  });
+
+  it('servicing.sync_quarantine.opened is acknowledged, touches nothing and logs the two ids only', async () => {
+    const store = fakeStore();
+    const { log, lines } = captureLog();
+    const payload = { quarantine_id: ID(7), lender_org_id: LENDER };
+    await handlersOf(store, log)['servicing.sync_quarantine.opened']?.run(payload, event);
+    expect(store.calls).toHaveLength(0);
+    expect(lines).toHaveLength(1);
+    const entry = JSON.parse(lines[0] ?? '{}') as { f: Record<string, unknown> };
+    // nothing beyond the event name and the two ids is carried into the log line
+    expect(entry.f).toEqual({
+      event: 'servicing.sync_quarantine.opened',
+      quarantine: ID(7),
+      lender: LENDER,
+    });
   });
 
   it('a database failure is raised, so the worker retries the event', async () => {

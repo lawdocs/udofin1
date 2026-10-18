@@ -14,6 +14,7 @@ export interface ServicingHandlerDeps {
 // The payloads the database writes (migrations 20261018000911 and 20261018000912): ids only, every field required, nothing else.
 const ImportCommitted = z.strictObject({ batch_id: z.uuid(), lender_org_id: z.uuid() });
 const SyncConflictOpened = z.strictObject({ conflict_id: z.uuid(), lender_org_id: z.uuid() });
+const SyncQuarantineOpened = z.strictObject({ quarantine_id: z.uuid(), lender_org_id: z.uuid() });
 const LoanClosed = z.strictObject({
   closure_id: z.uuid(),
   loan_account_id: z.uuid(),
@@ -21,7 +22,8 @@ const LoanClosed = z.strictObject({
 });
 
 /**
- * Outbox handlers for servicing events: `servicing.import.committed`, `servicing.loan_closed`, `servicing.sync_conflict.opened`.
+ * Outbox handlers for servicing events: `servicing.import.committed`, `servicing.loan_closed`, `servicing.sync_conflict.opened`,
+ * `servicing.sync_quarantine.opened`.
  * An event type with no handler is retried and finally dead-lettered by the worker, so every event the database enqueues in
  * servicing has one. Delivery is at least once: each handler is safe to run again.
  */
@@ -50,6 +52,22 @@ export function createServicingHandlers(
       schema: SyncConflictOpened,
       run: () => {
         deps.log?.info({ event: 'servicing.sync_conflict.opened' }, 'sync conflict acknowledged');
+        return Promise.resolve();
+      },
+    },
+    // A report the database could not apply is held in servicing.sync_quarantine (migration 20261018000925); the first time a row
+    // is stored the database enqueues this event. The row is already in the lender's queue (readable with loan.read); nothing is
+    // sent or decided here. The event is acknowledged so it does not dead-letter. Only the two ids are logged, never a value.
+    'servicing.sync_quarantine.opened': {
+      schema: SyncQuarantineOpened,
+      run: (payload) => {
+        const { quarantine_id: quarantine, lender_org_id: lender } = payload as z.infer<
+          typeof SyncQuarantineOpened
+        >;
+        deps.log?.info(
+          { event: 'servicing.sync_quarantine.opened', quarantine, lender },
+          'sync quarantine acknowledged',
+        );
         return Promise.resolve();
       },
     },
