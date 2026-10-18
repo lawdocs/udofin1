@@ -623,6 +623,29 @@ describe.skipIf(!enabled)('provider callback receiver over a real database', () 
   const noEventStored = async (delivery: MockDelivery) =>
     expect(await eventsByProviderId(eventIdOf(delivery))).toEqual([]);
 
+  /**
+   * The files share one database and others assert that no refund exists: a test that books one removes it again. The table is
+   * append-only, so the delete runs with triggers off, scoped to the payments of the one intent.
+   */
+  async function removeAdjustmentsOf(intent: string): Promise<void> {
+    const c = await admin.connect();
+    try {
+      await c.query('begin');
+      await c.query('set local session_replication_role = replica');
+      await c.query(
+        `delete from payments.payment_adjustments
+          where provider_payment_id in (select id from payments.provider_payments where intent_id = $1::uuid)`,
+        [intent],
+      );
+      await c.query('commit');
+    } catch (error) {
+      await c.query('rollback');
+      throw error;
+    } finally {
+      c.release();
+    }
+  }
+
   /** Stored event rows of this file: tracked so their outbox rows can be closed at the end. */
   async function trackEvent(providerEventId: string): Promise<string> {
     const [row] = await eventsByProviderId(providerEventId);
@@ -909,24 +932,7 @@ describe.skipIf(!enabled)('provider callback receiver over a real database', () 
           { kind: 'refund', amount_minor: '475000', provider_payment_ref: made.paymentRef },
         ]);
       } finally {
-        // The files share one database and others assert that no refund exists: leave none behind (the table is append-only, so the
-        // delete runs with triggers off, scoped to this test's own payment).
-        const c = await admin.connect();
-        try {
-          await c.query('begin');
-          await c.query('set local session_replication_role = replica');
-          await c.query(
-            `delete from payments.payment_adjustments
-              where provider_payment_id in (select id from payments.provider_payments where intent_id = $1::uuid)`,
-            [made.intent],
-          );
-          await c.query('commit');
-        } catch (error) {
-          await c.query('rollback');
-          throw error;
-        } finally {
-          c.release();
-        }
+        await removeAdjustmentsOf(made.intent);
       }
     });
   });
