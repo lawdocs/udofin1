@@ -939,6 +939,48 @@ describe('logs', () => {
     }
   });
 
+  it('does not write the token for requests that miss the route (trailing slash, wrong method, extra path)', async () => {
+    const { instance, lines } = await loggedApp(new FakeProcessor(), () => IP_KEY);
+    const address = '203.0.113.98';
+    const responses = [
+      await instance.inject({
+        method: 'POST',
+        url: `/v1/hooks/provider/${TOKEN}/`,
+        headers: { 'content-type': 'application/json' },
+        payload: '{}',
+        remoteAddress: address,
+      }),
+      await instance.inject({
+        method: 'GET',
+        url: `/v1/hooks/provider/${TOKEN}`,
+        remoteAddress: address,
+      }),
+      await instance.inject({
+        method: 'POST',
+        url: `/v1/hooks/provider/${TOKEN}/extra/path`,
+        headers: { 'content-type': 'application/json' },
+        payload: '{}',
+        remoteAddress: address,
+      }),
+      await instance.inject({
+        method: 'POST',
+        url: `/v1/hooks/provider/${'a'.repeat(120)}`,
+        headers: { 'content-type': 'application/json' },
+        payload: '{}',
+        remoteAddress: address,
+      }),
+    ];
+    // All of them answer alike and fixed, and none of them is a processed delivery.
+    for (const res of responses) {
+      expect(res.statusCode).toBe(404);
+      expect(res.body).not.toContain(TOKEN);
+    }
+    const log = lines.join('\n');
+    expect(log).not.toContain(TOKEN);
+    expect(log).not.toContain('a'.repeat(120));
+    expect(log).not.toContain(address);
+  });
+
   it('control: a route without the suppression writes request lines, so their absence for the receiver is meaningful', async () => {
     const { instance, lines } = await loggedApp(new FakeProcessor(), () => IP_KEY);
     await instance.inject({

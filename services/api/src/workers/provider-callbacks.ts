@@ -226,10 +226,11 @@ export function describeVerification(verification: WebhookVerification): {
 // Answers
 // ---------------------------------------------------------------------------------------------------------
 
-type ProblemStatus = 401 | 409 | 422 | 429 | 503;
+type ProblemStatus = 401 | 404 | 409 | 422 | 429 | 503;
 const PROBLEMS: Readonly<Record<ProblemStatus, { readonly title: string; readonly code: string }>> =
   {
     401: { title: 'Unauthorized', code: 'invalid_signature' },
+    404: { title: 'Not Found', code: 'not_found' },
     409: { title: 'Conflict', code: 'unmatched' },
     422: { title: 'Unprocessable Entity', code: 'invalid_event' },
     429: { title: 'Too Many Requests', code: 'rate_limited' },
@@ -316,6 +317,8 @@ function spendVerificationEffort(
   headers: WebhookHeaders,
 ): void {
   if (raw.length > SCHEME_BODY_BYTES) return;
+  // The real verifier also hashes the body for its result; do the same here so the two paths cost the same.
+  void createHash('sha256').update(raw).digest();
   const id = headers['webhook-id'] ?? '';
   const timestamp = headers['webhook-timestamp'] ?? '';
   const mac = createHmac('sha256', decoyKey)
@@ -500,6 +503,18 @@ export function registerProviderHooks(app: FastifyInstance, deps: ProviderHookDe
         }
         return sendProblem(reply, status, request.id);
       },
+    );
+
+    // Everything else under the prefix (a trailing slash, another method, an extra path segment, an over-long token) answers one
+    // fixed 404 and is logged at warn level only. Without this the framework's own "route not found" handling would write the
+    // URL, and therefore a real token, into the info-level request line, and echo it in the response.
+    scope.all(
+      '/v1/hooks/provider/*',
+      {
+        logLevel: 'warn',
+        config: { rateLimit: { max: limits.perAddressPerMinute, timeWindow: '1 minute' } },
+      },
+      (request, reply) => sendProblem(reply, 404, request.id),
     );
     done();
   });
