@@ -1195,13 +1195,24 @@ describe.skipIf(!enabled)('lender servicing over HTTP', () => {
       expect(status).toBe('active');
     });
 
-    it('answers feature_disabled while the servicing_sync switch is off', async () => {
-      const res = await post('/v1/lender/lms-connection', ids.cOp, {
-        lenderId: ids.lenderC,
-        kind: 'file_import',
-        status: 'active',
-      });
-      expect([res.statusCode, code(res)]).toEqual([409, 'feature_disabled']);
+    it('answers feature_disabled for every kind but file_import and manual while the servicing_sync switch is off (A42)', async () => {
+      // A file_import or manual connection is recorded before the switch is on (the switch needs one): see the kill-switch test,
+      // which does it for a lender whose switch is off. Every other kind stays behind the switch.
+      for (const body of [
+        { kind: 'mock', status: 'active' },
+        { kind: 'finbyx', status: 'blocked_unverified' },
+        { kind: 'generic_rest', status: 'blocked_unverified' },
+      ]) {
+        const res = await post('/v1/lender/lms-connection', ids.cOp, {
+          lenderId: ids.lenderC,
+          ...body,
+        });
+        expect([body.kind, res.statusCode, code(res)]).toEqual([
+          body.kind,
+          409,
+          'feature_disabled',
+        ]);
+      }
       const kind = await scalar<string>(
         'select kind as v from servicing.lms_connections where lender_org_id = $1',
         [ids.lenderC],
@@ -3494,8 +3505,30 @@ describe.skipIf(!enabled)('lender servicing over HTTP', () => {
         totalMinor: 4,
       });
       expect([quote.statusCode, code(quote)]).toEqual([409, 'feature_disabled']);
+      // A42: the file_import connection is configuration (it sends nothing and stores no loan data) and is recorded while the
+      // switch is off, because the switch cannot be turned on again without one. Every other kind stays behind the switch.
       const connection = await post('/v1/lender/lms-connection', ids.dOp, connect);
-      expect([connection.statusCode, code(connection)]).toEqual([409, 'feature_disabled']);
+      expect(connection.statusCode).toBe(200);
+      expect(
+        await scalar<string>(
+          `select count(*)::text as v from audit.events where action = 'servicing.connection.set' and entity_id = $1`,
+          [connection.json<{ id: string }>().id],
+        ),
+      ).not.toBe('0');
+      for (const other of [
+        { kind: 'mock', status: 'active' },
+        { kind: 'finbyx', status: 'blocked_unverified' },
+      ]) {
+        const refused = await post('/v1/lender/lms-connection', ids.dOp, {
+          lenderId: ids.lenderD,
+          ...other,
+        });
+        expect([other.kind, refused.statusCode, code(refused)]).toEqual([
+          other.kind,
+          409,
+          'feature_disabled',
+        ]);
+      }
       const commit = await post(`/v1/lender/imports/${batchId}/commit`, ids.dOp, {});
       expect([commit.statusCode, code(commit)]).toEqual([409, 'feature_disabled']);
       const reject = await post(`/v1/lender/imports/${batchId}/reject`, ids.dOp, {
