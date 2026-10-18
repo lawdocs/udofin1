@@ -2098,9 +2098,20 @@ describe('Features (read only)', () => {
   it('says the switches are read-only and only the platform team changes them', () => {
     const { container } = view();
     expect(text(container)).toMatch(/These switches are read-only/);
-    expect(text(container)).toMatch(
-      /Only the platform team can change them, and it takes two people/,
+    expect(text(container)).toMatch(/Only the platform team can change them/);
+  });
+
+  it('says what is true about people: two to switch on, one may switch off in an emergency', () => {
+    const { container } = view();
+    const words = text(container);
+    expect(words).toMatch(/Switching a feature on takes two platform people/);
+    expect(words).toMatch(
+      /The platform team can switch a feature off with one person, at once, in an emergency/,
     );
+    expect(words).toMatch(/switching it on again then needs a new two-person request/);
+    expect(words).toMatch(/Every change is kept in the platform’s history/);
+    // The old sentence told lenders that no feature can be removed without a second person.
+    expect(words).not.toMatch(/it takes two people/);
   });
 
   it('has no write form for anybody', () => {
