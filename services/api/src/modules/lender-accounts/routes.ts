@@ -1206,7 +1206,7 @@ export function lenderAccountsRoutes(deps: LenderAccountsDeps = {}): RouteDefini
       operationId: 'claimMerchant',
       summary: "Claim the lender's merchant identifier at a provider (payment.configure, aal2)",
       description:
-        'A claim starts unverified: the platform confirms against evidence that the identifier belongs to the lender. An identifier already claimed by anyone else (including Udofin) is refused.',
+        'A claim starts unverified: the platform confirms against evidence that the identifier belongs to the lender. An identifier already claimed by anyone else (including Udofin) is refused (merchant_already_claimed). Claiming an identifier the lender claimed before returns that claim with the status it has now: if the platform has revoked it the status is revoked, and a revoked identifier stays taken (it cannot be used in a payment configuration).',
       tags: ['Lender payments'],
       auth: 'staff',
       idempotent: true,
@@ -1221,7 +1221,15 @@ export function lenderAccountsRoutes(deps: LenderAccountsDeps = {}): RouteDefini
           body.provider,
           body.merchantRef,
         ]);
-        return { status: 201, body: out(MerchantClaimed, { id, status: 'active' }) };
+        // For a repeat claim the function returns the lender's existing row whatever its state (a claim the platform revoked
+        // stays taken), so the status is read from the row, never assumed: the answer must not say 'active' for a revoked claim.
+        const stored = await tx.query<{ status: string }>(
+          'select m.status from payments.merchant_registry m where m.id = $1::uuid and m.owner_org_id = $2::uuid',
+          [id, body.lenderId],
+        );
+        const status = stored.rows[0]?.status;
+        if (status === undefined) throw new ApiError(403, 'forbidden', 'Forbidden');
+        return { status: 201, body: out(MerchantClaimed, { id, status }) };
       },
     }),
     userRoute({
@@ -1273,7 +1281,7 @@ export function lenderAccountsRoutes(deps: LenderAccountsDeps = {}): RouteDefini
       summary:
         "Ask for one of the lender's own settlement accounts to be set up (payment.configure, aal2)",
       description:
-        'Label, bank and MASKED reference only. The account starts unverified and can be used for a payment only after a platform user links it to a verified registry entry with the same masked reference. A full account number is never accepted here.',
+        'Label, bank and MASKED reference only. The masked reference is exactly XXXXXX and the last four digits, the form the registry holds and the only one that can be linked. The account starts unverified and can be used for a payment only after a platform user links it to a verified registry entry with the same masked reference. A full account number is never accepted here, in any field. The same request again returns the existing account with the status it has now (it may be verified or revoked, not only unverified); the answer needs payment.read as well, because it reports the stored status.',
       tags: ['Lender payments'],
       auth: 'staff',
       idempotent: true,
@@ -1288,7 +1296,17 @@ export function lenderAccountsRoutes(deps: LenderAccountsDeps = {}): RouteDefini
           'select payments.request_settlement_account($1::uuid, $2, $3, $4) as r',
           [body.lenderId, body.label, body.bankName, body.maskedRef],
         );
-        return { status: 201, body: out(SettlementAccountRequested, { id, status: 'unverified' }) };
+        // The function returns the id of the row it created or, for a repeat request, of the row that already exists in any
+        // state. Say what the row says. A caller who cannot read the row (payment.read) cannot be told its state, and is
+        // refused rather than told a status the API did not see (throwing rolls the request back).
+        const stored = await tx.query<{ status: string }>(
+          `select s.status::text as status from tenancy.lender_settlement_accounts s
+            where s.id = $1::uuid and s.lender_org_id = $2::uuid`,
+          [id, body.lenderId],
+        );
+        const row = stored.rows[0];
+        if (!row) throw new ApiError(403, 'forbidden', 'Forbidden');
+        return { status: 201, body: out(SettlementAccountRequested, { id, status: row.status }) };
       },
     }),
     userRoute({

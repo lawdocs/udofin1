@@ -317,18 +317,39 @@ export const SettlementAccountQuery = z.strictObject({
 export const SettlementAccountPage = pageOf(SettlementAccountForLinking);
 
 /**
+ * The masked reference of an account as the registry writes it: exactly six capital X and the last four digits. The registry
+ * (`account-fingerprint.ts`) produces no other form, and linking a settlement account to a registry entry compares the two
+ * references as whole strings, so a reference in any other shape (fewer X, a `*`, two or three digits) could never be linked.
+ * The database's own check is looser (`^[X*]{2,}[0-9]{2,4}$`); the contract takes only what can be matched.
+ */
+export const CanonicalMaskedRef = z.string().regex(/^XXXXXX[0-9]{4}$/);
+
+/**
  * A lender asks for one of its own settlement accounts to be set up. Masked reference only: a full account number is refused by the
- * shape (letters X or * and at most four digits) and by the database. The account stays unverified until the platform links it.
+ * shape (exactly `XXXXXX` and the last four digits), in the label and the bank name by the same personal-number check as every
+ * other free-text field here (nine or more digits once spaces and hyphens are removed, or a PAN-shaped token), and by the database.
+ * The account stays unverified until the platform links it.
  */
 export const SettlementAccountRequestInput = z.strictObject({
   lenderId: z.uuid(),
-  label: z.string().trim().min(2).max(80),
-  bankName: z.string().trim().min(2).max(120),
-  maskedRef: z.string().regex(/^[X*]{2,}[0-9]{2,4}$/),
+  label: z
+    .string()
+    .trim()
+    .min(2)
+    .max(80)
+    .refine((text) => !looksPersonal(text), { message: 'unsafe_free_text' }),
+  bankName: z
+    .string()
+    .trim()
+    .min(2)
+    .max(120)
+    .refine((text) => !looksPersonal(text), { message: 'unsafe_free_text' }),
+  maskedRef: CanonicalMaskedRef,
 });
+/** The answer carries the status stored on the row: a repeat request returns the existing row, whatever its state. */
 export const SettlementAccountRequested = z.object({
   id: z.uuid(),
-  status: z.literal('unverified'),
+  status: z.enum(['unverified', 'verified', 'revoked']),
 });
 export const LenderSettlementAccountQuery = z.strictObject({
   ...PageFields,
@@ -342,7 +363,8 @@ export const MerchantClaimInput = z.strictObject({
   provider: AccountsProviderKey,
   merchantRef: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{2,99}$/),
 });
-export const MerchantClaimed = z.object({ id: z.uuid(), status: z.literal('active') });
+/** The status stored on the claim: a repeat claim returns the lender's existing claim, which may have been revoked since. */
+export const MerchantClaimed = z.object({ id: z.uuid(), status: z.enum(['active', 'revoked']) });
 export const MerchantEntry = z.object({
   id: z.uuid(),
   provider: z.string(),

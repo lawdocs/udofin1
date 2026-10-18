@@ -14,6 +14,7 @@ import {
   PaymentConfigDraftInput,
   PaymentConfigRailLimits,
   RegistryAccountRegisterInput,
+  SettlementAccountRequestInput,
 } from '@udofin/contracts';
 import { describe, expect, it } from 'vitest';
 import { requestFingerprint } from '../src/idempotency/idempotency.js';
@@ -167,6 +168,68 @@ describe('request shapes', () => {
       'x'.repeat(1001),
     ]) {
       expect(AccountsReason.safeParse(text).success, text.slice(0, 30)).toBe(false);
+    }
+  });
+
+  it('takes a settlement account request with the registry form of the masked reference only (A15)', () => {
+    const request = {
+      lenderId: '0198f3a0-0000-7000-8000-000000000001',
+      label: 'Collections account',
+      bankName: 'Sample Bank',
+      maskedRef: 'XXXXXX1234',
+    };
+    expect(SettlementAccountRequestInput.safeParse(request).success).toBe(true);
+    for (const maskedRef of [
+      'XXXX1234',
+      '******1234',
+      'XXXXXX34',
+      'XXXXXX123',
+      'XXXXXX12345',
+      'XXXXXXX1234',
+      'xxxxxx1234',
+      'XXXXXX123A',
+      ' XXXXXX1234',
+      'XXXXXX1234\n',
+    ])
+      expect(
+        SettlementAccountRequestInput.safeParse({ ...request, maskedRef }).success,
+        maskedRef,
+      ).toBe(false);
+  });
+
+  it('keeps a full account number out of the settlement account label and bank name, however it is spaced (A16)', () => {
+    const request = {
+      lenderId: '0198f3a0-0000-7000-8000-000000000001',
+      label: 'Collections account',
+      bankName: 'Sample Bank',
+      maskedRef: 'XXXXXX1234',
+    };
+    for (const text of [
+      'SBI 5010 0123 4567 89',
+      'Account 5010-0123-4567-89',
+      'Collections 1234 5678 9012 3456',
+      '  5010 0123 4567  ',
+      'Holder ABCDE1234F',
+    ]) {
+      expect(
+        SettlementAccountRequestInput.safeParse({ ...request, label: text }).success,
+        text,
+      ).toBe(false);
+      expect(
+        SettlementAccountRequestInput.safeParse({ ...request, bankName: text }).success,
+        text,
+      ).toBe(false);
+    }
+    // Short digit groups are not an account number.
+    for (const text of [
+      'Collections 2026-27 account 01',
+      'Branch 0042 collections',
+      'Sample Bank 2',
+    ]) {
+      expect(
+        SettlementAccountRequestInput.safeParse({ ...request, label: text }).success,
+        text,
+      ).toBe(true);
     }
   });
 

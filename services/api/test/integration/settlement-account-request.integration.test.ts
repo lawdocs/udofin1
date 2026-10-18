@@ -312,5 +312,98 @@ describe.skipIf(!enabled)(
         .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '');
       expect(withoutIds).not.toMatch(/[0-9]{9,}/);
     });
+
+    it('takes only the masked reference the registry writes: XXXXXX and four digits (A15)', async () => {
+      const before = await q('select 1 from tenancy.lender_settlement_accounts');
+      // Each of these has the database's looser shape, but none can ever be linked to a registry entry.
+      for (const maskedRef of [
+        'XXXX1234',
+        '******1234',
+        'XXXXXX34',
+        'XXXXXX123',
+        'XXXXXXX1234',
+        'XXXXXX12345',
+        'xxxxxx1234',
+        'XX**XX1234',
+      ]) {
+        const res = await call(
+          'POST',
+          '/v1/lender/settlement-accounts',
+          ids.maker,
+          body({ maskedRef }),
+        );
+        expect([maskedRef, res.statusCode, code(res)]).toEqual([
+          maskedRef,
+          422,
+          'validation_failed',
+        ]);
+      }
+      expect(await q('select 1 from tenancy.lender_settlement_accounts')).toHaveLength(
+        before.length,
+      );
+      const ok = await call(
+        'POST',
+        '/v1/lender/settlement-accounts',
+        ids.maker,
+        body({ maskedRef: 'XXXXXX0426', label: 'SAMPLE canonical account' }),
+      );
+      expect(ok.statusCode, ok.body).toBe(201);
+    });
+
+    it('refuses a full account number written with spaces or hyphens in the label or the bank name (A16)', async () => {
+      const before = await q('select 1 from tenancy.lender_settlement_accounts');
+      for (const over of [
+        { label: 'SBI 5010 0123 4567 89' },
+        { label: 'Collections 1234 5678 9012 3456' },
+        { label: 'Account 5010-0123-4567-89' },
+        { bankName: 'Example Bank A/c 0012-3456-7890-1234' },
+        { bankName: 'Sample Bank 5010 0123 4567' },
+        { label: 'PAN ABCDE1234F holder' },
+      ]) {
+        const res = await call('POST', '/v1/lender/settlement-accounts', ids.maker, body(over));
+        expect([JSON.stringify(over), res.statusCode, code(res)]).toEqual([
+          JSON.stringify(over),
+          422,
+          'validation_failed',
+        ]);
+        for (const piece of ['5010', '1234', '0012', 'ABCDE'])
+          expect(res.body, JSON.stringify(over)).not.toContain(piece);
+      }
+      expect(await q('select 1 from tenancy.lender_settlement_accounts')).toHaveLength(
+        before.length,
+      );
+      // Short digit groups that are not an account number stay allowed.
+      const fine = await call(
+        'POST',
+        '/v1/lender/settlement-accounts',
+        ids.maker,
+        body({ label: 'Collections 2026-27 account 01', maskedRef: 'XXXXXX0427' }),
+      );
+      expect(fine.statusCode, fine.body).toBe(201);
+    });
+
+    it('answers a repeat request with the status the account has now, not a fresh unverified one (A15)', async () => {
+      const first = await call(
+        'POST',
+        '/v1/lender/settlement-accounts',
+        ids.maker,
+        body({ maskedRef: 'XXXXXX0428', label: 'SAMPLE account to revoke' }),
+      );
+      expect(first.statusCode, first.body).toBe(201);
+      const account = first.json<{ id: string; status: string }>();
+      expect(account.status).toBe('unverified');
+      await q(
+        "update tenancy.lender_settlement_accounts set status = 'revoked' where id = $1::uuid",
+        [account.id],
+      );
+      const again = await call(
+        'POST',
+        '/v1/lender/settlement-accounts',
+        ids.maker,
+        body({ maskedRef: 'XXXXXX0428', label: 'SAMPLE account to revoke' }),
+      );
+      expect(again.statusCode, again.body).toBe(201);
+      expect(again.json()).toEqual({ id: account.id, status: 'revoked' });
+    });
   },
 );

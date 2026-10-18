@@ -1407,7 +1407,9 @@ describe.skipIf(!enabled)(
           provider: 'testpay',
           merchantRef: 'MER-BETA-0001',
         });
+        // The repeat claim returns the lender's own revoked claim: it must say so, never 'active' (A19).
         expect(reclaim.statusCode).toBe(201);
+        expect(reclaim.json()).toEqual({ id: state.merchantB, status: 'revoked' });
         expect(
           (
             await post(`/v1/platform/merchants/${state.merchantB}/revoke`, ids.l1, {
