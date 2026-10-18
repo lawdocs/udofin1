@@ -64,7 +64,12 @@ let nextAddress = 1;
 const freshAddress = () => `10.12.${(nextAddress >> 8) & 255}.${nextAddress++ & 255}`;
 
 /** Makes every reference of this run unique, so a re-run on a database that was not reset cannot collide. */
-const RUN = randomUUID().slice(0, 8).toUpperCase();
+const RUN = randomUUID()
+  .replace(/-/g, '')
+  .slice(0, 8)
+  .toUpperCase()
+  // Letters only: a run id with digits could form a PAN-shaped or number-shaped reference that the importer refuses.
+  .replace(/[0-9]/g, (digit) => 'GHIJKLMNOP'.charAt(Number(digit)));
 
 // Values that must never come back in a response, an audit record or a log line. They are planted where a careless layer could
 // echo them: the borrower's phone number, an account-number-shaped reference inside an import file, the name of a secret, a
