@@ -37,6 +37,14 @@ import { type SystemPool } from '../system/pool.js';
  * answer. The real reason is a receipt in `payments.webhook_receipts`, and for our own configuration gaps a reason CLASS in the
  * server log.
  *
+ * Rate limits, and why they are split. A limit that unauthenticated requests can spend is a lock anyone who has seen the URL can
+ * turn on the real sender (the URL is in the provider's dashboard and in access logs). So: the per-address limit is the only one
+ * charged before anything is known; deliveries that FAIL verification spend a failure budget kept per (token hash, address), so
+ * junk from one address never counts against another's, and a flood from many addresses is bounded by the per-address limit and
+ * by what the database stores; deliveries that VERIFY spend a larger budget of their own per token, which only a valid signature
+ * can reach. The failure budget is keyed by the hash of whatever token was sent, so a known token and an unknown one are counted
+ * and answered alike (401 until the budget is spent, then 429) and the limits reveal nothing about which tokens exist.
+ *
  * Nothing sensitive is logged: never a body, header, token, signature, address or payload. A log line carries the request id
  * (added by the logger) and a reason class. The route logs at warn level only, so the automatic "incoming request" line, which
  * contains the URL and therefore the token, is never written for it.
@@ -59,15 +67,26 @@ export interface ProviderHookDeps {
 }
 
 export interface ProviderHookLimits {
-  /** Per client address, on this route. */
+  /** Per client address, on this route. Charged by every request, before anything is known about it. */
   readonly perAddressPerMinute: number;
-  /** Per routing-token HASH (of whatever token was sent, valid or not), so a known token gets no different treatment. */
+  /**
+   * Deliveries that FAILED verification (an unknown or malformed token, a missing or wrong signature, an old timestamp), per routing
+   * token hash AND client address. This is all that unauthenticated traffic can spend: it is counted separately for each address and
+   * is never charged to the budget of the genuine sender. The key is the hash of whatever token was sent, valid or not, so a known
+   * token behaves exactly like an unknown one.
+   */
+  readonly failuresPerMinute: number;
+  /**
+   * Deliveries that were VERIFIED, per routing token hash: a budget of their own, larger than the failure budget, which only a
+   * valid signature can use. Garbage traffic, from any number of addresses, cannot reach it.
+   */
   readonly perTokenPerMinute: number;
 }
 
 export const PROVIDER_HOOK_DEFAULT_LIMITS: ProviderHookLimits = {
   perAddressPerMinute: 300,
-  perTokenPerMinute: 120,
+  failuresPerMinute: 30,
+  perTokenPerMinute: 600,
 };
 
 /** Name of the server secret that keys the address hash. */
@@ -336,7 +355,12 @@ export function registerProviderHooks(app: FastifyInstance, deps: ProviderHookDe
   const processor = deps.processor ?? createProviderHookProcessor(deps.pool);
   const clock = deps.now ?? (() => new Date());
   const limits = { ...PROVIDER_HOOK_DEFAULT_LIMITS, ...deps.limits };
-  const tokenLimiter = new FixedWindowLimiter(limits.perTokenPerMinute, 60_000, () =>
+  // Two budgets, kept apart on purpose. Failures are counted per (token hash, address); verified deliveries per token hash. A
+  // limit charged by unauthenticated requests would let anyone who has seen a callback URL lock the real provider out of it.
+  const failureLimiter = new FixedWindowLimiter(limits.failuresPerMinute, 60_000, () =>
+    clock().getTime(),
+  );
+  const verifiedLimiter = new FixedWindowLimiter(limits.perTokenPerMinute, 60_000, () =>
     clock().getTime(),
   );
 
@@ -358,17 +382,8 @@ export function registerProviderHooks(app: FastifyInstance, deps: ProviderHookDe
         bodyLimit: PROVIDER_HOOK_BODY_LIMIT,
         // Only warnings and errors are logged for this route: the automatic request lines carry the URL, which holds the token.
         logLevel: 'warn',
+        // Before anything is known about the request only the per-address limit applies.
         config: { rateLimit: { max: limits.perAddressPerMinute, timeWindow: '1 minute' } },
-        onRequest: (request, reply, next) => {
-          const given = (request.params as { endpointToken?: unknown }).endpointToken;
-          const key = hashEndpointToken(typeof given === 'string' ? given.slice(0, 200) : '');
-          if (!tokenLimiter.allow(key)) {
-            reply.header('retry-after', '60');
-            sendProblem(reply, 429, request.id);
-            return;
-          }
-          next();
-        },
       },
       async (request, reply) => {
         const refuse = (): FastifyReply => sendProblem(reply, 401, request.id);
@@ -384,12 +399,25 @@ export function registerProviderHooks(app: FastifyInstance, deps: ProviderHookDe
         const raw = bodyBytes(request.body);
         const headers = stringHeaders(request);
         const given = (request.params as { endpointToken?: unknown }).endpointToken;
+        const ipHmac = addressHmac(ipKey, request.ip);
+        /**
+         * A delivery that failed verification: the uniform 401, unless this address has already failed this many times for this
+         * token this minute, then 429 (and nothing is stored). The key is the hash of whatever token was sent, so a valid token and
+         * an invalid one are counted and answered alike; a valid signature never gets here.
+         */
+        const refuseFailed = (): FastifyReply => {
+          const key = `${hashEndpointToken(typeof given === 'string' ? given.slice(0, 200) : '')}:${ipHmac}`;
+          if (!failureLimiter.allow(key)) {
+            reply.header('retry-after', '60');
+            return sendProblem(reply, 429, request.id);
+          }
+          return refuse();
+        };
         if (!isEndpointTokenShape(given)) {
           spendVerificationEffort(decoyKey, raw, headers);
-          return refuse();
+          return refuseFailed();
         }
         const tokenHash = hashEndpointToken(given);
-        const ipHmac = addressHmac(ipKey, request.ip);
 
         let config: ProviderHookConfig | null;
         try {
@@ -484,6 +512,19 @@ export function registerProviderHooks(app: FastifyInstance, deps: ProviderHookDe
               }
             }
           }
+        }
+
+        // The budgets. A failed delivery spends the failure budget of this address (and is stored as a receipt only while it lasts);
+        // a verified one spends the token's own verified budget, which no unauthenticated request can touch.
+        if (delivery.outcome !== 'verified') {
+          const key = `${tokenHash}:${ipHmac}`;
+          if (!failureLimiter.allow(key)) {
+            reply.header('retry-after', '60');
+            return sendProblem(reply, 429, request.id);
+          }
+        } else if (!verifiedLimiter.allow(tokenHash)) {
+          reply.header('retry-after', '60');
+          return sendProblem(reply, 429, request.id);
         }
 
         let answer: IngestAnswer;
