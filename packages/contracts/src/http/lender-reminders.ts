@@ -311,6 +311,17 @@ export type LrHold = z.infer<typeof LrHold>;
 export const LrHoldPage = Page(LrHold);
 
 /**
+ * The free-text note of a hold (placing or releasing). The database holds it to 10 to 200 characters: the function allows 10 to
+ * 800 (`private.reminder_text_ok`) but the table check (`communication_holds.note`, `release_note`) allows at most 200, so 200 is
+ * the limit that is true today. A longer note is refused here as 422 validation_failed instead of failing in the table as a
+ * 23514 that the API would have to report as a conflict. Whether the text is acceptable (no link, number or personal data) is the
+ * database's decision (`hold_invalid`, `unsafe_free_text`).
+ */
+export const LR_HOLD_NOTE_MIN = 10;
+export const LR_HOLD_NOTE_MAX = 200;
+const HoldNote = z.string().min(LR_HOLD_NOTE_MIN).max(LR_HOLD_NOTE_MAX);
+
+/**
  * Places a hold on one loan. `lenderId` is optional: the loan decides the lender. When it is sent it is an assertion that
  * the loan belongs to that lender (a mismatch answers 404, as does a loan the caller cannot see); the caller needs
  * `loan.read` for the assertion to be checkable.
@@ -318,11 +329,11 @@ export const LrHoldPage = Page(LrHold);
 export const LrHoldPlaceInput = z.strictObject({
   lenderId: Id.optional(),
   reason: z.enum(LR_HOLD_REASONS),
-  note: z.string().min(1).max(1000).optional(),
+  note: HoldNote.optional(),
 });
 export type LrHoldPlaceInput = z.infer<typeof LrHoldPlaceInput>;
 export const LrHoldReleaseInput = z.strictObject({
-  note: z.string().min(1).max(1000).optional(),
+  note: HoldNote.optional(),
 });
 export type LrHoldReleaseInput = z.infer<typeof LrHoldReleaseInput>;
 

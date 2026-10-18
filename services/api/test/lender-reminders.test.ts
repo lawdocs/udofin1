@@ -8,7 +8,10 @@ import {
   LR_LIVE_CHANNELS,
   LR_SUPPRESS_REASONS,
   LR_TEMPLATE_VARIABLES,
+  LR_HOLD_NOTE_MAX,
+  LR_HOLD_NOTE_MIN,
   LrHoldPlaceInput,
+  LrHoldReleaseInput,
   LrOverdueReminders,
   LrPenalTextDraftInput,
   LrPolicyDraftInput,
@@ -155,6 +158,25 @@ describe('lender reminder contracts', () => {
     ).toBe(true);
     expect(LrHoldPlaceInput.safeParse({ reason: 'bored' }).success).toBe(false);
     expect(LrHoldPlaceInput.safeParse({ reason: 'legal', loan: LENDER }).success).toBe(false);
+  });
+
+  it('holds a hold note to the 10 to 200 characters the database accepts, for placing and for releasing (A11)', () => {
+    expect([LR_HOLD_NOTE_MIN, LR_HOLD_NOTE_MAX]).toEqual([10, 200]);
+    for (const length of [10, 200]) {
+      const note = 'a'.repeat(length);
+      expect(LrHoldPlaceInput.safeParse({ reason: 'legal', note }).success, `place ${length}`).toBe(
+        true,
+      );
+      expect(LrHoldReleaseInput.safeParse({ note }).success, `release ${length}`).toBe(true);
+    }
+    for (const length of [0, 1, 9, 201, 1000]) {
+      const note = 'a'.repeat(length);
+      expect(LrHoldPlaceInput.safeParse({ reason: 'legal', note }).success, `place ${length}`).toBe(
+        false,
+      );
+      expect(LrHoldReleaseInput.safeParse({ note }).success, `release ${length}`).toBe(false);
+    }
+    expect(LrHoldReleaseInput.safeParse({}).success).toBe(true);
   });
 
   it('filters reminders by closed lists and times only, with a bounded page', () => {

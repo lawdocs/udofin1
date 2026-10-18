@@ -27,9 +27,12 @@ import {
   createPeriodicJobs,
   DEBIT_LOOKAHEAD_DAYS,
   DEBIT_LOOKBACK_DAYS,
+  DEBIT_LOOKUPS_PER_RUN,
   errorFields,
   INTENT_HOLD_LIMIT_SECONDS,
   istNow,
+  MANDATE_LOOKUPS_PER_RUN,
+  MANDATE_POLLING_BUDGET_MS,
   noticeOutcomeOf,
   reminderRecordOf,
   sendOnChannel,
@@ -1099,18 +1102,159 @@ describe('mandates', () => {
     expect(lines.join('\n')).toContain('"sqlstate":"22023"');
   });
 
-  it('runs sweep, closed-loan cancellation, debit planning and notices in order, each isolated', async () => {
+  it('runs sweep, closed-loan cancellation, debit planning and notices BEFORE the provider polling, each isolated (A26)', async () => {
     const store = fakeStore({ sweepMandates: () => Promise.reject(new Error('x')) });
     const { instance } = jobs({ store });
     await instance.run('mandates');
     expect(store.calls.map((c) => c.name)).toEqual([
-      'mandatesNeedingLookup',
-      'activeMandates',
       'sweepMandates',
       'requestCancelForClosedLoans',
       'planMandateDebits',
       'claimPreDebitNotices',
+      'mandatesNeedingLookup',
+      'activeMandates',
     ]);
+  });
+
+  /** Mandates the way `activeMandates` lists them, numbered so a test can see which were asked about. */
+  const activeList = (count: number) =>
+    Array.from({ length: count }, (_, n) => ({
+      mandateId: ID(1000 + n),
+      lenderOrgId: LENDER,
+      configId: CONFIG,
+      providerMandateRef: `REF-${String(n)}`,
+    }));
+  const refNumber = (ref: string | null | undefined) => Number((ref ?? '').replace('REF-', ''));
+
+  it('asks about at most DEBIT_LOOKUPS_PER_RUN mandates per run and starts the next run with the ones it did not reach (A26)', async () => {
+    const asked: number[][] = [[]];
+    const mandate: MandateProviderPort = {
+      ...createMockMandateProvider('test'),
+      listDebitStatus: (_ctx, query) => {
+        asked.at(-1)?.push(refNumber(query.providerMandateRef));
+        return Promise.resolve({ outcome: 'ok', value: [] });
+      },
+    };
+    const total = DEBIT_LOOKUPS_PER_RUN + 5;
+    const store = fakeStore({ activeMandates: () => Promise.resolve(activeList(total)) });
+    const { instance, lines } = jobs({
+      store,
+      resolver: resolverOf({ mandate: { ok: true, value: portOf(mandate) } }),
+    });
+    await instance.run('mandates');
+    expect(asked[0]).toHaveLength(DEBIT_LOOKUPS_PER_RUN);
+    expect(asked[0]?.[0]).toBe(0);
+    expect(lines.join('\n')).toContain('"left_for_next_run":5');
+    asked.push([]);
+    await instance.run('mandates');
+    // The five that were not reached come first, then the rotation goes on from the start.
+    expect(asked[1]?.slice(0, 5)).toEqual([200, 201, 202, 203, 204]);
+    expect(asked[1]?.[5]).toBe(0);
+    expect(asked[1]).toHaveLength(DEBIT_LOOKUPS_PER_RUN);
+    // Over the two runs every mandate was asked about.
+    expect(new Set([...(asked[0] ?? []), ...(asked[1] ?? [])]).size).toBe(total);
+  });
+
+  it('stops polling when its time is up (a fake clock) and continues with the next mandate on the next run (A26)', async () => {
+    let now = new Date('2026-10-16T10:00:00.000Z').getTime();
+    const asked: number[][] = [[]];
+    const callMs = MANDATE_POLLING_BUDGET_MS / 2.5; // the third call ends past the budget
+    const mandate: MandateProviderPort = {
+      ...createMockMandateProvider('test'),
+      listDebitStatus: (_ctx, query) => {
+        asked.at(-1)?.push(refNumber(query.providerMandateRef));
+        now += callMs; // a slow provider
+        return Promise.resolve({ outcome: 'ok', value: [] });
+      },
+    };
+    const store = fakeStore({ activeMandates: () => Promise.resolve(activeList(7)) });
+    const { instance } = jobs({
+      store,
+      resolver: resolverOf({ mandate: { ok: true, value: portOf(mandate) } }),
+      options: { clock: () => new Date(now) },
+    });
+    await instance.run('mandates');
+    expect(asked[0]).toEqual([0, 1, 2]);
+    asked.push([]);
+    await instance.run('mandates');
+    expect(asked[1]).toEqual([3, 4, 5]);
+    asked.push([]);
+    await instance.run('mandates');
+    expect(asked[2]).toEqual([6, 0, 1]);
+  });
+
+  it('the pre-debit notices are claimed before any provider call, even when the polling uses up its time (A26)', async () => {
+    let now = new Date('2026-10-16T10:00:00.000Z').getTime();
+    const order: string[] = [];
+    const mandate: MandateProviderPort = {
+      ...createMockMandateProvider('test'),
+      listDebitStatus: () => {
+        order.push('provider');
+        now += MANDATE_POLLING_BUDGET_MS;
+        return Promise.resolve({ outcome: 'ok', value: [] });
+      },
+    };
+    const store = fakeStore({
+      activeMandates: () => Promise.resolve(activeList(3)),
+      claimPreDebitNotices: () => {
+        order.push('notices');
+        return Promise.resolve([]);
+      },
+    });
+    const { instance } = jobs({
+      store,
+      resolver: resolverOf({ mandate: { ok: true, value: portOf(mandate) } }),
+      options: { clock: () => new Date(now) },
+    });
+    await instance.run('mandates');
+    expect(order[0]).toBe('notices');
+    expect(order.filter((entry) => entry === 'provider')).toHaveLength(1);
+  });
+
+  it('a mandate the provider cannot find does not keep the newer ones out of the status lookups (A26)', async () => {
+    const candidates = Array.from({ length: MANDATE_LOOKUPS_PER_RUN + 50 }, (_, n) => ({
+      mandateId: ID(2000 + n),
+      lenderOrgId: LENDER,
+      configId: CONFIG,
+      providerMandateRef: `REF-${String(n)}` as string | undefined,
+      status: 'requires_reconciliation',
+    }));
+    const stuck = new Set(
+      candidates.slice(0, MANDATE_LOOKUPS_PER_RUN).map((c) => c.providerMandateRef),
+    );
+    const mandate: MandateProviderPort = {
+      ...createMockMandateProvider('test'),
+      getMandateStatus: (_ctx, query) =>
+        Promise.resolve(
+          stuck.has(query.providerMandateRef ?? undefined)
+            ? { outcome: 'not_found' }
+            : {
+                outcome: 'ok',
+                value: {
+                  source: 'provider_authenticated_lookup',
+                  providerMandateRef: query.providerMandateRef ?? 'x',
+                  rail: 'enach_api',
+                  status: 'active',
+                  maxAmountMinor: null,
+                  merchantRef: null,
+                  observedAt: '2026-10-16T01:02:03.000Z',
+                },
+              },
+        ),
+    };
+    // The database lists them by when they last changed: the same order every time, the stuck ones first.
+    const store = fakeStore({ mandatesNeedingLookup: () => Promise.resolve(candidates) });
+    const { instance } = jobs({
+      store,
+      resolver: resolverOf({ mandate: { ok: true, value: portOf(mandate) } }),
+    });
+    await instance.run('mandates');
+    expect(store.called('applyMandateLookup')).toHaveLength(0);
+    await instance.run('mandates');
+    const applied = store
+      .called('applyMandateLookup')
+      .map((a) => (a[0] as { mandateId: string }).mandateId);
+    expect(applied).toEqual(candidates.slice(MANDATE_LOOKUPS_PER_RUN).map((c) => c.mandateId));
   });
 
   it('sends each pre-debit notice through in_app and push with opaque ids only and records one state', async () => {
@@ -1125,30 +1269,74 @@ describe('mandates', () => {
     expect(store.called('recordPreDebitNotice')).toEqual([[ID(70), 'accepted', 'mock-notice-1']]);
   });
 
-  it('notice outcomes: accepted if any channel took it, not_configured only if none could carry it, otherwise failed (retry)', () => {
-    expect(noticeOutcomeOf([accepted, { state: 'not_configured' }])).toEqual({
+  const inApp = (result: ChannelSendResult) => ({ channel: 'in_app' as const, result });
+  const push = (result: ChannelSendResult) => ({ channel: 'push' as const, result });
+
+  it('notice outcomes: accepted only if a channel that reaches the borrower took it; the in-app inbox alone is not enough (A54)', () => {
+    // push is the channel that reaches the borrower.
+    expect(noticeOutcomeOf([inApp({ state: 'not_configured' }), push(accepted)])).toEqual({
       state: 'accepted',
       providerRef: null,
     });
     expect(
-      noticeOutcomeOf([{ state: 'failed', reason: 'invalid_request' }, accepted]),
+      noticeOutcomeOf([inApp({ state: 'failed', reason: 'invalid_request' }), push(accepted)]),
     ).toMatchObject({ state: 'accepted' });
-    expect(noticeOutcomeOf([{ state: 'not_configured' }, { state: 'not_configured' }])).toEqual({
+    expect(
+      noticeOutcomeOf([inApp(accepted), push({ state: 'accepted', providerRef: 'PUSH-REF-1' })]),
+    ).toEqual({ state: 'accepted', providerRef: 'PUSH-REF-1' });
+    // The in-app inbox accepts and writes nothing for a notice: with push not configured, nothing carried it. The database's word
+    // for that is not_configured (the notice stays late and the lender is told); it is never recorded as sent.
+    expect(noticeOutcomeOf([inApp(accepted), push({ state: 'not_configured' })])).toEqual({
       state: 'not_configured',
       providerRef: null,
     });
+    expect(noticeOutcomeOf([inApp(accepted)])).toEqual({
+      state: 'not_configured',
+      providerRef: null,
+    });
+    expect(noticeOutcomeOf([inApp({ state: 'accepted', providerRef: 'INBOX-REF-1' })])).toEqual({
+      state: 'not_configured',
+      providerRef: null,
+    });
+    // A push that failed or did not answer may work next time: released for a retry, whatever the inbox said.
     expect(
-      noticeOutcomeOf([
-        { state: 'failed', reason: 'invalid_request' },
-        { state: 'not_configured' },
-      ]),
+      noticeOutcomeOf([inApp(accepted), push({ state: 'failed', reason: 'invalid_request' })]),
     ).toEqual({ state: 'failed', providerRef: null });
     expect(
-      noticeOutcomeOf([{ state: 'unknown', reason: 'timeout' }, { state: 'not_configured' }]).state,
+      noticeOutcomeOf([inApp(accepted), push({ state: 'unknown', reason: 'timeout' })]).state,
     ).toBe('failed');
     expect(
-      noticeOutcomeOf([{ state: 'accepted', providerRef: 'https://x.invalid' }]).providerRef,
-    ).toBeNull();
+      noticeOutcomeOf([
+        inApp({ state: 'not_configured' }),
+        push({ state: 'accepted', providerRef: 'https://x.invalid' }),
+      ]),
+    ).toEqual({ state: 'accepted', providerRef: null });
+    // sms is never sent and never counts.
+    expect(
+      noticeOutcomeOf([{ channel: 'sms', result: accepted }, push({ state: 'not_configured' })])
+        .state,
+    ).toBe('not_configured');
+  });
+
+  it('with push not configured (staging, production) an accepted in-app message is NOT recorded as a notice that was sent (A54)', async () => {
+    const store = fakeStore({
+      claimPreDebitNotices: () => Promise.resolve([{ noticeId: ID(72), borrowerId: BORROWER }]),
+    });
+    const channels = channelsOf(accepted, { state: 'not_configured' });
+    const { instance, lines } = jobs({ store, channels });
+    await instance.run('mandates');
+    expect(store.called('recordPreDebitNotice')).toEqual([[ID(72), 'not_configured', null]]);
+    expect(lines.join('\n')).toContain('"not_configured":1');
+    expect(lines.join('\n')).toContain('"accepted":0');
+    // A push that failed is released for a retry, not recorded as late and not as sent.
+    const flaky = fakeStore({
+      claimPreDebitNotices: () => Promise.resolve([{ noticeId: ID(73), borrowerId: BORROWER }]),
+    });
+    await jobs({
+      store: flaky,
+      channels: channelsOf(accepted, { state: 'unknown', reason: 'timeout' }),
+    }).instance.run('mandates');
+    expect(flaky.called('recordPreDebitNotice')).toEqual([[ID(73), 'failed', null]]);
   });
 
   it('a notice no channel could carry is recorded as not_configured and the delivery is never claimed', async () => {

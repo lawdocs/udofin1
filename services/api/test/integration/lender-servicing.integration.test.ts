@@ -1463,6 +1463,71 @@ describe.skipIf(!enabled)('lender servicing over HTTP', () => {
       expect((await get('/v1/lender/imports/not-a-uuid', ids.aViewer)).statusCode).toBe(422);
     });
 
+    it('says what a row number counts: a row of your file for a refused file, a record position for a stored batch (A5)', async () => {
+      // File rows: 1 and 2 are identical (the importer keeps one), row 3 is a record no application matches. The database
+      // numbers the records it received, so the unmatched one is its record 2 although it is row 3 of the file.
+      const unmatched = rec('POS3', { appRef: `SAMPLE-NOAPP-POS3-${RUN}` });
+      const content = JSON.stringify([state.imp1, state.imp1, unmatched]);
+      const res = await stage(rotateOp(), { content });
+      expect(res.statusCode).toBe(201);
+      const outcome = out(res);
+      expect(outcome.batch).toMatchObject({ status: 'invalid', rowCount: 2 });
+      expect(outcome.errors).toEqual([
+        { rowNo: 2, outcome: 'quarantined', errorCodes: ['application_not_found'], fieldNames: [] },
+      ]);
+      expect(outcome.rowNumbering).toBe('record_position');
+      const detail = LsImportDetail.parse(
+        (await get(`/v1/lender/imports/${outcome.batch?.id ?? ''}`, ids.aViewer)).json(),
+      );
+      expect(detail.rowNumbering).toBe('record_position');
+      expect(detail.errors).toEqual(outcome.errors);
+      // A file the importer refuses is numbered by its own rows.
+      const refused = out(
+        await stage(rotateOp(), {
+          content: JSON.stringify([state.imp1, state.imp1, { ...state.imp2, status: 'nope' }]),
+        }),
+      );
+      expect(refused.batch).toBeNull();
+      expect(refused.errors.map((e) => e.rowNo)).toEqual([3]);
+      expect(refused.rowNumbering).toBe('file_row');
+    });
+
+    it('refuses a number that is not finite in rows instead of dropping the field, as it does for the same record sent as text (A8)', async () => {
+      const bad = JSON.stringify(rec('INF1')).replace(
+        '"penal_charges":"0.00"',
+        '"penal_charges":1e999',
+      );
+      expect(bad).toContain('1e999');
+      const asRows = await app.inject({
+        method: 'POST',
+        url: '/v1/lender/imports',
+        remoteAddress: freshAddress(),
+        headers: {
+          authorization: `Bearer test.${rotateOp()}.aal2`,
+          'idempotency-key': `it-${randomUUID()}`,
+          'content-type': 'application/json',
+        },
+        payload: `{"lenderId":"${A()}","kind":"loan","sourceKind":"file","formatVersion":"udofin-lms-import-v1","rows":[${bad}]}`,
+      });
+      seen.push(asRows.body);
+      expect(asRows.statusCode, asRows.body).toBe(200);
+      const outcome = out(asRows);
+      expect(outcome.batch).toBeNull();
+      expect(outcome.refusedFile).not.toBeNull();
+      expect(outcome.errors).toEqual([
+        {
+          rowNo: 1,
+          outcome: 'error',
+          errorCodes: ['invalid_amount'],
+          fieldNames: ['penal_charges'],
+        },
+      ]);
+      // The same record as text is refused the same way.
+      const asText = out(await stage(rotateOp(), { content: `[${bad}]` }));
+      expect(asText.errors).toEqual(outcome.errors);
+      expect(await loanExists(ref('INF1'))).toBe(false);
+    });
+
     it('takes the corrected file as a resubmission, previews it, and keeps the earlier batch untouched', async () => {
       const content = JSON.stringify([state.imp1, state.imp2]);
       const res = await stage(rotateOp(), { content, resubmissionOf: state.invalidBatch });
@@ -3291,6 +3356,56 @@ describe.skipIf(!enabled)('lender servicing over HTTP', () => {
         (await post(`/v1/lender/security-release/${randomUUID()}/confirm`, ids.aDocs, body))
           .statusCode,
       ).toBe(404);
+    });
+
+    it('answers 409 to the losing side of a confirmation that raced it, and to a delay reason that lost to it, never 500 (A7)', async () => {
+      const taskId = taskIds.demat_pledge ?? '';
+      const confirmUrl = `/v1/lender/security-release/${taskId}/confirm`;
+      const delayUrl = `/v1/lender/security-release/${taskId}/delay-reason`;
+      // The winner: a confirmation that has updated the task but not yet committed. The loser reads the task as open (the
+      // winner's change is not visible yet), passes the status check and then waits for the row lock.
+      const winner = await admin.connect();
+      try {
+        await winner.query('begin');
+        await winner.query(
+          `update servicing.security_release_tasks
+              set status = 'confirmed_by_lender', lender_confirmation_ref = $2, confirmed_by = $3, confirmed_at = clock_timestamp()
+            where id = $1`,
+          [taskId, `REL-${RUN}-WIN`, ids.aDocs],
+        );
+        const waiting = async (fn: string) => {
+          for (let n = 0; n < 100; n++) {
+            const r = await q<{ n: string }>(
+              `select count(*)::text as n from pg_stat_activity
+                where wait_event_type = 'Lock' and datname = current_database() and query like $1`,
+              [`%${fn}%`],
+            );
+            if (r[0]?.n !== '0') return;
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+          throw new Error(`${fn} never waited for the lock`);
+        };
+        const loserConfirm = post(confirmUrl, ids.aDocs2, { confirmationRef: `REL-${RUN}-LOSE` });
+        await waiting('confirm_security_release');
+        const loserDelay = post(delayUrl, ids.aDocs3, {
+          reason: 'The depository has not yet acknowledged the release request.',
+        });
+        await waiting('set_security_release_delay_reason');
+        await winner.query('commit');
+        for (const res of [await loserConfirm, await loserDelay]) {
+          expect([res.statusCode, code(res)]).toEqual([409, 'already_confirmed']);
+          expect(res.body).not.toContain('P0001');
+        }
+      } finally {
+        await winner.query('rollback').catch(() => undefined);
+        winner.release();
+      }
+      expect(
+        await scalar<string>(
+          `select lender_confirmation_ref as v from servicing.security_release_tasks where id = $1`,
+          [taskId],
+        ),
+      ).toBe(`REL-${RUN}-WIN`);
     });
 
     it('answers feature_disabled for a lender whose switch is off, when it has a task', async () => {

@@ -1873,6 +1873,21 @@ describe.skipIf(!enabled)('borrower servicing over HTTP', () => {
       expect(res.body).not.toContain(docs.stmt2?.key ?? 'x');
     });
 
+    it('serves the caller own document when the loan id in the path is written in upper case (A1), and still refuses another loan', async () => {
+      const own = docs.stmt2?.id ?? '';
+      const upper = `/v1/loans/${ls('A1').toUpperCase()}/documents/${own.toUpperCase()}/content`;
+      expect(upper).not.toBe(upper.toLowerCase());
+      const res = await get(upper, ids.b1);
+      expect(res.statusCode, res.body).toBe(200);
+      expect(SvcLoanDocumentContent.parse(res.json()).loanId).toBe(ls('A1'));
+      // Case folding must not widen access: another loan, written in upper case, is still not found.
+      const other = await get(
+        `/v1/loans/${ls('A2').toUpperCase()}/documents/${own}/content`,
+        ids.b1,
+      );
+      expect(problem(other)).toEqual([404, 'not_found']);
+    });
+
     it('opens nothing for another borrower, the wrong loan path, an unknown document or a switched-off lender, and records no access', async () => {
       const own = docs.stmt2?.id ?? '';
       const theirs = docs.ab2?.id ?? '';

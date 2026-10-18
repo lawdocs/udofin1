@@ -39,6 +39,19 @@ export class PermanentError extends Error {
   }
 }
 
+/**
+ * Throw from a handler when the work is not finished and a later attempt may finish it (a provider that did not answer, a
+ * reference that does not exist yet). The event backs off and runs again; after its last attempt it is dead. `code` is a closed
+ * lower-case word that is stored on the event and shown when it dies, so an operator can see WHAT was never delivered. Never put
+ * an identifier, a reference or a message in it.
+ */
+export class RetryableError extends Error {
+  override readonly name = 'RetryableError';
+  constructor(readonly code: string) {
+    super(code);
+  }
+}
+
 export interface HandlerDefinition {
   /** Validates the payload before the handler sees it. Invalid payloads are permanent failures. */
   schema: ZodType;
@@ -124,6 +137,14 @@ export class OutboxWorker {
     } catch (error) {
       if (error instanceof PermanentError) {
         return this.fail(event, ERROR_CODE.test(error.code) ? error.code : 'permanent_error', true);
+      }
+      if (error instanceof RetryableError) {
+        const code = ERROR_CODE.test(error.code) ? error.code : 'handler_error';
+        log.warn(
+          { ...fields, errorClass: error.name, errorCode: code },
+          'outbox handler will retry',
+        );
+        return this.fail(event, code, false);
       }
       // Log the error class only: messages can carry personal data from upstream systems.
       log.warn(

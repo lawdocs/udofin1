@@ -666,7 +666,11 @@ describe.skipIf(!enabled)('provider callback receiver over a real database', () 
       pool: receiverPool,
       secret: secretOf,
       environment: 'test',
-      limits: { perAddressPerMinute: 100_000, perTokenPerMinute: 100_000 },
+      limits: {
+        perAddressPerMinute: 100_000,
+        perTokenPerMinute: 100_000,
+        failuresPerMinute: 100_000,
+      },
     });
     await callbacks.ready();
   }, 120_000);
@@ -1170,7 +1174,11 @@ describe.skipIf(!enabled)('provider callback receiver over a real database', () 
         secret: secretOf,
         environment: 'test',
         processor: lax,
-        limits: { perTokenPerMinute: 100_000, perAddressPerMinute: 100_000 },
+        limits: {
+          perTokenPerMinute: 100_000,
+          perAddressPerMinute: 100_000,
+          failuresPerMinute: 100_000,
+        },
       });
       await lenient.ready();
       try {
@@ -1605,14 +1613,14 @@ describe.skipIf(!enabled)('provider callback receiver over a real database', () 
       expect(receipt?.source_ip_hmac).not.toBe(addressHmac(key, '198.51.100.250'));
     });
 
-    it('limits per routing-token hash and per address with a fixed 429 that writes no receipt', async () => {
+    it('limits failed deliveries per routing-token hash and address, and per address, with a fixed 429 that writes no receipt; a verified delivery is not locked out (A30)', async () => {
       const limited = Fastify();
       await limited.register(rateLimit, { global: true, max: 100_000, timeWindow: '1 minute' });
       registerProviderHooks(limited, {
         pool: receiverPool,
         secret: secretOf,
         environment: 'test',
-        limits: { perTokenPerMinute: 3, perAddressPerMinute: 100_000 },
+        limits: { failuresPerMinute: 3, perTokenPerMinute: 100_000, perAddressPerMinute: 100_000 },
       });
       await limited.ready();
       const byAddress = Fastify();
@@ -1621,27 +1629,39 @@ describe.skipIf(!enabled)('provider callback receiver over a real database', () 
         pool: receiverPool,
         secret: secretOf,
         environment: 'test',
-        limits: { perTokenPerMinute: 100_000, perAddressPerMinute: 2 },
+        limits: { perTokenPerMinute: 100_000, perAddressPerMinute: 2, failuresPerMinute: 100_000 },
       });
       await byAddress.ready();
       try {
         const order = { orderRef: `D-ORDER-${RUN}-rl`, paymentRef: `D-PAY-${RUN}-rl` };
         const forged = at(deliveriesFor('bad_signature', A, order, 'rl'), 0);
+        // The failure budget is per address: every request of this test comes from one.
+        const offender = '198.51.100.77';
         const before = await receiptCount(A);
         const codes: number[] = [];
         for (let i = 0; i < 5; i += 1)
-          codes.push((await post(limited, A.token, forged)).statusCode);
+          codes.push(
+            (await post(limited, A.token, forged, { remoteAddress: offender })).statusCode,
+          );
         expect(codes).toEqual([401, 401, 401, 429, 429]);
         // Unknown tokens are limited the same way, and the limit is per token HASH, so another token is not affected.
         const unknown = randomBytes(32).toString('base64url');
         const unknownCodes: number[] = [];
         for (let i = 0; i < 4; i += 1)
-          unknownCodes.push((await post(limited, unknown, forged)).statusCode);
+          unknownCodes.push(
+            (await post(limited, unknown, forged, { remoteAddress: offender })).statusCode,
+          );
         expect(unknownCodes).toEqual([401, 401, 401, 429]);
-        const last = await post(limited, A.token, forged);
+        const last = await post(limited, A.token, forged, { remoteAddress: offender });
         expect(last.json()).toMatchObject({ status: 429, code: 'rate_limited' });
         expect(last.headers['retry-after']).toBe('60');
         expect(await receiptCount(A)).toBe(before + 3);
+        // The genuine sender, from the very address that has spent its failure budget, is neither refused as a failure nor
+        // rate limited: the delivery verifies and the database answers it (here: an order that is not known, so nothing matches).
+        const genuine = at(deliveriesFor('success', A, order, 'rl-genuine'), 1);
+        const genuineAnswer = await post(limited, A.token, genuine, { remoteAddress: offender });
+        expect(genuineAnswer.statusCode).toBe(409); // verified, but no such order: the database's answer, not a refusal
+        expect((await receiptsOf(genuine)).map((r) => r.outcome)).toEqual(['unmatched']);
 
         const sameAddress = '198.51.100.5';
         const perAddress: number[] = [];
@@ -1694,7 +1714,7 @@ describe.skipIf(!enabled)('provider callback receiver over a real database', () 
         pool: receiverPool,
         secret: secretOf,
         environment: 'staging',
-        limits: { perTokenPerMinute: 1000, perAddressPerMinute: 1000 },
+        limits: { perTokenPerMinute: 1000, perAddressPerMinute: 1000, failuresPerMinute: 1000 },
       });
       await staging.ready();
       try {
@@ -1740,7 +1760,11 @@ describe.skipIf(!enabled)('provider callback receiver over a real database', () 
         pool: receiverPool,
         secret: secretOf,
         environment: 'test',
-        limits: { perTokenPerMinute: 100_000, perAddressPerMinute: 100_000 },
+        limits: {
+          perTokenPerMinute: 100_000,
+          perAddressPerMinute: 100_000,
+          failuresPerMinute: 100_000,
+        },
       });
       await leakApp.ready();
 

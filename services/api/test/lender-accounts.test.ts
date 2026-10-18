@@ -6,6 +6,7 @@ import {
   loadFingerprintKey,
   ProviderNotAllowedError,
   type EncryptedBlob,
+  type KeyManager,
 } from '@udofin/adapters';
 import {
   AccountsEvidenceLabel,
@@ -14,6 +15,7 @@ import {
   PaymentConfigDraftInput,
   PaymentConfigRailLimits,
   RegistryAccountRegisterInput,
+  SettlementAccountRequestInput,
 } from '@udofin/contracts';
 import { describe, expect, it } from 'vitest';
 import { requestFingerprint } from '../src/idempotency/idempotency.js';
@@ -103,6 +105,64 @@ describe('createFingerprintKeySource', () => {
     await expect(loadFingerprintKey(manager, direct, 2)).rejects.toThrow(/invalid_key/);
   });
 
+  it('does not remember a failed load: a key manager that fails once and then recovers works on the next call, with the key cached after that (A18)', async () => {
+    const raw = new Uint8Array(32).fill(9);
+    const blob = await wrap(1, raw);
+    let calls = 0;
+    let failuresLeft = 1;
+    const flaky: KeyManager = {
+      descriptor: manager.descriptor,
+      encrypt: (request) => manager.encrypt(request),
+      decrypt: (wrapped, context) => {
+        calls += 1;
+        if (failuresLeft > 0) {
+          failuresLeft -= 1;
+          return Promise.reject(new Error('the key manager timed out'));
+        }
+        return manager.decrypt(wrapped, context);
+      },
+    };
+    const source = createFingerprintKeySource({
+      environment: 'test',
+      keyManager: flaky,
+      wrapped: { 1: blob },
+    });
+    expect(await source.keyFor(1)).toBeUndefined();
+    const recovered = await source.keyFor(1);
+    expect(Buffer.from(recovered?.key ?? []).equals(Buffer.from(raw))).toBe(true);
+    expect(calls).toBe(2);
+    // The success is kept: no third call to the key manager.
+    expect((await source.keyFor(1))?.keyVersion).toBe(1);
+    expect(calls).toBe(2);
+  });
+
+  it('shares one load between callers that arrive while it runs, and a failure reaches all of them without being kept (A18)', async () => {
+    const blob = await wrap(1, new Uint8Array(32).fill(9));
+    let calls = 0;
+    let fail = true;
+    const flaky: KeyManager = {
+      descriptor: manager.descriptor,
+      encrypt: (request) => manager.encrypt(request),
+      decrypt: async (wrapped, context) => {
+        calls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        if (fail) throw new Error('throttled');
+        return manager.decrypt(wrapped, context);
+      },
+    };
+    const source = createFingerprintKeySource({
+      environment: 'test',
+      keyManager: flaky,
+      wrapped: { 1: blob },
+    });
+    const together = await Promise.all([source.keyFor(1), source.keyFor(1), source.keyFor(1)]);
+    expect(together).toEqual([undefined, undefined, undefined]);
+    expect(calls).toBe(1);
+    fail = false;
+    expect((await source.keyFor(1))?.keyVersion).toBe(1);
+    expect(calls).toBe(2);
+  });
+
   it('refuses a labelled mock key manager in production, and the local manager cannot even be built in staging or production', async () => {
     const blob = await wrap(1, new Uint8Array(32).fill(9));
     expect(() =>
@@ -167,6 +227,68 @@ describe('request shapes', () => {
       'x'.repeat(1001),
     ]) {
       expect(AccountsReason.safeParse(text).success, text.slice(0, 30)).toBe(false);
+    }
+  });
+
+  it('takes a settlement account request with the registry form of the masked reference only (A15)', () => {
+    const request = {
+      lenderId: '0198f3a0-0000-7000-8000-000000000001',
+      label: 'Collections account',
+      bankName: 'Sample Bank',
+      maskedRef: 'XXXXXX1234',
+    };
+    expect(SettlementAccountRequestInput.safeParse(request).success).toBe(true);
+    for (const maskedRef of [
+      'XXXX1234',
+      '******1234',
+      'XXXXXX34',
+      'XXXXXX123',
+      'XXXXXX12345',
+      'XXXXXXX1234',
+      'xxxxxx1234',
+      'XXXXXX123A',
+      ' XXXXXX1234',
+      'XXXXXX1234\n',
+    ])
+      expect(
+        SettlementAccountRequestInput.safeParse({ ...request, maskedRef }).success,
+        maskedRef,
+      ).toBe(false);
+  });
+
+  it('keeps a full account number out of the settlement account label and bank name, however it is spaced (A16)', () => {
+    const request = {
+      lenderId: '0198f3a0-0000-7000-8000-000000000001',
+      label: 'Collections account',
+      bankName: 'Sample Bank',
+      maskedRef: 'XXXXXX1234',
+    };
+    for (const text of [
+      'SBI 5010 0123 4567 89',
+      'Account 5010-0123-4567-89',
+      'Collections 1234 5678 9012 3456',
+      '  5010 0123 4567  ',
+      'Holder ABCDE1234F',
+    ]) {
+      expect(
+        SettlementAccountRequestInput.safeParse({ ...request, label: text }).success,
+        text,
+      ).toBe(false);
+      expect(
+        SettlementAccountRequestInput.safeParse({ ...request, bankName: text }).success,
+        text,
+      ).toBe(false);
+    }
+    // Short digit groups are not an account number.
+    for (const text of [
+      'Collections 2026-27 account 01',
+      'Branch 0042 collections',
+      'Sample Bank 2',
+    ]) {
+      expect(
+        SettlementAccountRequestInput.safeParse({ ...request, label: text }).success,
+        text,
+      ).toBe(true);
     }
   });
 

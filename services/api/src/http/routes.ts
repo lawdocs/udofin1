@@ -124,21 +124,62 @@ function sendError(reply: FastifyReply, request: FastifyRequest, error: ApiError
   return reply.code(error.status).type(PROBLEM_CONTENT_TYPE).send(problemBody(request, error));
 }
 
-/** Validation errors name the failing fields and rule codes, never the submitted values. */
-function validationError(where: string, error: z.ZodError): ApiError {
-  const fields = error.issues.map((issue) => `${issue.path.join('.') || where}: ${issue.code}`);
+/**
+ * The property names a schema itself declares, at any depth. A path segment that is not one of them came from the caller (the key
+ * of a record, for instance), and a caller can type anything there: an account number, a PAN, a phone number.
+ */
+const declaredFieldNames = new WeakMap<object, ReadonlySet<string>>();
+function fieldNamesOf(schema: ZodType): ReadonlySet<string> {
+  const known = declaredFieldNames.get(schema);
+  if (known) return known;
+  const names = new Set<string>();
+  const seen = new Set<unknown>();
+  const walk = (node: unknown): void => {
+    if (typeof node !== 'object' || node === null || seen.has(node)) return;
+    seen.add(node);
+    const def = (node as { _zod?: { def?: Record<string, unknown> } })._zod?.def;
+    if (!def) return;
+    for (const [name, value] of Object.entries(def)) {
+      if (name === 'shape' && typeof value === 'object' && value !== null) {
+        for (const [key, child] of Object.entries(value)) {
+          names.add(key);
+          walk(child);
+        }
+      } else if (Array.isArray(value)) value.forEach(walk);
+      else walk(value);
+    }
+  };
+  walk(schema);
+  declaredFieldNames.set(schema, names);
+  return names;
+}
+
+/**
+ * Validation errors name the failing fields and rule codes, never the submitted values and never a caller-supplied key. A
+ * path segment is shown only when it is an array position or a property the schema declares; any other segment (the key of a
+ * record) is written as `*`.
+ */
+function validationError(where: string, error: z.ZodError, schema: ZodType): ApiError {
+  const declared = fieldNamesOf(schema);
+  const segment = (part: PropertyKey): string =>
+    typeof part === 'number' || (typeof part === 'string' && declared.has(part))
+      ? String(part)
+      : '*';
+  const fields = error.issues.map(
+    (issue) => `${issue.path.map(segment).join('.') || where}: ${issue.code}`,
+  );
   return new ApiError(
     422,
     'validation_failed',
     'Unprocessable Content',
-    fields.slice(0, 10).join('; '),
+    [...new Set(fields)].slice(0, 10).join('; '),
   );
 }
 
 function parseInput(schema: ZodType | undefined, value: unknown, where: string): unknown {
   if (!schema) return undefined;
   const parsed = schema.safeParse(value);
-  if (!parsed.success) throw validationError(where, parsed.error);
+  if (!parsed.success) throw validationError(where, parsed.error, schema);
   return parsed.data;
 }
 

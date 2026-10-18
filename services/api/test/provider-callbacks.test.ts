@@ -38,6 +38,7 @@ import {
   IP_HMAC_SECRET_NAME,
   isEndpointTokenShape,
   PROVIDER_HOOK_BODY_LIMIT,
+  PROVIDER_HOOK_DEFAULT_LIMITS,
   providerHookProblem,
   registerProviderHooks,
   resolveWebhookVerifier,
@@ -732,23 +733,84 @@ describe('transport limits', () => {
     expect(processor.ingests[1]?.delivery).toMatchObject({ outcome: 'unverified', bodyBytes: 0 });
   });
 
-  it('limits per routing-token hash, whether or not the token exists, and answers the same fixed problem', async () => {
-    const { app: a, processor } = await start({ limits: { perTokenPerMinute: 3 } });
+  it('counts failed deliveries per token hash and address, whether or not the token exists, and answers a valid and an invalid token alike (A30)', async () => {
+    const { app: a, processor } = await start({ limits: { failuresPerMinute: 3 } });
     const unknown = randomBytes(32).toString('base64url');
-    const results: number[] = [];
-    for (let i = 0; i < 5; i++) results.push((await post(a, TOKEN, captured())).statusCode);
-    expect(results).toEqual([401, 401, 401, 429, 429]);
+    const known: number[] = [];
+    for (let i = 0; i < 5; i++)
+      known.push((await post(a, TOKEN, first('bad_signature'))).statusCode);
+    expect(known).toEqual([401, 401, 401, 429, 429]);
     const other: number[] = [];
     for (let i = 0; i < 5; i++) other.push((await post(a, unknown, captured())).statusCode);
     expect(other).toEqual([401, 401, 401, 429, 429]);
+    // A malformed token is counted the same way, so the shape of a token is not a way to tell the answers apart.
+    const malformed: number[] = [];
+    for (let i = 0; i < 5; i++)
+      malformed.push((await post(a, 'x'.repeat(10), captured())).statusCode);
+    expect(malformed).toEqual([401, 401, 401, 429, 429]);
+    const limited = await post(a, TOKEN, first('bad_signature'));
+    expect(limited.json()).toMatchObject({ status: 429, code: 'rate_limited' });
+    expect(limited.headers['retry-after']).toBe('60');
+    // The 429 stores nothing: only the three allowed failures of the known token and of the unknown token reached the database.
+    expect(processor.ingests).toHaveLength(3 + 3);
+  });
+
+  it('junk sent to a callback URL cannot lock the real provider out of it (A30)', async () => {
+    const { app: a, processor } = await start({
+      limits: { failuresPerMinute: 3, perTokenPerMinute: 10 },
+    });
+    processor.answer = () => accept;
+    // Someone who has seen the URL sends garbage from three addresses, far more than the failure budget of each.
+    const junk: number[] = [];
+    for (const address of ['198.51.100.1', '198.51.100.2', '198.51.100.3']) {
+      for (let i = 0; i < 40; i++) {
+        junk.push(
+          (await post(a, TOKEN, first('bad_signature'), { remoteAddress: address })).statusCode,
+        );
+      }
+    }
+    expect(junk.filter((code) => code === 401)).toHaveLength(9);
+    expect(junk.filter((code) => code === 429)).toHaveLength(111);
+    // The genuine provider, from another address AND from an address that spent its whole failure budget, still gets through.
+    const fresh = await post(a, TOKEN, captured(), { remoteAddress: '203.0.113.50' });
+    expect(fresh.statusCode).toBe(200);
+    const sameAsJunk = await post(a, TOKEN, deliveries('success')[0] as MockDelivery, {
+      remoteAddress: '198.51.100.1',
+    });
+    expect(sameAsJunk.statusCode).toBe(200);
+    // Junk from a new address still gets its own, fresh failure budget (the budget is per address, not shared).
+    expect(
+      (await post(a, TOKEN, first('bad_signature'), { remoteAddress: '198.51.100.9' })).statusCode,
+    ).toBe(401);
+    expect(processor.ingests.filter((i) => i.delivery.outcome === 'verified')).toHaveLength(2);
+  });
+
+  it('a verified delivery has a budget of its own per token, which junk never spends (A30)', async () => {
+    const { app: a, processor } = await start({
+      limits: { failuresPerMinute: 1000, perTokenPerMinute: 2 },
+    });
+    processor.answer = () => accept;
+    for (let i = 0; i < 20; i++) await post(a, TOKEN, first('bad_signature'));
+    const results: number[] = [];
+    for (let i = 0; i < 4; i++) results.push((await post(a, TOKEN, captured())).statusCode);
+    expect(results).toEqual([200, 200, 429, 429]);
     const limited = await post(a, TOKEN, captured());
     expect(limited.json()).toMatchObject({ status: 429, code: 'rate_limited' });
     expect(limited.headers['retry-after']).toBe('60');
-    expect(processor.ingests).toHaveLength(6);
+    // The refused ones were not handed to the database; another token has its own budget.
+    expect(processor.ingests.filter((i) => i.delivery.outcome === 'verified')).toHaveLength(2);
+  });
+
+  it('the defaults leave a verified delivery a much larger budget than a failed one', () => {
+    expect(PROVIDER_HOOK_DEFAULT_LIMITS.perTokenPerMinute).toBeGreaterThan(
+      PROVIDER_HOOK_DEFAULT_LIMITS.failuresPerMinute * 10,
+    );
   });
 
   it('limits per client address on this route', async () => {
-    const { app: a } = await start({ limits: { perAddressPerMinute: 2, perTokenPerMinute: 1000 } });
+    const { app: a } = await start({
+      limits: { perAddressPerMinute: 2, perTokenPerMinute: 1000, failuresPerMinute: 1000 },
+    });
     const codes: number[] = [];
     for (let i = 0; i < 4; i++) {
       codes.push((await post(a, TOKEN, captured(), { remoteAddress: '198.51.100.5' })).statusCode);

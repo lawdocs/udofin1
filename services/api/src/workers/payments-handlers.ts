@@ -25,6 +25,7 @@ import {
 import { type SystemPool } from '../system/pool.js';
 import {
   PermanentError,
+  RetryableError,
   type HandlerDefinition,
   type OutboxEvent,
   type WorkerLogger,
@@ -104,12 +105,34 @@ function isoOrNull(value: string | null): string | null {
   return Number.isNaN(time) ? null : new Date(time).toISOString();
 }
 
-/** The expiry recorded for an order: the provider's, never later than the longest a link may live. A past time is passed on and refused by the database. */
-function orderExpiry(now: Date, provider: string | null): string | null {
-  const iso = isoOrNull(provider);
-  if (iso === null) return null;
+/**
+ * The expiry recorded for an order and the one a stored link keeps. The payment period belongs to the intent (the lender's link
+ * validity, or a foreclosure quotation's remaining validity, whichever is sooner) and was sent to the provider as the wanted
+ * expiry. The provider may only SHORTEN it: a provider that ignores the request and answers with its own default (days) must not
+ * leave a checkout payable after the lender's period or the quotation ended. When the provider names none, the database keeps the
+ * intent's (`record` null). Without an intent expiry the provider's is used, never beyond the longest a link may live. A past
+ * time is passed on and refused by the database.
+ */
+export function orderExpiry(
+  now: Date,
+  providerExpiresAt: string | null,
+  intentExpiresAt: string | null,
+): {
+  readonly record: string | null;
+  readonly keep: string | null;
+  readonly providerLater: boolean;
+} {
+  const provider = isoOrNull(providerExpiresAt);
+  const intent = isoOrNull(intentExpiresAt);
+  if (provider === null) return { record: null, keep: intent, providerLater: false };
+  if (intent !== null) {
+    return Date.parse(provider) > Date.parse(intent)
+      ? { record: intent, keep: intent, providerLater: true }
+      : { record: provider, keep: provider, providerLater: false };
+  }
   const limit = now.getTime() + MAX_LINK_LIFE_MS;
-  return Date.parse(iso) > limit ? new Date(limit).toISOString() : iso;
+  const capped = Date.parse(provider) > limit ? new Date(limit).toISOString() : provider;
+  return { record: capped, keep: capped, providerLater: false };
 }
 
 /** When a stored link stops being served: the provider's expiry, else the fallback; undefined when that is already (almost) over. */
@@ -261,8 +284,15 @@ export function createPaymentsHandlers(
           reportedMerchant === null ? 'merchant_not_reported' : 'merchant_differs',
         );
       }
+      const expiry = orderExpiry(now(), expiresAt, intent.linkExpiresAt);
+      if (expiry.providerLater) {
+        log.info(
+          { ...fields, why: 'provider_expiry_later_than_requested' },
+          'the provider order expires later than the payment period; the payment period is kept',
+        );
+      }
       try {
-        await processor.recordOrderCreated(intent.id, orderRef, orderExpiry(now(), expiresAt));
+        await processor.recordOrderCreated(intent.id, orderRef, expiry.record);
       } catch (error) {
         const failure = databaseFailureOf(error);
         if (failure.code === 'P0002') throw new PermanentError('intent_not_found');
@@ -289,7 +319,7 @@ export function createPaymentsHandlers(
         'payment_intent',
         { id: intent.id, lenderOrgId: intent.lenderOrgId },
         created.checkoutLink,
-        created.expiresAt ?? intent.linkExpiresAt,
+        expiry.keep,
         PAYMENT_LINK_FALLBACK_MS,
         fields,
       );
@@ -483,6 +513,18 @@ export function createPaymentsHandlers(
           );
           return;
         }
+        // The borrower may have asked to cancel while the provider call was in flight: the cancellation that was queued then
+        // found no provider reference (the draft had none yet) and the link below would let the borrower authorise a mandate
+        // they asked to cancel. No link is kept, and the cancellation is queued again now that the reference exists.
+        const afterHandOff = await processor.loadMandate(mandate.id);
+        if (afterHandOff?.cancelRequested === true && !afterHandOff.cancelSent) {
+          await processor.enqueueMandateCancel(mandate.id);
+          log.info(
+            { ...fields, why: 'cancel_requested_during_handoff' },
+            'mandate hand-off recorded, but a cancellation was requested while it was made; no link is kept and the cancellation is queued',
+          );
+          return;
+        }
         log.info(
           fields,
           'mandate hand-off recorded; the mandate waits for the borrower, nothing is active',
@@ -517,6 +559,33 @@ export function createPaymentsHandlers(
   // -------------------------------------------------------------------------------------------------------
   // mandate.cancel
   // -------------------------------------------------------------------------------------------------------
+  /**
+   * A cancellation the provider did not acknowledge must not be dropped: the mandate would stay live at the bank after the borrower
+   * withdrew consent (or the loan closed), and nothing else re-sends the request. The event is retried by the outbox with the same
+   * operation key (the provider treats a repeat as the same request) until the provider acknowledges it. After the last attempt it
+   * is dead, which is loud (an error line here, the worker's own "outbox event is dead" and the event row with its closed code),
+   * never silent; an operator then cancels the mandate at the provider.
+   */
+  function notDelivered(
+    event: OutboxEvent,
+    fields: Record<string, unknown>,
+    why: string,
+    extra: Record<string, unknown> = {},
+  ): never {
+    if (event.attempts >= event.max_attempts) {
+      log.error(
+        { ...fields, ...extra, why, attempt: event.attempts },
+        'mandate cancellation could not be delivered after the last attempt; the mandate may still be live at the provider and an operator must cancel it there',
+      );
+    } else {
+      log.warn(
+        { ...fields, ...extra, why, attempt: event.attempts },
+        'mandate cancellation not delivered yet; the outbox retries it with the same operation key',
+      );
+    }
+    throw new RetryableError('mandate_cancel_not_delivered');
+  }
+
   async function cancelMandate(mandateId: string, event: OutboxEvent): Promise<void> {
     const mandate = await processor.loadMandate(mandateId);
     if (!mandate) throw new PermanentError('mandate_not_found');
@@ -537,41 +606,37 @@ export function createPaymentsHandlers(
       return;
     }
     if (mandate.providerMandateRef === null) {
-      // The provider has no reference to cancel (a draft, or a hand-off whose outcome is unknown). The sweep closes a cancelled
-      // draft and reports an unconfirmed cancellation.
-      log.info(
-        fields,
-        'mandate cancellation not sent: the provider has no reference for this mandate yet',
-      );
-      return;
+      // The provider has no reference to cancel yet: a draft whose hand-off is in flight, or a hand-off whose outcome is unknown
+      // (requires_reconciliation). Neither is final. A draft the borrower cancelled is closed by the sweep (and then the mandate is
+      // no longer live, which ends this); a hand-off that completes gives the mandate its reference; a lookup can find one. Until
+      // one of those happens the request cannot be sent, so it is retried, not dropped.
+      return notDelivered(event, fields, 'no_provider_reference_yet', {
+        mandateStatus: mandate.status,
+      });
     }
     // A cancellation lowers risk, so it is sent whatever the status of the configuration (even a suspended one).
     const config = mandate.config;
-    if (config === undefined) {
-      log.warn(fields, 'mandate cancellation not sent: no configuration; the sweep will report it');
-      return;
-    }
+    if (config === undefined) return notDelivered(event, fields, 'no_configuration');
     const resolved = deps.providers.mandate(toResolverRow(config));
-    if (!resolved.ok) {
-      log.warn(
-        { ...fields, why: resolved.reason },
-        'mandate cancellation not sent: provider not usable; the sweep will report it',
-      );
-      return;
-    }
+    if (!resolved.ok) return notDelivered(event, fields, resolved.reason);
     const port = withMandateTimeout(resolved.value.port, timeoutMs);
     const ctx = resolved.value.contextFor(event.correlation_id ?? event.id, mandate.id);
     const result = await port.cancelMandate(ctx, {
       providerMandateRef: mandate.providerMandateRef,
       operationKey: mandate.id,
     });
-    if (result.outcome !== 'ok') {
-      // Unknown, not configured, refused: not marked as sent. The mandate stays as it is and the sweep reports it.
-      log.warn(
+    if (result.outcome === 'rejected' || result.outcome === 'unsupported') {
+      // A definite refusal: asking again cannot change it. Not retried; the event ends dead with a closed code, which is how an
+      // operator sees a mandate the provider will not cancel. Nothing new is opened here.
+      log.error(
         { ...fields, outcome: result.outcome },
-        'mandate cancellation not acknowledged by the provider; the sweep will report it',
+        'mandate cancellation refused by the provider; it is not retried and an operator must cancel the mandate there',
       );
-      return;
+      throw new PermanentError('mandate_cancel_refused');
+    }
+    if (result.outcome !== 'ok') {
+      // Unknown (a timeout, the network, a provider error), not found, not configured: nothing says the provider has the request.
+      return notDelivered(event, fields, 'not_acknowledged', { outcome: result.outcome });
     }
     try {
       await processor.markMandateCancelSent(mandate.id);

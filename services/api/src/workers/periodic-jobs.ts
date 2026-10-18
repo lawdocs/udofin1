@@ -89,7 +89,18 @@ export const INTENT_HOLD_LIMIT_SECONDS = 24 * 60 * 60;
 /** After this many failed answers from one provider in a run, the rest of its lookups wait for the next run. */
 const PROVIDER_FAILURES_BEFORE_SKIP = 3;
 
-const MANDATE_LOOKUPS_PER_RUN = 200;
+/**
+ * Provider calls one run of the mandates job may make for status lookups, and for debit reports. A longer list is not dropped:
+ * the next run starts with the mandates that were looked at least recently, so every mandate is reached in turn.
+ */
+export const MANDATE_LOOKUPS_PER_RUN = 200;
+export const DEBIT_LOOKUPS_PER_RUN = 200;
+/**
+ * How long each polling step of one run may keep calling the provider (calls are made one after another, and a provider that answers
+ * in a few hundred milliseconds would otherwise take longer than the five minutes between runs for a few thousand mandates). Two
+ * steps of two minutes leave the rest of the interval for the database work.
+ */
+export const MANDATE_POLLING_BUDGET_MS = 2 * MINUTE_MS;
 /** The window of debit reports asked of the provider: this many days back and ahead of today (IST). */
 export const DEBIT_LOOKBACK_DAYS = 7;
 export const DEBIT_LOOKAHEAD_DAYS = 3;
@@ -421,8 +432,9 @@ export function createPeriodicJobs(
 
   // -- Mandates ------------------------------------------------------------------------------------------------------------
   const mandatesJob = async (): Promise<void> => {
-    await step('mandates', 'status_lookups', mandateLookups);
-    await step('mandates', 'debit_lookups', debitLookups);
+    // The database work and the pre-debit notices come FIRST: a notice has a lead time to keep, and the provider polling below
+    // calls one provider after another with no fixed duration. Polling is capped per run (see MANDATE_LOOKUPS_PER_RUN,
+    // DEBIT_LOOKUPS_PER_RUN and MANDATE_POLLING_BUDGET_MS) and takes its turn from where the last run stopped.
     await step('mandates', 'sweep', async () => {
       const counts = await store.sweepMandates();
       if (Object.values(counts).some((n) => n > 0))
@@ -439,15 +451,54 @@ export function createPeriodicJobs(
         log.info({ job: 'mandates', ...counts }, 'debits planned');
     });
     await step('mandates', 'pre_debit_notices', preDebitNotices);
+    await step('mandates', 'status_lookups', mandateLookups);
+    await step('mandates', 'debit_lookups', debitLookups);
+  };
+
+  /**
+   * Who was asked about last, so a capped or timed-out run continues where the previous one stopped. Kept in this process only
+   * (a restart starts the rotation again, which costs nothing but order). An entry is the number of the attempt that last touched
+   * the mandate; a mandate never attempted is absent and goes first.
+   */
+  const lastStatusLookup = new Map<string, number>();
+  const lastDebitLookup = new Map<string, number>();
+  let attemptNumber = 0;
+  const leastRecentFirst = <T>(
+    items: readonly T[],
+    keyOf: (item: T) => string,
+    last: ReadonlyMap<string, number>,
+  ): T[] =>
+    items
+      .map((item, index) => ({ item, index, last: last.get(keyOf(item)) ?? 0 }))
+      .sort((a, b) => a.last - b.last || a.index - b.index)
+      .map((entry) => entry.item);
+  /** Forgets mandates that are no longer in the list, so the memory stays as small as the list. */
+  const forgetOthers = (last: Map<string, number>, live: ReadonlySet<string>): void => {
+    for (const key of [...last.keys()]) if (!live.has(key)) last.delete(key);
+  };
+  /** A deadline for one polling step, read from the job's clock. */
+  const pollingDeadline = (): (() => boolean) => {
+    const until = clock().getTime() + MANDATE_POLLING_BUDGET_MS;
+    return () => clock().getTime() >= until;
   };
 
   const mandateLookups = async (): Promise<void> => {
     const candidates = await store.mandatesNeedingLookup();
+    forgetOthers(lastStatusLookup, new Set(candidates.map((candidate) => candidate.mandateId)));
+    // The database lists them by when they last changed, and a mandate the provider cannot find never changes: 200 of those would
+    // keep every newer one out of the slice for good. The least recently asked about go first.
+    const ordered = leastRecentFirst(candidates, (c) => c.mandateId, lastStatusLookup);
+    const timeIsUp = pollingDeadline();
     const ports = mandatePorts();
     const failures = new Map<string, number>();
-    const tally = { looked_up: 0, applied: 0, skipped: 0 };
-    for (const candidate of candidates.slice(0, MANDATE_LOOKUPS_PER_RUN)) {
+    const tally = { looked_up: 0, applied: 0, skipped: 0, left_for_next_run: 0 };
+    for (const [position, candidate] of ordered.entries()) {
       if (stopping) return;
+      if (position >= MANDATE_LOOKUPS_PER_RUN || timeIsUp()) {
+        tally.left_for_next_run = ordered.length - position;
+        break;
+      }
+      lastStatusLookup.set(candidate.mandateId, (attemptNumber += 1));
       try {
         const resolved = await ports(candidate.configId);
         if (!resolved.ok) {
@@ -498,8 +549,11 @@ export function createPeriodicJobs(
   };
 
   const debitLookups = async (): Promise<void> => {
-    const mandates = await store.activeMandates();
-    if (mandates.length === 0) return;
+    const listed = await store.activeMandates();
+    if (listed.length === 0) return;
+    forgetOthers(lastDebitLookup, new Set(listed.map((mandate) => mandate.mandateId)));
+    const mandates = leastRecentFirst(listed, (m) => m.mandateId, lastDebitLookup);
+    const timeIsUp = pollingDeadline();
     const ports = mandatePorts();
     const failures = new Map<string, number>();
     const today = istNow(clock()).date;
@@ -507,9 +561,14 @@ export function createPeriodicJobs(
       from: addDays(today, -DEBIT_LOOKBACK_DAYS),
       to: addDays(today, DEBIT_LOOKAHEAD_DAYS),
     };
-    const tally = { mandates: 0, reports: 0, applied: 0, skipped: 0 };
-    for (const mandate of mandates) {
+    const tally = { mandates: 0, reports: 0, applied: 0, skipped: 0, left_for_next_run: 0 };
+    for (const [position, mandate] of mandates.entries()) {
       if (stopping) return;
+      if (position >= DEBIT_LOOKUPS_PER_RUN || timeIsUp()) {
+        tally.left_for_next_run = mandates.length - position;
+        break;
+      }
+      lastDebitLookup.set(mandate.mandateId, (attemptNumber += 1));
       try {
         const resolved = await ports(mandate.configId);
         if (!resolved.ok) {
@@ -563,7 +622,8 @@ export function createPeriodicJobs(
         log.warn({ job: 'mandates', ...errorFields(error) }, 'debit lookup failed');
       }
     }
-    if (tally.reports > 0) log.info({ job: 'mandates', ...tally }, 'debit lookups processed');
+    if (tally.reports > 0 || tally.left_for_next_run > 0)
+      log.info({ job: 'mandates', ...tally }, 'debit lookups processed');
   };
 
   const preDebitNotices = async (): Promise<void> => {
@@ -579,9 +639,9 @@ export function createPeriodicJobs(
             recipientRef: notice.borrowerId,
             titleKey: 'payment_update',
           };
-          const results = [
-            await sendOnChannel(channels, 'in_app', message),
-            await sendOnChannel(channels, 'push', message),
+          const results: NoticeChannelResult[] = [
+            { channel: 'in_app', result: await sendOnChannel(channels, 'in_app', message) },
+            { channel: 'push', result: await sendOnChannel(channels, 'push', message) },
           ];
           const outcome = noticeOutcomeOf(results);
           await store.recordPreDebitNotice(notice.noticeId, outcome.state, outcome.providerRef);
@@ -831,22 +891,45 @@ export function reminderRecordOf(result: ChannelSendResult): {
   }
 }
 
+export type NoticeChannel = 'in_app' | 'push' | 'sms';
+export interface NoticeChannelResult {
+  readonly channel: NoticeChannel;
+  readonly result: ChannelSendResult;
+}
+
 /**
- * One state for a pre-debit notice that went to several channels. Accepted if any channel took it (the database then marks the
- * debit notified; `delivered` is never claimed here). Not configured only when no channel could carry it at all. Anything else is
- * a failure the database releases for a retry.
+ * The channels whose acceptance means a pre-debit notice reached, or is on its way to, the borrower. The in-app channel is NOT
+ * one of them for a notice: for a reminder the database row is the inbox the app reads (servicing.my_reminders), so the in-app
+ * channel accepting it is true; a pre-debit notice has no inbox row (the app builds its line from the debit), so the in-app
+ * channel accepts it and writes nothing. Counting that acceptance would record the notice as sent, and the debit as notified, when
+ * the borrower was told nothing but what the mandate screen already shows. sms is never sent. Add a channel here only when it
+ * really tells the borrower.
  */
-export function noticeOutcomeOf(results: readonly ChannelSendResult[]): {
+export const NOTICE_CHANNELS_THAT_REACH_THE_BORROWER: readonly NoticeChannel[] = ['push'];
+
+/**
+ * One state for a pre-debit notice that went to several channels, judged on the channels that can reach the borrower
+ * (NOTICE_CHANNELS_THAT_REACH_THE_BORROWER). Accepted if one of them took it (the database then marks the debit notified;
+ * `delivered` is never claimed here). `not_configured`, the database's word for "no channel can carry this notice", when none of
+ * them can, which includes the case where only the in-app channel accepted: the notice stays late and the lender is told
+ * (`mandate_notice_late`) instead of being shown as sent. Anything else is a failure the database releases for a retry.
+ */
+export function noticeOutcomeOf(results: readonly NoticeChannelResult[]): {
   state: NoticeState;
   providerRef: string | null;
 } {
-  const taken = results.flatMap((result) => (result.state === 'accepted' ? [result] : []));
+  const reaching = results.filter((entry) =>
+    NOTICE_CHANNELS_THAT_REACH_THE_BORROWER.includes(entry.channel),
+  );
+  const taken = reaching.flatMap((entry) =>
+    entry.result.state === 'accepted' ? [entry.result] : [],
+  );
   if (taken.length > 0) {
-    // A channel that gave a usable reference supplies it (the in-app inbox has none).
+    // A channel that gave a usable reference supplies it.
     const ref = taken.map((result) => safeProviderRef(result.providerRef)).find((r) => r !== null);
     return { state: 'accepted', providerRef: ref ?? null };
   }
-  if (results.every((result) => result.state === 'not_configured')) {
+  if (reaching.every((entry) => entry.result.state === 'not_configured')) {
     return { state: 'not_configured', providerRef: null };
   }
   return { state: 'failed', providerRef: null };

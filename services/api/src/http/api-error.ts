@@ -337,6 +337,18 @@ const RULE_HINTS: Readonly<Record<string, { showMessage: boolean }>> = {
 };
 
 /**
+ * Protect triggers refuse a change to a record that already reached its final state with P0001 and a hint. The functions catch
+ * the same state earlier and answer 55000 with the code on the right; the trigger is what the LOSING side of a concurrent change
+ * meets, when the winner commits between that check and its own UPDATE. It is a conflict (409) with the code the function would
+ * have used. The other protect hints (`task_immutable`, `request_immutable`, `closure_immutable`, `document_immutable`) mean
+ * the code tried to edit a fixed record: that is a fault, so it stays an unmapped error (500, logged).
+ */
+const FINAL_STATE_HINTS: Readonly<Record<string, string>> = {
+  task_final: 'already_confirmed',
+  request_final: 'request_not_open',
+};
+
+/**
  * Translates database errors that mean something to the caller. Anything else is not mapped, so the
  * caller gets a generic 500 and the details stay in the server log.
  */
@@ -368,6 +380,10 @@ export function mapDatabaseError(error: unknown): ApiError | undefined {
         'Idempotency key reused',
         'This Idempotency-Key was already used with a different request.',
       );
+    case 'P0001': {
+      const code = e.hint ? FINAL_STATE_HINTS[e.hint] : undefined;
+      return code ? new ApiError(409, code, 'Conflict') : undefined;
+    }
     case 'P0002':
       return new ApiError(404, 'not_found', 'Not Found');
     // Malformed values that passed the shape check but are not real dates/uuids/numbers.
