@@ -995,23 +995,35 @@ comment on view servicing.lms_receipts_net is
 -- 7. Lender documents, quotations and closure
 -- ---------------------------------------------------------------------------------------------
 
+-- The system role may register a document, quotation or release task only on behalf of a machine feed that is ACTIVE and declares the capability
+-- (see migration 20261018000912). The mock guard is checked again here, at use time (M16): a mock row left in a database that no longer allows
+-- mock providers (restored from staging, say) raises 42501 mock_provider_blocked instead of opening anything.
+-- p_source null = any machine feed (release tasks carry no source).
 create or replace function private.servicing_machine_feed_ok(p_lender uuid, p_source text, p_capability text)
 returns boolean
-language sql
+language plpgsql
 stable
 security definer
 set search_path = ''
 as $$
-  select exists (
-    select 1 from servicing.lms_connections c
-    where c.lender_org_id = p_lender and c.status = 'active'
-      and case p_source when 'mock' then c.kind = 'mock'
-                        when 'lms' then c.kind in ('finbyx', 'generic_rest')
-                        else c.kind in ('mock', 'finbyx', 'generic_rest') end
-      and c.capabilities -> p_capability = 'true'::jsonb
-      -- The mock guard again at use time (M16): a mock row left in a database that no longer allows mock providers opens nothing.
-      and (c.kind <> 'mock' or private.mock_providers_allowed()));
+declare
+  v_mode text;
+begin
+  select c.provider_mode::text into v_mode
+  from servicing.lms_connections c
+  where c.lender_org_id = p_lender and c.status = 'active'
+    and case p_source when 'mock' then c.kind = 'mock'
+                      when 'lms' then c.kind in ('finbyx', 'generic_rest')
+                      else c.kind in ('mock', 'finbyx', 'generic_rest') end
+    and c.capabilities -> p_capability = 'true'::jsonb;
+  if not found then
+    return false;
+  end if;
+  perform private.assert_provider_mode_allowed(v_mode);
+  return true;
+end
 $$;
+revoke all on function private.servicing_machine_feed_ok(uuid, text, text) from public;
 
 -- The closure record is a fact; only the NOC reference may move, and only forward along a correction: from nothing to a NOC or closure letter, to a
 -- document that supersedes the current one, or from a closure letter to a NOC. The issue time always travels with the pointer (A2, M12).
