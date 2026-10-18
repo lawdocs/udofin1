@@ -4,7 +4,7 @@
 -- Synthetic data only (SAMPLE). Error codes are reported as SQLSTATE|hint.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(281);
+select plan(283);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -252,8 +252,9 @@ select is((select c.reloptions from pg_class c where c.oid = 'servicing.lms_rece
 select ok(has_table_privilege('authenticated', 'servicing.lms_receipts_net', 'select') and has_table_privilege('service_role', 'servicing.lms_receipts_net', 'select')
           and not has_table_privilege('anon', 'servicing.lms_receipts_net', 'select') and not has_table_privilege('authenticated', 'servicing.lms_receipts_net', 'insert'),
   'it is readable by people and the system, not by anon, and not writable');
-select is((select count(*) from pg_trigger t where t.tgrelid in ('servicing.import_batches'::regclass, 'servicing.sync_conflicts'::regclass) and t.tgname = 'unsafe_text' and not t.tgisinternal), 2::bigint,
-  'the two lender-typed columns that had no screening (reject reason, resolution note) now have an unsafe-text trigger');
+select is((select count(*) from pg_trigger t where t.tgrelid in ('servicing.import_batches'::regclass, 'servicing.sync_conflicts'::regclass, 'servicing.document_requests'::regclass, 'servicing.security_release_tasks'::regclass)
+             and t.tgname = 'unsafe_text' and not t.tgisinternal), 4::bigint,
+  'the four lender-typed columns of servicing (reject reason, resolution note, decline note, delay reason) have an unsafe-text trigger');
 select is((select convalidated from pg_constraint where conname = 'validity_bound' and conrelid = 'servicing.foreclosure_quotes'::regclass), false,
   'the quotation validity bound is a NOT VALID check: it governs every new row and does not re-check history');
 select ok((select pg_get_indexdef('servicing.import_batches_live_file'::regclass) !~ 'invalid' and pg_get_indexdef('servicing.import_batches_live_file'::regclass) ~ 'committed'),
@@ -361,10 +362,10 @@ select is(pg_temp.st($$insert into servicing.import_batches (reject_reason) valu
 select is(pg_temp.err($$insert into servicing.sync_conflicts (resolution_note) values ('Borrower phone 98765 43210 was quoted')$$), '22023|unsafe_free_text', 'sync_conflicts.resolution_note: the trigger refuses a spaced mobile number');
 select is(pg_temp.err($$insert into servicing.sync_conflicts (resolution_note) values ('Her pan is abcde1234f here')$$), '22023|unsafe_free_text', 'and a lower-case PAN');
 select is(pg_temp.st($$insert into servicing.sync_conflicts (resolution_note) values ('An ordinary note for the table')$$), '23502', 'while an ordinary text meets the next constraint (not null)');
-select is(pg_temp.st(format($$update servicing.document_requests set status = 'declined', lender_note = 'Call 98765 43210 now please', decided_by = 'ec000000-0000-4000-8000-000000000001', decided_at = now() where id = %L$$, pg_temp.got('rq_chk'))), '23514',
-  'document_requests.lender_note: the table check uses the new screen (a spaced mobile number is refused even from the owner)');
-select is(pg_temp.st(format($$update servicing.security_release_tasks set delay_reason = 'Her pan is abcde1234f here', delay_reason_by = 'ec000000-0000-4000-8000-000000000001', delay_reason_at = now() where id = %L$$, pg_temp.got('task1'))), '23514',
-  'security_release_tasks.delay_reason: the table check uses the new screen (a lower-case PAN is refused even from the owner)');
+select is(pg_temp.st(format($$update servicing.document_requests set status = 'declined', lender_note = 'Call 98765 43210 now please', decided_by = 'ec000000-0000-4000-8000-000000000001', decided_at = now() where id = %L$$, pg_temp.got('rq_chk'))), '22023',
+  'document_requests.lender_note: a spaced mobile number is refused even from the owner');
+select is(pg_temp.st(format($$update servicing.security_release_tasks set delay_reason = 'Her pan is abcde1234f here', delay_reason_by = 'ec000000-0000-4000-8000-000000000001', delay_reason_at = now() where id = %L$$, pg_temp.got('task1'))), '22023',
+  'security_release_tasks.delay_reason: a lower-case PAN is refused even from the owner');
 
 -- ============================================================================================================================
 -- 3. References that look personal (M13, U38) and a receipt dated in the future (M17)
@@ -1011,6 +1012,16 @@ select is(pg_temp.err(format($$select servicing.confirm_security_release(%L, 'SA
 select is(pg_temp.err(format($$select servicing.confirm_security_release(%L, 'SAMPLE-CONF-A7')$$, pg_temp.got('task1'))), '55000|already_confirmed', 'a second confirmation gets already_confirmed');
 select is(pg_temp.err(format($$select servicing.set_security_release_delay_reason(%L, 'Waiting for the depository to act')$$, pg_temp.got('task1'))), '55000|already_confirmed', 'and so does a delay reason after the confirmation');
 select is(pg_temp.err(format($$select servicing.decline_document_request(%L, 'The period requested is not yet closed')$$, pg_temp.got('rq_decl'))), '55000|request_not_open', 'a second decision on a request gets request_not_open');
+-- A row written before a stricter screen existed still moves through its lifecycle: only NEW or CHANGED text is screened.
+select pg_temp.as_owner();
+select pg_temp.keep('task_y', (select id::text from servicing.security_release_tasks where loan_account_id = pg_temp.lid('LY1')));
+set local session_replication_role = replica;
+update servicing.security_release_tasks set delay_reason = 'Expected by 12/10/2026 15:30 from the depository', delay_reason_by = 'ec000000-0000-4000-8000-000000000004', delay_reason_at = now()
+ where id = pg_temp.got('task_y')::uuid;
+set local session_replication_role = origin;
+select is(private.servicing_text_safe((select delay_reason from servicing.security_release_tasks where id = pg_temp.got('task_y')::uuid)), false, 'the stored delay reason reads as a number to the new screen (it predates it)');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000004');
+select is(pg_temp.err(format($$select servicing.confirm_security_release(%L, 'SAMPLE-CONF-LEGACY')$$, pg_temp.got('task_y'))), 'ok', 'and the task can still be confirmed (the unchanged text is not screened again)');
 
 -- ============================================================================================================================
 -- 15. The security-release evidence label (U44)
@@ -1041,10 +1052,10 @@ select is((select array_agg(p) from unnest(array[
     'servicing.reminder_templates|body',
     'servicing.penal_charge_texts|reason', 'servicing.penal_charge_texts|sentence_en', 'servicing.penal_charge_texts|sentence_hi',
     'servicing.communication_holds|note', 'servicing.communication_holds|release_note',
-    'servicing.import_batches|reject_reason', 'servicing.sync_conflicts|resolution_note']) p
+    'servicing.import_batches|reject_reason', 'servicing.sync_conflicts|resolution_note', 'servicing.document_requests|lender_note', 'servicing.security_release_tasks|delay_reason']) p
   where pg_temp.err(format('insert into %s (' || case when split_part(p, '|', 1) = 'payments.lender_payment_configs' then 'provider_mode, ' else '' end || '%I) values (' ||
            case when split_part(p, '|', 1) = 'payments.lender_payment_configs' then '''production'', ' else '' end || '%L)', split_part(p, '|', 1), split_part(p, '|', 2), 'Call 98765 43210 or use ABCDE1234F')) <> '22023|unsafe_free_text'), null,
-  'U42: every guarded free-text column of the phase refuses a text with a mobile number and a PAN with the hint unsafe_free_text, even from the table owner (28 columns)');
+  'U42: every guarded free-text column of the phase refuses a text with a mobile number and a PAN with the hint unsafe_free_text, even from the table owner (30 columns)');
 select is((select array_agg(p) from unnest(array[
     'servicing.feature_change_requests|reason', 'payments.account_registry|evidence_ref', 'payments.provider_register|status_reason', 'payments.lender_payment_configs|rail_limits_source',
     'servicing.communication_holds|note', 'servicing.penal_charge_texts|sentence_en', 'servicing.import_batches|reject_reason', 'servicing.sync_conflicts|resolution_note']) p

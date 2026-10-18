@@ -84,7 +84,8 @@ grant execute on function private.servicing_text_safe(text) to authenticated, se
 comment on function private.servicing_text_safe(text) is
   'True when a lender-typed note carries no e-mail, link, long digit run (8 contiguous or 9 once separators are removed, digits of other scripts included) or PAN-shaped token (any case, spaces allowed). Used for decline notes, delay reasons, import reject reasons and conflict resolution notes. A shape check only: names cannot be recognised.';
 
--- Trigger for lender-typed columns that have no table check (arguments: the column names).
+-- Trigger for lender-typed columns (arguments: the column names). It looks only at a value that is NEW or CHANGED, so a row written before a
+-- stricter screen existed can still move through its lifecycle (a table check would re-run on every update of the row).
 create or replace function private.servicing_reject_unsafe_text()
 returns trigger
 language plpgsql
@@ -96,6 +97,7 @@ declare
 begin
   foreach v_col in array tg_argv loop
     v_val := to_jsonb(new) ->> v_col;
+    if tg_op = 'UPDATE' and v_val is not distinct from (to_jsonb(old) ->> v_col) then continue; end if;
     if v_val is not null and not private.servicing_text_safe(v_val) then
       raise exception 'column % looks like it carries personal data, a contact detail or a link; write a reference instead', v_col
         using errcode = '22023', hint = 'unsafe_free_text';
@@ -106,12 +108,23 @@ end
 $$;
 revoke all on function private.servicing_reject_unsafe_text() from public;
 comment on function private.servicing_reject_unsafe_text() is
-  'Row trigger: refuses a lender-typed text column (named in the trigger arguments) that fails private.servicing_text_safe. Hint unsafe_free_text.';
+  'Row trigger: refuses a lender-typed text column (named in the trigger arguments) whose NEW or CHANGED value fails private.servicing_text_safe. Hint unsafe_free_text. Used on import_batches.reject_reason, sync_conflicts.resolution_note, document_requests.lender_note and security_release_tasks.delay_reason.';
 
 create trigger unsafe_text before insert or update on servicing.import_batches
   for each row execute function private.servicing_reject_unsafe_text('reject_reason');
 create trigger unsafe_text before insert or update on servicing.sync_conflicts
   for each row execute function private.servicing_reject_unsafe_text('resolution_note');
+
+-- The decline note and the delay reason were screened by a table check, which runs again on EVERY update of the row. They are screened by the same
+-- trigger instead (new or changed values only), and keep their length checks.
+alter table servicing.document_requests drop constraint document_requests_lender_note_check;
+alter table servicing.document_requests add constraint document_requests_lender_note_check check (lender_note is null or length(lender_note) between 3 and 500);
+alter table servicing.security_release_tasks drop constraint security_release_tasks_delay_reason_check;
+alter table servicing.security_release_tasks add constraint security_release_tasks_delay_reason_check check (delay_reason is null or length(delay_reason) between 10 and 500);
+create trigger unsafe_text before insert or update on servicing.document_requests
+  for each row execute function private.servicing_reject_unsafe_text('lender_note');
+create trigger unsafe_text before insert or update on servicing.security_release_tasks
+  for each row execute function private.servicing_reject_unsafe_text('delay_reason');
 
 -- ---------------------------------------------------------------------------------------------
 -- 2. Personal-looking references (M13, U38) and a receipt dated in the future (M17)
