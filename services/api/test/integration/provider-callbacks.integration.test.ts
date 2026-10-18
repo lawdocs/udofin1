@@ -25,6 +25,10 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadConfig } from '../../src/config.js';
 import { loggerOptions } from '../../src/logger.js';
+import {
+  createProviderHookProcessor,
+  type ProviderHookProcessor,
+} from '../../src/system/provider-hooks.js';
 import { createRoutingProcessor } from '../../src/system/routing.js';
 import { createSystemPool, type SystemPool } from '../../src/system/pool.js';
 import { buildCallbackApp } from '../../src/workers/lender-callbacks.js';
@@ -44,6 +48,8 @@ const enabled = Boolean(ADMIN && SYSTEM);
 const PROVIDER = MOCK_PAYMENT_PROVIDER_KEY;
 // Ids are unique per run, so the file can run again against a database an earlier run used.
 const RUN = randomBytes(4).toString('hex');
+/** Receipts are read from this moment on: a body that is the same in every run (an empty one) has receipts from earlier runs. */
+const STARTED = new Date(Date.now() - 2000);
 const RAIL_LIMITS = JSON.stringify({
   enach_api: { max_mandate_amount_minor: 5_000_000, needs_afa_each_debit: false },
 });
@@ -537,8 +543,8 @@ describe.skipIf(!enabled)('provider callback receiver over a real database', () 
     q<Receipt>(
       `select outcome, reason_class, provider, lender_org_id, config_id, delivery_id, payload_sha256, scheme, signature_present,
               timestamp_skew_seconds, body_bytes, source_ip_hmac, event_id
-         from payments.webhook_receipts where payload_sha256 = $1 order by received_at, id`,
-      [sha256(delivery.rawBody)],
+         from payments.webhook_receipts where payload_sha256 = $1 and received_at >= $2 order by received_at, id`,
+      [sha256(delivery.rawBody), STARTED],
     );
   const eventsByProviderId = (providerEventId: string) =>
     q<{
@@ -864,6 +870,24 @@ describe.skipIf(!enabled)('provider callback receiver over a real database', () 
   // ======================================================================================================
   // Deliveries that must not be accepted
   // ======================================================================================================
+  describe('concurrent deliveries', () => {
+    it('eight simultaneous copies of one delivery store exactly one event and one outbox job; the others are acknowledged duplicates', async () => {
+      const made = await pendingIntent(A, 11, 'conc11');
+      const captured = at(deliveriesFor('success', A, made, 'conc11'), 1);
+      const results = await Promise.all(
+        Array.from({ length: 8 }, () => post(callbacks, A.token, captured)),
+      );
+      expect(results.map((res) => res.statusCode)).toEqual(Array<number>(8).fill(200));
+      expect(await eventsByProviderId(eventIdOf(captured))).toHaveLength(1);
+      const row = await trackEvent(eventIdOf(captured));
+      expect(await outboxOf(row)).toHaveLength(1);
+      const receipts = await receiptsOf(captured);
+      expect(receipts.filter((r) => r.outcome === 'verified')).toHaveLength(1);
+      expect(receipts.filter((r) => r.outcome === 'duplicate')).toHaveLength(7);
+      expect(await seenCount(captured.headers['webhook-id'])).toBe('1');
+    });
+  });
+
   describe('a forged, stale or malformed delivery', () => {
     const s: { order: { orderRef: string; paymentRef: string } } = {
       order: { orderRef: '', paymentRef: '' },
@@ -942,7 +966,7 @@ describe.skipIf(!enabled)('provider callback receiver over a real database', () 
         rawBody: Buffer.alloc(0),
         headers: {},
       });
-      const garbage = Buffer.from('[1, 2, 3]', 'utf8');
+      const garbage = Buffer.from(`[1, 2, "${RUN}"]`, 'utf8');
       const garbageSigned = {
         rawBody: garbage,
         headers: signMockWebhook({
@@ -1127,6 +1151,48 @@ describe.skipIf(!enabled)('provider callback receiver over a real database', () 
         config_id: A.configId,
       });
       expect(row).toBeTruthy();
+    });
+
+    it('a delivery the receiver did not verify is refused with the uniform 401 even if the database were to accept it', async () => {
+      // The real lookup, but an ingest that always answers "stored": only the receiver's own rule stands between a forgery and a 200.
+      const real = createProviderHookProcessor(receiverPool);
+      const lax: ProviderHookProcessor = {
+        lookupConfig: (hash) => real.lookupConfig(hash),
+        ingest: async (hash, delivery) => {
+          await real.ingest(hash, delivery);
+          return { accepted: true, outcome: 'ok' };
+        },
+      };
+      const lenient = Fastify();
+      await lenient.register(rateLimit, { global: true, max: 100_000, timeWindow: '1 minute' });
+      registerProviderHooks(lenient, {
+        pool: receiverPool,
+        secret: secretOf,
+        environment: 'test',
+        processor: lax,
+        limits: { perTokenPerMinute: 100_000, perAddressPerMinute: 100_000 },
+      });
+      await lenient.ready();
+      try {
+        const order = { orderRef: `D-ORDER-${RUN}-lax`, paymentRef: `D-PAY-${RUN}-lax` };
+        const genuine = at(deliveriesFor('success', A, order, 'lax'), 1);
+        const forged = at(deliveriesFor('bad_signature', A, order, 'lax-forged'), 0);
+        const stale = at(deliveriesFor('old_timestamp', A, order, 'lax-stale'), 0);
+        const results = [
+          await post(lenient, A.token, forged),
+          await post(lenient, A.token, stale),
+          await post(lenient, randomBytes(32).toString('base64url'), genuine),
+          await post(lenient, S1.token, genuine),
+          await post(lenient, B.token, genuine),
+        ];
+        for (const res of results) {
+          expect(observable(res)).toMatchObject({ status: 401, body: UNIFORM_401 });
+        }
+        // Control: a delivery that IS verified gets the database's answer, which this stand-in turns into 200.
+        expect((await post(lenient, A.token, genuine)).statusCode).toBe(200);
+      } finally {
+        await lenient.close();
+      }
     });
 
     it("even when both lenders share one secret, the other lender's token does not match this lender's order: 409, nothing stored, the delivery id is free", async () => {
@@ -1523,6 +1589,20 @@ describe.skipIf(!enabled)('provider callback receiver over a real database', () 
         everySeenResponse.push(res.body);
       }
       expect(await receiptCount(A)).toBe(before + 1);
+    });
+
+    it('does not trust a forwarded-for header when no proxy hop is configured: the stored address hash is of the socket address', async () => {
+      const order = { orderRef: `D-ORDER-${RUN}-xff`, paymentRef: `D-PAY-${RUN}-xff` };
+      const forged = at(deliveriesFor('bad_signature', A, order, 'xff'), 0);
+      const res = await post(callbacks, A.token, forged, {
+        remoteAddress: '203.0.113.50',
+        headers: { 'x-forwarded-for': '198.51.100.250' },
+      });
+      expect(res.statusCode).toBe(401);
+      const [receipt] = await receiptsOf(forged);
+      const key = Buffer.from(IP_KEY, 'utf8');
+      expect(receipt?.source_ip_hmac).toBe(addressHmac(key, '203.0.113.50'));
+      expect(receipt?.source_ip_hmac).not.toBe(addressHmac(key, '198.51.100.250'));
     });
 
     it('limits per routing-token hash and per address with a fixed 429 that writes no receipt', async () => {
