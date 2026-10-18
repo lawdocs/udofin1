@@ -1,5 +1,4 @@
 import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
-import { usePreventScreenCapture } from 'expo-screen-capture';
 import { useMemo, useRef, useState } from 'react';
 import { Linking } from 'react-native';
 import { debitView, mandateView } from '../../../src/borrower/mandates-view';
@@ -49,7 +48,6 @@ export default function MandateScreen() {
 }
 
 function MandateBody({ mandateId }: { mandateId: string }) {
-  usePreventScreenCapture();
   const router = useRouter();
   const { t, language } = useI18n();
   const client = useMandatesClient();

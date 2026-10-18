@@ -89,6 +89,12 @@ const UNAVAILABLE_WORD: Readonly<Record<string, MessageKey>> = {
 // Payment options (the Pay screen)
 // ---------------------------------------------------------------------------------------------------------------
 export type OptionPurpose = BpPaymentOption['purpose'];
+const OPTION_PURPOSES: ReadonlySet<string> = new Set([
+  'installment',
+  'overdue',
+  'part_prepayment',
+  'foreclosure',
+]);
 
 /**
  * How the amount of one option is decided. The numbers are the API's; the screen never works one out.
@@ -271,7 +277,12 @@ export function payOptionsView(
       };
     }
   }
-  const built = o.available ? o.purposes.map((p) => optionView(p, o, ctx, lender)) : [];
+  // An unknown purpose (a contract drift the response check should already have refused) is never drawn.
+  const built = o.available
+    ? o.purposes.flatMap((p) =>
+        OPTION_PURPOSES.has(p.purpose) ? [optionView(p, o, ctx, lender)] : [],
+      )
+    : [];
   const options = [
     ...built.filter((p) => p.purpose === hint),
     ...built.filter((p) => p.purpose !== hint),
@@ -279,8 +290,9 @@ export function payOptionsView(
   return {
     lender,
     destination: masked !== null ? word('pay.destination', { lender, account: masked }) : null,
+    // "As reported on <date>" is said only next to figures that are shown. Out-of-date and withheld figures say their own words.
     reported:
-      o.reportedAsOf !== null
+      o.available && o.figuresAvailable && !o.stale && o.reportedAsOf !== null
         ? word('pay.reportedAsOf', { lender, date: ctx.dateTime(o.reportedAsOf) })
         : null,
     notice,
