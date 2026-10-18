@@ -197,9 +197,8 @@ export function SetupConfigsPage({
                       </td>
                       <td>
                         <a href={`/payment-setup/${c.id}`}>
-                          Open
+                          Open{' '}
                           <span className="sr-only">
-                            {' '}
                             the configuration drafted {formatIst(c.draftedAt)}
                           </span>
                         </a>
@@ -275,6 +274,8 @@ export function SetupNewConfigPage({
     : [];
   const ready =
     providerChoices.length > 0 && merchantChoices.length > 0 && settlementChoices.length > 0;
+  /** The first list that could not be loaded, whose status says whether it was a refusal or a failure. */
+  const failedLoad = [providers, merchants, settlements].find((loaded) => !loaded.ok);
   return (
     <div>
       <h1>New payment configuration</h1>
@@ -298,8 +299,8 @@ export function SetupNewConfigPage({
             Saving a draft creates a callback path that is shown to you once. Another person must
             approve the configuration before it is used.
           </p>
-          {providers.ok && merchants.ok && settlements.ok ? null : (
-            <LoadFailure what="the choices for a configuration" status={403} />
+          {failedLoad === undefined ? null : (
+            <LoadFailure what="the choices for a configuration" status={failedLoad.status} />
           )}
           {!ready ? (
             <EmptyList

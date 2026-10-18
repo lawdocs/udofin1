@@ -62,6 +62,8 @@ function codeFor(error: z.ZodError, fields: Readonly<Record<string, string>>): s
 
 // ---- Rail limits: up to eight rows of (rail, limit, kind, value), copied from the provider's documentation -----------------
 type RailValue = string | boolean | number;
+/** The shape the contract allows for a rail name and a limit name. */
+const RAIL_NAME = /^[a-z][a-z0-9_]{1,40}$/;
 
 function railValue(kind: string, text: string): RailValue | undefined {
   switch (kind) {
@@ -94,6 +96,9 @@ export function readRailLimits(
     const value = str(form, `value${String(row)}`);
     if (!rail && !limit && !value) continue;
     if (!rail || !limit || !kind || value === undefined)
+      return { ok: false, code: 'rail_limits_invalid' };
+    // A name the contract would not accept is refused here, so no row is ever dropped without the person being told.
+    if (!RAIL_NAME.test(rail) || !RAIL_NAME.test(limit))
       return { ok: false, code: 'rail_limits_invalid' };
     const parsed = railValue(kind, value);
     if (parsed === undefined) return { ok: false, code: 'limit_value_invalid' };

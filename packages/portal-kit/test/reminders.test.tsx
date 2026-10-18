@@ -251,7 +251,11 @@ const delivery = (over: object = {}) =>
     ...over,
   });
 
-const grantsFor = (permissions: readonly string[], lender = LENDER_A, name = 'Sample Finance Ltd') =>
+const grantsFor = (
+  permissions: readonly string[],
+  lender = LENDER_A,
+  name = 'Sample Finance Ltd',
+) =>
   reminderGrants([
     {
       organizationId: lender,
@@ -386,7 +390,9 @@ describe('every value of a closed vocabulary has plain words, and an unknown one
 
   it('says SMS is not available and is never sent', () => {
     expect(channelWords('sms')).toBe('SMS: not available, never sent');
-    expect(suppressReasonWords('sms_not_configured')).toBe('SMS is not available and is never sent.');
+    expect(suppressReasonWords('sms_not_configured')).toBe(
+      'SMS is not available and is never sent.',
+    );
   });
 
   it('never prints a value it has no wording for', () => {
@@ -488,7 +494,14 @@ describe('what the person may do, per lender', () => {
     expect(mayApprove(grants, LENDER_A, { status: 'draft', draftedBy: ME }, ME)).toBe(false);
     expect(mayApprove(grants, LENDER_A, { status: 'approved', draftedBy: OTHER }, ME)).toBe(false);
     expect(mayApprove(grants, LENDER_A, { status: 'retired', draftedBy: OTHER }, ME)).toBe(false);
-    expect(mayApprove(grantsFor(['reminder.policy.manage']), LENDER_A, { status: 'draft', draftedBy: OTHER }, ME)).toBe(false);
+    expect(
+      mayApprove(
+        grantsFor(['reminder.policy.manage']),
+        LENDER_A,
+        { status: 'draft', draftedBy: OTHER },
+        ME,
+      ),
+    ).toBe(false);
     expect(mayApprove(grants, LENDER_B, { status: 'draft', draftedBy: OTHER }, ME)).toBe(false);
   });
 
@@ -497,7 +510,9 @@ describe('what the person may do, per lender', () => {
     expect(mayRetire(grants, LENDER_A, { status: 'draft' })).toBe(true);
     expect(mayRetire(grants, LENDER_A, { status: 'approved' })).toBe(true);
     expect(mayRetire(grants, LENDER_A, { status: 'retired' })).toBe(false);
-    expect(mayRetire(grantsFor(['reminder.template.approve']), LENDER_A, { status: 'draft' })).toBe(false);
+    expect(mayRetire(grantsFor(['reminder.template.approve']), LENDER_A, { status: 'draft' })).toBe(
+      false,
+    );
   });
 
   it('opens the artefact pages to loan.read, manage or approve, and the log to loan.read only', () => {
@@ -505,14 +520,23 @@ describe('what the person may do, per lender', () => {
     const [manage] = grantsFor(['reminder.policy.manage']);
     const [approve] = grantsFor(['reminder.template.approve']);
     const [none] = grantsFor(['payment.read']);
-    expect([read, manage, approve].map((g) => (g ? mayViewArtefacts(g) : null))).toEqual([true, true, true]);
+    expect([read, manage, approve].map((g) => (g ? mayViewArtefacts(g) : null))).toEqual([
+      true,
+      true,
+      true,
+    ]);
     expect(none ? mayViewArtefacts(none) : null).toBe(false);
   });
 
   it('chooses the lender asked for when the person belongs to it, else the first that fits', () => {
-    const grants = [...grantsFor(['loan.read'], LENDER_A, 'A'), ...grantsFor(['loan.read'], LENDER_B, 'B')];
+    const grants = [
+      ...grantsFor(['loan.read'], LENDER_A, 'A'),
+      ...grantsFor(['loan.read'], LENDER_B, 'B'),
+    ];
     expect(chooseLender(grants, LENDER_B, (g) => g.read)?.lenderId).toBe(LENDER_B);
-    expect(chooseLender(grants, '0190a000-0000-7000-8000-0000000000ff', (g) => g.read)?.lenderId).toBe(LENDER_A);
+    expect(
+      chooseLender(grants, '0190a000-0000-7000-8000-0000000000ff', (g) => g.read)?.lenderId,
+    ).toBe(LENDER_A);
     expect(chooseLender(grants, undefined, (g) => g.manage)).toBeNull();
     expect(chooseLender([], LENDER_A, () => true)).toBeNull();
   });
@@ -559,7 +583,9 @@ describe('page queries and loaders', () => {
         STATUS_FILTERS.artefact,
       ),
     ).toEqual({});
-    expect(parseRemindersQuery({ status: ['approved', 'draft'] }, STATUS_FILTERS.artefact)).toEqual({});
+    expect(parseRemindersQuery({ status: ['approved', 'draft'] }, STATUS_FILTERS.artefact)).toEqual(
+      {},
+    );
   });
 
   it('builds links that keep the filters', () => {
@@ -600,7 +626,13 @@ describe('page queries and loaders', () => {
 describe('the allow-listed operations', () => {
   it('refuses an operation that is not on the list, without any call', async () => {
     const { api, calls } = recorder();
-    for (const op of ['reminders.policy.delete', 'servicing.import.commit', '__proto__', 'constructor', ''])
+    for (const op of [
+      'reminders.policy.delete',
+      'servicing.import.commit',
+      '__proto__',
+      'constructor',
+      '',
+    ])
       expect(await runRemindersOperation(api, formOf({ op })), op).toEqual({
         ok: false,
         code: 'path_not_allowed',
@@ -622,7 +654,9 @@ describe('the allow-listed operations', () => {
         code: 'validation_failed',
       });
     }
-    expect(await runRemindersOperation(api, formOf({ op: 'reminders.hold.release', id: HOLD }, false))).toEqual({
+    expect(
+      await runRemindersOperation(api, formOf({ op: 'reminders.hold.release', id: HOLD }, false)),
+    ).toEqual({
       ok: false,
       code: 'validation_failed',
     });
@@ -658,7 +692,9 @@ describe('the allow-listed operations', () => {
 
     it('sends the policy exactly as typed', async () => {
       const { api, calls } = recorder();
-      expect(await runRemindersOperation(api, formOf({ ...base, overdueWeekly: 'on' }))).toEqual({ ok: true });
+      expect(await runRemindersOperation(api, formOf({ ...base, overdueWeekly: 'on' }))).toEqual({
+        ok: true,
+      });
       expect(calls).toEqual([
         {
           path: '/v1/lender/reminder-policies',
@@ -684,7 +720,10 @@ describe('the allow-listed operations', () => {
 
     it('never sends SMS and says so', async () => {
       const { api, calls } = recorder();
-      const result = await runRemindersOperation(api, formOf({ ...base, channels: ['in_app', 'sms'] }));
+      const result = await runRemindersOperation(
+        api,
+        formOf({ ...base, channels: ['in_app', 'sms'] }),
+      );
       expect(result).toEqual({ ok: false, code: 'channels_invalid' });
       expect(calls).toEqual([]);
     });
@@ -725,7 +764,10 @@ describe('the allow-listed operations', () => {
       ['lender', { lenderId: 'not-an-id' }, 'validation_failed'],
     ])('sends nothing when the %s is wrong', async (_name, change, code) => {
       const { api, calls } = recorder();
-      expect(await runRemindersOperation(api, formOf({ ...base, ...change }))).toEqual({ ok: false, code });
+      expect(await runRemindersOperation(api, formOf({ ...base, ...change }))).toEqual({
+        ok: false,
+        code,
+      });
       expect(calls).toEqual([]);
     });
   });
@@ -754,7 +796,12 @@ describe('the allow-listed operations', () => {
     it('does not add, suggest, translate or complete anything', async () => {
       const { api, calls } = recorder();
       await runRemindersOperation(api, formOf({ ...base, body: 'x' }));
-      expect(Object.keys(calls[0]?.body as object).sort()).toEqual(['body', 'kind', 'language', 'lenderId']);
+      expect(Object.keys(calls[0]?.body as object).sort()).toEqual([
+        'body',
+        'kind',
+        'language',
+        'lenderId',
+      ]);
       expect((calls[0]?.body as { body: string }).body).toBe('x');
     });
 
@@ -767,7 +814,10 @@ describe('the allow-listed operations', () => {
       ['a missing lender', { lenderId: '' }, 'validation_failed'],
     ])('sends nothing for %s', async (_name, change, code) => {
       const { api, calls } = recorder();
-      expect(await runRemindersOperation(api, formOf({ ...base, ...change }))).toEqual({ ok: false, code });
+      expect(await runRemindersOperation(api, formOf({ ...base, ...change }))).toEqual({
+        ok: false,
+        code,
+      });
       expect(calls).toEqual([]);
     });
   });
@@ -809,7 +859,13 @@ describe('the allow-listed operations', () => {
       const { api, calls } = recorder();
       await runRemindersOperation(
         api,
-        formOf({ ...flat, chargeKind: 'percentage', flatAmount: '', percent: '2.5', sentenceHi: 'वाक्य' }),
+        formOf({
+          ...flat,
+          chargeKind: 'percentage',
+          flatAmount: '',
+          percent: '2.5',
+          sentenceHi: 'वाक्य',
+        }),
       );
       const body = calls[0]?.body as Record<string, unknown>;
       expect(body.percentBps).toBe(250);
@@ -835,7 +891,10 @@ describe('the allow-listed operations', () => {
 
     it('sends the sentences and the reason exactly as typed', async () => {
       const { api, calls } = recorder();
-      await runRemindersOperation(api, formOf({ ...flat, sentenceEn: '  Spaced  sentence.\n', reason: ' why ' }));
+      await runRemindersOperation(
+        api,
+        formOf({ ...flat, sentenceEn: '  Spaced  sentence.\n', reason: ' why ' }),
+      );
       const body = calls[0]?.body as { sentenceEn: string; reason: string };
       expect(body.sentenceEn).toBe('  Spaced  sentence.\n');
       expect(body.reason).toBe(' why ');
@@ -850,7 +909,10 @@ describe('the allow-listed operations', () => {
       ]) {
         const form = formOf({ ...flat, ...missing });
         for (const name of Object.keys(missing)) form.delete(name);
-        expect(await runRemindersOperation(api, form)).toEqual({ ok: false, code: 'attestation_missing' });
+        expect(await runRemindersOperation(api, form)).toEqual({
+          ok: false,
+          code: 'attestation_missing',
+        });
       }
       expect(calls).toEqual([]);
     });
@@ -871,7 +933,10 @@ describe('the allow-listed operations', () => {
         [{ sentenceEn: '' }, 'text_required'],
       ];
       for (const [change, code] of cases)
-        expect(await runRemindersOperation(api, formOf({ ...flat, ...change })), JSON.stringify(change)).toEqual({
+        expect(
+          await runRemindersOperation(api, formOf({ ...flat, ...change })),
+          JSON.stringify(change),
+        ).toEqual({
           ok: false,
           code,
         });
@@ -884,16 +949,21 @@ describe('the allow-listed operations', () => {
       ['reminders.policy.approve', `/v1/lender/reminder-policies/${POLICY}/approve`],
       ['reminders.template.approve', `/v1/lender/reminder-templates/${POLICY}/approve`],
       ['reminders.penal.approve', `/v1/lender/penal-charge-texts/${POLICY}/approve`],
-    ])('%s posts to its own route, and only after the approver ticked that they read it', async (op, path) => {
-      const { api, calls } = recorder();
-      expect(await runRemindersOperation(api, formOf({ op, id: POLICY }))).toEqual({
-        ok: false,
-        code: 'review_required',
-      });
-      expect(calls).toEqual([]);
-      expect(await runRemindersOperation(api, formOf({ op, id: POLICY, reviewed: 'on' }))).toEqual({ ok: true });
-      expect(calls).toEqual([{ path, body: {}, key: KEY }]);
-    });
+    ])(
+      '%s posts to its own route, and only after the approver ticked that they read it',
+      async (op, path) => {
+        const { api, calls } = recorder();
+        expect(await runRemindersOperation(api, formOf({ op, id: POLICY }))).toEqual({
+          ok: false,
+          code: 'review_required',
+        });
+        expect(calls).toEqual([]);
+        expect(
+          await runRemindersOperation(api, formOf({ op, id: POLICY, reviewed: 'on' })),
+        ).toEqual({ ok: true });
+        expect(calls).toEqual([{ path, body: {}, key: KEY }]);
+      },
+    );
 
     it.each([
       ['reminders.policy.retire', `/v1/lender/reminder-policies/${POLICY}/retire`],
@@ -907,9 +977,14 @@ describe('the allow-listed operations', () => {
 
     it('refuses an id that is not an id, so nothing odd can be put in a path', async () => {
       const { api, calls } = recorder();
-      for (const op of Object.keys(REMINDERS_OPERATIONS).filter((o) => /approve|retire|release/.test(o)))
+      for (const op of Object.keys(REMINDERS_OPERATIONS).filter((o) =>
+        /approve|retire|release/.test(o),
+      ))
         for (const id of ['', 'not-an-id', '../../v1/platform/features', `${POLICY}/extra`])
-          expect(await runRemindersOperation(api, formOf({ op, id, reviewed: 'on' })), `${op} ${id}`).toEqual({
+          expect(
+            await runRemindersOperation(api, formOf({ op, id, reviewed: 'on' })),
+            `${op} ${id}`,
+          ).toEqual({
             ok: false,
             code: 'validation_failed',
           });
@@ -921,7 +996,12 @@ describe('the allow-listed operations', () => {
       expect(
         await runRemindersOperation(
           api,
-          formOf({ op: 'reminders.hold.place', loanAccountId: LOAN, reason: 'dispute', note: ' paused ' }),
+          formOf({
+            op: 'reminders.hold.place',
+            loanAccountId: LOAN,
+            reason: 'dispute',
+            note: ' paused ',
+          }),
         ),
       ).toEqual({ ok: true });
       expect(calls).toEqual([
@@ -937,7 +1017,12 @@ describe('the allow-listed operations', () => {
       const { api, calls } = recorder();
       await runRemindersOperation(
         api,
-        formOf({ op: 'reminders.hold.place', loanAccountId: LOAN, reason: 'legal', lenderId: LENDER_A }),
+        formOf({
+          op: 'reminders.hold.place',
+          loanAccountId: LOAN,
+          reason: 'legal',
+          lenderId: LENDER_A,
+        }),
       );
       expect(calls[0]?.body).toEqual({ reason: 'legal' });
     });
@@ -950,7 +1035,9 @@ describe('the allow-listed operations', () => {
       [{ loanAccountId: LOAN, reason: 'legal', note: 'n'.repeat(1001) }, 'note_invalid'],
     ])('sends nothing for a bad hold %j', async (fields, code) => {
       const { api, calls } = recorder();
-      expect(await runRemindersOperation(api, formOf({ op: 'reminders.hold.place', ...fields }))).toEqual({
+      expect(
+        await runRemindersOperation(api, formOf({ op: 'reminders.hold.place', ...fields })),
+      ).toEqual({
         ok: false,
         code,
       });
@@ -960,10 +1047,17 @@ describe('the allow-listed operations', () => {
     it('releases a hold, with or without a note', async () => {
       const { api, calls } = recorder();
       await runRemindersOperation(api, formOf({ op: 'reminders.hold.release', id: HOLD }));
-      await runRemindersOperation(api, formOf({ op: 'reminders.hold.release', id: HOLD, note: ' done ' }));
+      await runRemindersOperation(
+        api,
+        formOf({ op: 'reminders.hold.release', id: HOLD, note: ' done ' }),
+      );
       expect(calls).toEqual([
         { path: `/v1/lender/communication-holds/${HOLD}/release`, body: {}, key: KEY },
-        { path: `/v1/lender/communication-holds/${HOLD}/release`, body: { note: 'done' }, key: KEY },
+        {
+          path: `/v1/lender/communication-holds/${HOLD}/release`,
+          body: { note: 'done' },
+          key: KEY,
+        },
       ]);
     });
 
@@ -973,7 +1067,10 @@ describe('the allow-listed operations', () => {
         post: () => Promise.resolve(fail(403, 'self_approval')),
       };
       expect(
-        await runRemindersOperation(api, formOf({ op: 'reminders.policy.approve', id: POLICY, reviewed: 'on' })),
+        await runRemindersOperation(
+          api,
+          formOf({ op: 'reminders.policy.approve', id: POLICY, reviewed: 'on' }),
+        ),
       ).toEqual({ ok: false, code: 'self_approval' });
       const odd: OnboardingApi = {
         get: () => Promise.resolve(fail(404, 'not_found')),
@@ -1020,13 +1117,15 @@ describe('the allow-listed operations', () => {
     });
 
     it('adds the result as done=1 or a short error code and nothing else', () => {
-      expect(remindersNoticeUrl('/reminders/policy', { ok: true })).toBe('/reminders/policy?done=1');
-      expect(remindersNoticeUrl('/reminders/policy?lenderId=abc', { ok: false, code: 'self_approval' })).toBe(
-        '/reminders/policy?lenderId=abc&error=self_approval',
+      expect(remindersNoticeUrl('/reminders/policy', { ok: true })).toBe(
+        '/reminders/policy?done=1',
       );
-      expect(remindersNoticeUrl('/reminders/holds?done=1&error=x', { ok: false, code: 'Not A Code!' })).toBe(
-        '/reminders/holds?error=unknown',
-      );
+      expect(
+        remindersNoticeUrl('/reminders/policy?lenderId=abc', { ok: false, code: 'self_approval' }),
+      ).toBe('/reminders/policy?lenderId=abc&error=self_approval');
+      expect(
+        remindersNoticeUrl('/reminders/holds?done=1&error=x', { ok: false, code: 'Not A Code!' }),
+      ).toBe('/reminders/holds?error=unknown');
     });
   });
 });
@@ -1098,7 +1197,9 @@ describe('Reminder log', () => {
     const table = screen.getByRole('table', { name: 'Reminders, newest first' });
     const rows = within(table).getAllByRole('row');
     expect(rows).toHaveLength(3);
-    expect(text(rows[1] as HTMLElement)).toContain('Before the due date: 3 days before the due date');
+    expect(text(rows[1] as HTMLElement)).toContain(
+      'Before the due date: 3 days before the due date',
+    );
     expect(text(rows[1] as HTMLElement)).toContain('₹12,500.00');
     expect(text(rows[1] as HTMLElement)).toContain('Handed to the channel');
     expect(text(rows[2] as HTMLElement)).toContain('SMS: not available, never sent');
@@ -1118,7 +1219,9 @@ describe('Reminder log', () => {
 
   it('says when Hindi fell back to English', () => {
     view({ reminders: plainPage([reminder({ languageFallback: true })]) });
-    expect(screen.getByText(/English \(used because no approved Hindi wording was available\)/)).toBeTruthy();
+    expect(
+      screen.getByText(/English \(used because no approved Hindi wording was available\)/),
+    ).toBeTruthy();
   });
 
   it('links each reminder to its attempts with a name a screen reader can use', () => {
@@ -1136,13 +1239,20 @@ describe('Reminder log', () => {
         since: null,
         items: [
           { status: 'sent', suppressReason: null, channel: 'push', count: 1234 },
-          { status: 'suppressed', suppressReason: 'penal_text_missing', channel: 'in_app', count: 7 },
+          {
+            status: 'suppressed',
+            suppressReason: 'penal_text_missing',
+            channel: 'in_app',
+            count: 7,
+          },
         ],
       }),
     });
     const table = screen.getByRole('table', { name: 'Reminders by status, reason and channel' });
     expect(text(table)).toContain('1,234');
-    expect(text(table)).toContain('No approved penal-charge text exists, so an overdue reminder is not sent.');
+    expect(text(table)).toContain(
+      'No approved penal-charge text exists, so an overdue reminder is not sent.',
+    );
     expect(text(container)).toMatch(/the last 30 days/);
     expect(text(container)).not.toContain('penal_text_missing');
   });
@@ -1171,7 +1281,10 @@ describe('Reminder log', () => {
   it('asks which lender when the person belongs to several', () => {
     const ctx: RemindersContext = {
       ...ctxFor(READ, '/reminders'),
-      grants: [...grantsFor(READ, LENDER_A, 'Alpha Finance'), ...grantsFor(READ, LENDER_B, 'Beta Finance')],
+      grants: [
+        ...grantsFor(READ, LENDER_A, 'Alpha Finance'),
+        ...grantsFor(READ, LENDER_B, 'Beta Finance'),
+      ],
     };
     view({ lender: ctx.grants[1] ?? null }, ctx);
     const select = screen.getByLabelText<HTMLSelectElement>('Lender');
@@ -1188,14 +1301,18 @@ describe('Reminder log', () => {
       expect(heading).toBeTruthy();
       const notice = heading.closest('section') as HTMLElement;
       expect(notice.getAttribute('role')).toBe('status');
-      expect(within(notice).getByRole('link', { name: 'Go to the penal-charge text' }).getAttribute('href')).toBe(
-        '/reminders/penal-text',
-      );
+      expect(
+        within(notice)
+          .getByRole('link', { name: 'Go to the penal-charge text' })
+          .getAttribute('href'),
+      ).toBe('/reminders/penal-text');
     });
 
     it('does not show it when an approved penal-charge text exists', () => {
       const { container } = view({ overdue: withFlag(true) });
-      expect(text(container)).not.toMatch(/are not sent until an approved penal-charge text exists/);
+      expect(text(container)).not.toMatch(
+        /are not sent until an approved penal-charge text exists/,
+      );
       expect(text(container)).toMatch(/An approved penal-charge text exists/);
     });
 
@@ -1244,7 +1361,9 @@ describe('Attempts of one reminder', () => {
     const table = screen.getByRole('table', { name: 'Attempts, oldest first' });
     const rows = within(table).getAllByRole('row');
     expect(rows).toHaveLength(4);
-    expect(text(rows[1] as HTMLElement)).toContain('Accepted by the channel (this is not a delivery report)');
+    expect(text(rows[1] as HTMLElement)).toContain(
+      'Accepted by the channel (this is not a delivery report)',
+    );
     expect(text(rows[2] as HTMLElement)).toContain('Delivered (from a delivery report)');
     expect(text(rows[3] as HTMLElement)).toContain('The channel did not answer in time');
     expect(text(container)).toContain(SHA_B);
@@ -1286,7 +1405,12 @@ describe('Policy', () => {
   const view = (
     items = [policy()],
     permissions: readonly string[] = MANAGE,
-    over: { userId?: string; approved?: boolean; query?: object; page?: Parameters<typeof PolicyPage>[0]['page'] } = {},
+    over: {
+      userId?: string;
+      approved?: boolean;
+      query?: object;
+      page?: Parameters<typeof PolicyPage>[0]['page'];
+    } = {},
   ) => {
     const ctx = ctxFor(permissions, '/reminders/policy', over.userId ?? ME);
     return {
@@ -1335,8 +1459,12 @@ describe('Policy', () => {
       APPROVE,
     );
     expect(screen.getByText(/By you on/)).toBeTruthy();
-    expect(screen.getByText(`By another person (ID ${THIRD}) on 17 Oct 2026, 10:00 IST`)).toBeTruthy();
-    expect(screen.getByText(`By another person (ID ${OTHER}) on 16 Oct 2026, 17:30 IST`)).toBeTruthy();
+    expect(
+      screen.getByText(`By another person (ID ${THIRD}) on 17 Oct 2026, 10:00 IST`),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(`By another person (ID ${OTHER}) on 16 Oct 2026, 17:30 IST`),
+    ).toBeTruthy();
   });
 
   it('says there is no policy yet, and that nothing is planned without an approved one', () => {
@@ -1350,25 +1478,37 @@ describe('Policy', () => {
     expect(screen.getByText('Could not load the policy')).toBeTruthy();
     expect(text(container)).not.toContain('23505');
     cleanup();
-    render(<PolicyPage lender={null} page={fail(403, 'forbidden')} query={{}} ctx={ctxFor(MANAGE)} />);
+    render(
+      <PolicyPage lender={null} page={fail(403, 'forbidden')} query={{}} ctx={ctxFor(MANAGE)} />,
+    );
     expect(screen.getByText('You cannot view the reminder policy')).toBeTruthy();
   });
 
   it('shows the overdue notice when no approved penal-charge text exists', () => {
     view([policy()], MANAGE, { approved: false });
-    expect(screen.getByRole('heading', { name: /Overdue reminders are not sent until an approved penal-charge text exists/ })).toBeTruthy();
+    expect(
+      screen.getByRole('heading', {
+        name: /Overdue reminders are not sent until an approved penal-charge text exists/,
+      }),
+    ).toBeTruthy();
   });
 
   describe('guards', () => {
     it('a read-only role sees no write form at all', () => {
-      const { container } = view([policy(), policy({ id: POLICY_2, status: 'approved', version: 1 })], READ);
+      const { container } = view(
+        [policy(), policy({ id: POLICY_2, status: 'approved', version: 1 })],
+        READ,
+      );
       expect(ops(container)).toEqual([]);
       expect(container.querySelector('form[method="get"]')).toBeTruthy();
       expect(screen.queryByText('Draft a new policy')).toBeNull();
     });
 
     it('a person who manages policy sees the draft form and the retire form, but cannot approve', () => {
-      const { container } = view([policy(), policy({ id: POLICY_2, status: 'approved', version: 1 })], MANAGE);
+      const { container } = view(
+        [policy(), policy({ id: POLICY_2, status: 'approved', version: 1 })],
+        MANAGE,
+      );
       expect(ops(container).sort()).toEqual([
         'reminders.policy.draft',
         'reminders.policy.retire',
@@ -1390,7 +1530,9 @@ describe('Policy', () => {
     it('never draws the approve form for the person who drafted the version', () => {
       const { container } = view([policy({ draftedBy: ME })], APPROVE);
       expect(ops(container)).toEqual([]);
-      expect(screen.getByText('You drafted this version, so another person must approve it.')).toBeTruthy();
+      expect(
+        screen.getByText('You drafted this version, so another person must approve it.'),
+      ).toBeTruthy();
     });
 
     it('does not draw approve for a version that is already approved or retired', () => {
@@ -1409,10 +1551,22 @@ describe('Policy', () => {
     it('draws nothing for a person with rights in another lender only', () => {
       const ctx: RemindersContext = {
         ...ctxFor(READ),
-        grants: [...grantsFor(READ, LENDER_A), ...grantsFor(['loan.read', 'reminder.policy.manage', 'reminder.template.approve'], LENDER_B, 'Other')],
+        grants: [
+          ...grantsFor(READ, LENDER_A),
+          ...grantsFor(
+            ['loan.read', 'reminder.policy.manage', 'reminder.template.approve'],
+            LENDER_B,
+            'Other',
+          ),
+        ],
       };
       const { container } = render(
-        <PolicyPage lender={ctx.grants[0] ?? null} page={pageOf([policy()])} query={{}} ctx={ctx} />,
+        <PolicyPage
+          lender={ctx.grants[0] ?? null}
+          page={pageOf([policy()])}
+          query={{}}
+          ctx={ctx}
+        />,
       );
       expect(ops(container)).toEqual([]);
     });
@@ -1428,19 +1582,29 @@ describe('Policy', () => {
       expect(offsets.required).toBe(true);
       expect(screen.getByLabelText<HTMLInputElement>('In-app message').checked).toBe(false);
       expect(screen.getByLabelText<HTMLInputElement>('Push notification').checked).toBe(false);
-      expect(screen.getByLabelText<HTMLInputElement>('Also send weekly overdue reminders').checked).toBe(false);
-      expect(screen.getByLabelText<HTMLInputElement>('Daily window starts (India time)').value).toBe('');
-      expect(screen.getByLabelText<HTMLInputElement>('Daily window ends (India time)').value).toBe('');
-      expect(screen.getByLabelText<HTMLInputElement>('Most messages per loan per day').value).toBe('');
+      expect(
+        screen.getByLabelText<HTMLInputElement>('Also send weekly overdue reminders').checked,
+      ).toBe(false);
+      expect(
+        screen.getByLabelText<HTMLInputElement>('Daily window starts (India time)').value,
+      ).toBe('');
+      expect(screen.getByLabelText<HTMLInputElement>('Daily window ends (India time)').value).toBe(
+        '',
+      );
+      expect(screen.getByLabelText<HTMLInputElement>('Most messages per loan per day').value).toBe(
+        '',
+      );
       expect(container.querySelector('input[value="sms"]')).toBeNull();
       expect(screen.getByText('SMS: not available, never sent.')).toBeTruthy();
     });
 
     it('suggests no value anywhere', () => {
       const { container } = view([]);
-      const filled = [...container.querySelectorAll<HTMLInputElement>('form input:not([type="hidden"]):not([type="checkbox"])')].filter(
-        (i) => i.value !== '',
-      );
+      const filled = [
+        ...container.querySelectorAll<HTMLInputElement>(
+          'form input:not([type="hidden"]):not([type="checkbox"])',
+        ),
+      ].filter((i) => i.value !== '');
       expect(filled).toEqual([]);
     });
   });
@@ -1466,7 +1630,9 @@ describe('Wording', () => {
 
   it('shows the wording exactly as saved, with its line breaks, and does not run markup in it', () => {
     const { container } = view([template({ body: 'Line one\nLine two <b>bold</b> & more' })]);
-    const dd = [...container.querySelectorAll('dd')].find((d) => d.textContent?.startsWith('Line one'));
+    const dd = [...container.querySelectorAll('dd')].find((d) =>
+      d.textContent?.startsWith('Line one'),
+    );
     expect(dd?.textContent).toBe('Line one\nLine two <b>bold</b> & more');
     expect(container.querySelector('b')).toBeNull();
   });
@@ -1476,8 +1642,14 @@ describe('Wording', () => {
       template(),
       template({ id: TEMPLATE_2, kind: 'pre_due', language: 'hi', version: 3, status: 'approved' }),
     ]);
-    expect(screen.getByRole('article', { name: /After the due date \(overdue\), English: version 1, Draft/ })).toBeTruthy();
-    expect(screen.getByRole('article', { name: /Before the due date, Hindi: version 3, Approved/ })).toBeTruthy();
+    expect(
+      screen.getByRole('article', {
+        name: /After the due date \(overdue\), English: version 1, Draft/,
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole('article', { name: /Before the due date, Hindi: version 3, Approved/ }),
+    ).toBeTruthy();
   });
 
   it('lists the only placeholders a wording may use, and says an overdue wording needs the penal-charge one', () => {
@@ -1575,13 +1747,19 @@ describe('Penal-charge text', () => {
   it('says plainly when there is no Hindi sentence, and shows a stated "no" as no', () => {
     const { container } = view([penal({ separateFromInterest: false, notCompounded: false })]);
     expect(text(container)).toContain('No Hindi sentence');
-    const dts = [...container.querySelectorAll('dt')].filter((d) => d.textContent?.startsWith('Stated by the lender'));
+    const dts = [...container.querySelectorAll('dt')].filter((d) =>
+      d.textContent?.startsWith('Stated by the lender'),
+    );
     expect(dts.map((d) => d.nextElementSibling?.textContent)).toEqual(['No', 'No']);
   });
 
   it('shows the notice about overdue reminders while no approved text exists, and not afterwards', () => {
     view([penal()], MANAGE, { approved: false });
-    expect(screen.getByRole('heading', { name: /Overdue reminders are not sent until an approved penal-charge text exists/ })).toBeTruthy();
+    expect(
+      screen.getByRole('heading', {
+        name: /Overdue reminders are not sent until an approved penal-charge text exists/,
+      }),
+    ).toBeTruthy();
     cleanup();
     const { container } = view([penal({ status: 'approved' })], MANAGE, { approved: true });
     expect(text(container)).not.toMatch(/are not sent until an approved penal-charge text exists/);
@@ -1589,7 +1767,9 @@ describe('Penal-charge text', () => {
 
   it('warns that retiring the only approved text stops overdue reminders', () => {
     view([penal({ status: 'approved' })], MANAGE);
-    expect(screen.getByText(/retiring it stops overdue reminders until another is approved/)).toBeTruthy();
+    expect(
+      screen.getByText(/retiring it stops overdue reminders until another is approved/),
+    ).toBeTruthy();
   });
 
   it('guards the forms by role and by drafter', () => {
@@ -1622,9 +1802,11 @@ describe('Penal-charge text', () => {
     const { container } = view([]);
     expect(text(container)).toMatch(/Udofin does not suggest, translate or calculate any charge/);
     expect(text(container)).toMatch(/not a legal opinion/);
-    const filled = [...container.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('form input:not([type="hidden"]):not([type="checkbox"]), form textarea')].filter(
-      (i) => i.value !== '',
-    );
+    const filled = [
+      ...container.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
+        'form input:not([type="hidden"]):not([type="checkbox"]), form textarea',
+      ),
+    ].filter((i) => i.value !== '');
     expect(filled).toEqual([]);
   });
 
@@ -1669,7 +1851,9 @@ describe('Holds', () => {
         }),
       ]),
     );
-    const rows = within(screen.getByRole('table', { name: 'Holds, newest first' })).getAllByRole('row');
+    const rows = within(screen.getByRole('table', { name: 'Holds, newest first' })).getAllByRole(
+      'row',
+    );
     expect(text(rows[1] as HTMLElement)).toContain('Hardship');
     expect(text(rows[1] as HTMLElement)).toContain('The lender asked for a pause.');
     expect(text(rows[1] as HTMLElement)).toContain('Active');
@@ -1718,7 +1902,9 @@ describe('Holds', () => {
 
   it('links each hold to its loan without naming a borrower', () => {
     view(plainPage([hold()]));
-    expect(screen.getByRole('link', { name: 'The loan' }).getAttribute('href')).toBe(`/loans/${LOAN}`);
+    expect(screen.getByRole('link', { name: 'The loan' }).getAttribute('href')).toBe(
+      `/loans/${LOAN}`,
+    );
   });
 });
 
@@ -1737,8 +1923,12 @@ describe('the forms that keep what was typed', () => {
     await u.type(screen.getByLabelText('Days from each due date'), '-3, 0');
     await u.click(screen.getByLabelText('In-app message'));
     await u.click(screen.getByLabelText('Also send weekly overdue reminders'));
-    fireEvent.change(screen.getByLabelText('Daily window starts (India time)'), { target: { value: '09:00' } });
-    fireEvent.change(screen.getByLabelText('Daily window ends (India time)'), { target: { value: '18:00' } });
+    fireEvent.change(screen.getByLabelText('Daily window starts (India time)'), {
+      target: { value: '09:00' },
+    });
+    fireEvent.change(screen.getByLabelText('Daily window ends (India time)'), {
+      target: { value: '18:00' },
+    });
     await u.type(screen.getByLabelText('Most messages per loan per day'), '1');
     await u.click(screen.getByRole('button', { name: 'Save as a draft' }));
     const alert = await screen.findByRole('alert');
@@ -1746,12 +1936,18 @@ describe('the forms that keep what was typed', () => {
       'The daily window was not accepted. It can only be inside what the platform allows.',
     );
     await waitFor(() =>
-      expect(screen.getByLabelText<HTMLInputElement>('Days from each due date').value).toBe('-3, 0'),
+      expect(screen.getByLabelText<HTMLInputElement>('Days from each due date').value).toBe(
+        '-3, 0',
+      ),
     );
     expect(screen.getByLabelText<HTMLInputElement>('In-app message').checked).toBe(true);
     expect(screen.getByLabelText<HTMLInputElement>('Push notification').checked).toBe(false);
-    expect(screen.getByLabelText<HTMLInputElement>('Also send weekly overdue reminders').checked).toBe(true);
-    expect(screen.getByLabelText<HTMLInputElement>('Daily window starts (India time)').value).toBe('09:00');
+    expect(
+      screen.getByLabelText<HTMLInputElement>('Also send weekly overdue reminders').checked,
+    ).toBe(true);
+    expect(screen.getByLabelText<HTMLInputElement>('Daily window starts (India time)').value).toBe(
+      '09:00',
+    );
     await u.click(screen.getByRole('button', { name: 'Save as a draft' }));
     await waitFor(() => expect(action).toHaveBeenCalledTimes(2));
     const first = seen[0];
@@ -1766,7 +1962,9 @@ describe('the forms that keep what was typed', () => {
   });
 
   it('shows an error as a sentence and never the text the server sent', async () => {
-    const action = vi.fn(() => Promise.resolve({ ok: false as const, code: 'SQLSTATE 23505 duplicate key' }));
+    const action = vi.fn(() =>
+      Promise.resolve({ ok: false as const, code: 'SQLSTATE 23505 duplicate key' }),
+    );
     const u = user();
     const { container } = render(<HoldPlaceFields action={action} returnTo="/reminders/holds" />);
     await u.type(screen.getByLabelText('Loan ID'), LOAN);
@@ -1779,13 +1977,17 @@ describe('the forms that keep what was typed', () => {
   it('says the action was recorded, and empties the form, after success', async () => {
     const action = vi.fn(() => Promise.resolve({ ok: true as const }));
     const u = user();
-    render(<TemplateDraftFields lenderId={LENDER_A} action={action} returnTo="/reminders/wording" />);
+    render(
+      <TemplateDraftFields lenderId={LENDER_A} action={action} returnTo="/reminders/wording" />,
+    );
     await u.selectOptions(screen.getByLabelText('Kind of reminder'), 'overdue');
     await u.selectOptions(screen.getByLabelText('Language'), 'en');
     await u.type(screen.getByLabelText('Wording'), 'Hello {{lender_name}}');
     await u.click(screen.getByRole('button', { name: 'Save as a draft' }));
     expect((await screen.findByRole('status')).textContent).toBe('Your action was recorded.');
-    await waitFor(() => expect(screen.getByLabelText<HTMLTextAreaElement>('Wording').value).toBe(''));
+    await waitFor(() =>
+      expect(screen.getByLabelText<HTMLTextAreaElement>('Wording').value).toBe(''),
+    );
   });
 
   it('says it is sending, and cannot be sent twice meanwhile', async () => {
@@ -1811,7 +2013,9 @@ describe('the forms that keep what was typed', () => {
   it('does not restore the two statements about a penal charge after a refusal', async () => {
     const action = vi.fn(() => Promise.resolve({ ok: false as const, code: 'charge_invalid' }));
     const u = user();
-    render(<PenalDraftFields lenderId={LENDER_A} action={action} returnTo="/reminders/penal-text" />);
+    render(
+      <PenalDraftFields lenderId={LENDER_A} action={action} returnTo="/reminders/penal-text" />,
+    );
     await u.selectOptions(screen.getByLabelText('Kind of charge'), 'flat');
     await u.type(screen.getByLabelText('Flat amount in rupees (for a flat charge)'), '250');
     await u.type(screen.getByLabelText('Reason for the charge'), 'A reason');
@@ -1827,7 +2031,9 @@ describe('the forms that keep what was typed', () => {
     await u.click(screen.getByRole('button', { name: 'Save as a draft' }));
     await screen.findByRole('alert');
     await waitFor(() =>
-      expect(screen.getByLabelText<HTMLTextAreaElement>('Reason for the charge').value).toBe('A reason'),
+      expect(screen.getByLabelText<HTMLTextAreaElement>('Reason for the charge').value).toBe(
+        'A reason',
+      ),
     );
     expect(separate.checked).toBe(false);
     expect(compounded.checked).toBe(false);
@@ -1844,16 +2050,44 @@ describe('across every page', () => {
       render(
         <RemindersLogPage
           lender={lender}
-          summary={ok({ lenderId: LENDER_A, since: null, items: [{ status: 'sent', suppressReason: null, channel: 'push', count: 3 }] })}
+          summary={ok({
+            lenderId: LENDER_A,
+            since: null,
+            items: [{ status: 'sent', suppressReason: null, channel: 'push', count: 3 }],
+          })}
           reminders={plainPage([reminder()])}
           overdue={withFlag(false)}
           query={{}}
           ctx={ctx}
         />,
       ),
-      render(<PolicyPage lender={lender} page={pageOf([policy(), policy({ id: POLICY_2, status: 'approved', version: 1 })])} query={{}} ctx={ctx} />),
-      render(<WordingPage lender={lender} page={plainPage([template(), template({ id: TEMPLATE_2, status: 'approved', version: 2 })])} query={{}} ctx={ctx} />),
-      render(<PenalTextPage lender={lender} page={pageOf([penal(), penal({ id: PENAL_2, status: 'approved', version: 2 })])} query={{}} ctx={ctx} />),
+      render(
+        <PolicyPage
+          lender={lender}
+          page={pageOf([policy(), policy({ id: POLICY_2, status: 'approved', version: 1 })])}
+          query={{}}
+          ctx={ctx}
+        />,
+      ),
+      render(
+        <WordingPage
+          lender={lender}
+          page={plainPage([
+            template(),
+            template({ id: TEMPLATE_2, status: 'approved', version: 2 }),
+          ])}
+          query={{}}
+          ctx={ctx}
+        />,
+      ),
+      render(
+        <PenalTextPage
+          lender={lender}
+          page={pageOf([penal(), penal({ id: PENAL_2, status: 'approved', version: 2 })])}
+          query={{}}
+          ctx={ctx}
+        />,
+      ),
       render(<HoldsPage holds={plainPage([hold()])} query={{}} ctx={ctx} />),
       render(<ReminderAttemptsPage log={ok({ reminderId: REMINDER, items: [delivery()] })} />),
     ];
@@ -1873,7 +2107,9 @@ describe('across every page', () => {
         'input:not([type="hidden"]), select, textarea',
       );
       for (const control of controls)
-        expect(control.labels?.length ?? 0, `${control.tagName} ${control.name}`).toBeGreaterThan(0);
+        expect(control.labels?.length ?? 0, `${control.tagName} ${control.name}`).toBeGreaterThan(
+          0,
+        );
       for (const table of view.container.querySelectorAll('table'))
         expect(table.querySelector('caption'), 'a table has a caption').toBeTruthy();
     }
@@ -1886,26 +2122,32 @@ describe('across every page', () => {
   });
 
   it('uses calm wording: no urgency, no countdown, no marketing', () => {
-    const banned = /urgent|hurry|last chance|act now|limited time|don.t miss|expires? in|countdown|offer|discount|cashback|free\b|only today/i;
+    const banned =
+      /urgent|hurry|last chance|act now|limited time|don.t miss|expires? in|countdown|offer|discount|cashback|free\b|only today/i;
     for (const view of everyPage()) expect(text(view.container)).not.toMatch(banned);
   });
 
   it('makes no claim of compliance, approval by a regulator or safety', () => {
-    const claims = /complian|regulator|RBI|legally|certified|guarantee|safe\b|secure\b|approved by (the )?(bank|authority)/i;
+    const claims =
+      /complian|regulator|RBI|legally|certified|guarantee|safe\b|secure\b|approved by (the )?(bank|authority)/i;
     for (const view of everyPage()) expect(text(view.container)).not.toMatch(claims);
   });
 
   it('shows no raw vocabulary value, database state or long run of digits', () => {
     for (const view of everyPage()) {
       const t = stripIds(text(view.container)).replace(/[0-9a-f]{64}/g, 'HASH');
-      expect(t).not.toMatch(/\b(in_app|pre_due|due_day|penal_text_missing|sms_not_configured|not_configured|delivery_report|SQLSTATE)\b/);
+      expect(t).not.toMatch(
+        /\b(in_app|pre_due|due_day|penal_text_missing|sms_not_configured|not_configured|delivery_report|SQLSTATE)\b/,
+      );
       expect(t).not.toMatch(/\d{9,}/);
     }
   });
 
   it('sends the person back to a reminders page and puts the lender’s own return path in every form', () => {
     for (const view of everyPage())
-      for (const input of view.container.querySelectorAll<HTMLInputElement>('input[name="returnTo"]'))
+      for (const input of view.container.querySelectorAll<HTMLInputElement>(
+        'input[name="returnTo"]',
+      ))
         expect(safeRemindersReturnPath(input.value)).toBe(input.value);
   });
 

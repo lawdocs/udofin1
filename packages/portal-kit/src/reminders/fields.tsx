@@ -114,6 +114,7 @@ export function SelectInput({
     <div className="field">
       <label htmlFor={id}>{label}</label>
       <select
+        key={defaultValue ?? ''}
         id={id}
         name={name}
         defaultValue={defaultValue ?? ''}
