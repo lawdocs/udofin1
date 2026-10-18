@@ -2353,8 +2353,7 @@ describe('bank statement: the first line is checked in the browser', () => {
     expect(body).not.toContain('The first line names the three columns');
     // A warning only: the server decides, so the form can still be sent.
     expect(
-      (screen.getByRole('button', { name: 'Upload the bank credits' }) as HTMLButtonElement)
-        .disabled,
+      screen.getByRole<HTMLButtonElement>('button', { name: 'Upload the bank credits' }).disabled,
     ).toBe(false);
   });
 
