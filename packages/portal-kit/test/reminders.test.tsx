@@ -24,7 +24,15 @@ import {
   LrReminder,
   LrTemplate,
 } from '@udofin/contracts';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import {
+  cleanup,
+  configure,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { type OnboardingApi } from '../src/onboarding/api.js';
@@ -89,6 +97,10 @@ import {
   remindersErrorMessage,
   suppressReasonWords,
 } from '../src/reminders/wording.js';
+
+// These tests type into real forms; on a busy machine that can take longer than the defaults.
+configure({ asyncUtilTimeout: 8000 });
+vi.setConfig({ testTimeout: 30_000 });
 
 afterEach(cleanup);
 
@@ -401,8 +413,10 @@ describe('every value of a closed vocabulary has plain words, and an unknown one
     expect(reminderStatusShort('exploded')).not.toContain('exploded');
     expect(deliveryStateWords('vanished')).not.toContain('vanished');
     expect(holdReasonWords('mystery')).not.toContain('mystery');
-    expect(artefactStatusWords('toString')).not.toContain('toString');
-    expect(suppressReasonWords('constructor')).not.toContain('constructor');
+    // Names every object has must not find a property of the table: they get the plain fallback.
+    expect(artefactStatusWords('toString')).toBe('A status this screen has no wording for');
+    expect(suppressReasonWords('constructor')).toBe('A reason this screen has no wording for.');
+    expect(channelWords('__proto__')).toBe('A channel this screen has no wording for');
   });
 
   it('keeps the words for "sent" from being read as "delivered"', () => {

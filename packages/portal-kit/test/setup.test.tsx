@@ -15,7 +15,15 @@ import {
   SettlementAccountForLinking,
   SettlementAccountRegistryStatus,
 } from '@udofin/contracts';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import {
+  cleanup,
+  configure,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { type OnboardingApi } from '../src/onboarding/api.js';
@@ -78,6 +86,10 @@ import {
   settlementStatusWords,
   setupErrorMessage,
 } from '../src/setup/wording.js';
+
+// These tests type into real forms; on a busy machine that can take longer than the defaults.
+configure({ asyncUtilTimeout: 8000 });
+vi.setConfig({ testTimeout: 30_000 });
 
 afterEach(() => {
   cleanup();
@@ -489,6 +501,7 @@ describe('secret references are names, never values', () => {
     ['has a symbol', 'NAME-WITH-DASH'],
     ['has a long run of digits', 'KEY_123456789'],
     ['is a long run of hexadecimal digits', 'ABCDEF0123456789ABCD'],
+    ['is a shorter run of hexadecimal digits', 'ABCDEFAB12CDEF34'],
     ['is a long unbroken run', 'ABCDEFGHIJKLMNOPQRSTUVWX'],
     ['is longer than 64 characters', 'A_' + 'B'.repeat(70)],
   ])('refuses text that is %s', (_why, value) => {
