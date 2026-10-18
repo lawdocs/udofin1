@@ -634,9 +634,12 @@ begin
   return 'verified';
 end
 $$;
+-- SECURITY DEFINER (M7): the proof reads the registry, which the system role cannot read. As an invoker function the guard failed with a
+-- bare permission error for every system-role write that named a registry entry, instead of judging the proof as the comment promises.
 create or replace function private.guard_settlement_account()
 returns trigger
 language plpgsql
+security definer
 set search_path = ''
 as $$
 declare
