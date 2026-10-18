@@ -3,7 +3,7 @@
 -- without it). Synthetic data only (labelled SAMPLE). Error codes are reported as SQLSTATE|hint.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(146);
+select plan(149);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -623,23 +623,34 @@ select is(pg_temp.report_of(jsonb_build_object('run_id', pg_temp.got('rz4'))) ->
 -- ============================================================================================================================
 -- 10. Guards that must hold even if the function is wrong
 -- ============================================================================================================================
--- Old rows (no tie flag) are never confirmed: a batch recorded before the check existed, with a matching credit.
+-- Old rows (no tie flag): the items are added up when the batch is read. A batch recorded before the check existed whose items do NOT add up is never
+-- confirmed by a matching credit; one whose items do add up is (payment 10, listed in a legacy batch with a credit of 4,750.00).
 select pg_temp.as_owner();
 insert into payments.settlement_batches (lender_org_id, config_id, provider, batch_ref, settlement_ref, period_from, period_to, destination_masked_ref, destination_ok, gross_minor, fee_minor, tax_minor, net_minor,
                                          parts_mismatch, item_count, content_sha256, report_date)
-values (pg_temp.lx(), pg_temp.got('cfg')::uuid, 'mock_gateway', 'B-OLD', pg_temp.utr(95), pg_temp.d() - 4, pg_temp.d() - 4, 'XXXXXX1111', true, 123456, 0, 0, 123456, false, 0, pg_temp.sha('b-old'), pg_temp.d());
+values (pg_temp.lx(), pg_temp.got('cfg')::uuid, 'mock_gateway', 'B-OLD', pg_temp.utr(95), pg_temp.d() - 4, pg_temp.d() - 4, 'XXXXXX1111', true, 123456, 0, 0, 123456, false, 0, pg_temp.sha('b-old'), pg_temp.d()),
+       (pg_temp.lx(), pg_temp.got('cfg')::uuid, 'mock_gateway', 'B-LEGACY', pg_temp.utr(94), pg_temp.d() - 4, pg_temp.d() - 4, 'XXXXXX1111', true, 475000, 0, 0, 475000, false, 1, pg_temp.sha('b-legacy'), pg_temp.d());
+insert into payments.settlement_items (batch_id, lender_org_id, provider_payment_ref, gross_minor, fee_minor, tax_minor, net_minor, parts_mismatch)
+select id, lender_org_id, 'PAY-10', 475000, 0, 0, 475000, false from payments.settlement_batches where batch_ref = 'B-LEGACY';
 -- Two more rows written without the function (as a row of an older version, or a direct write, would be): no stated destination, and a tie flag of true.
 insert into payments.settlement_batches (lender_org_id, config_id, provider, batch_ref, settlement_ref, period_from, period_to, destination_masked_ref, destination_ok, gross_minor, fee_minor, tax_minor, net_minor,
                                          parts_mismatch, item_count, content_sha256, report_date, items_total_mismatch)
 values (pg_temp.lx(), pg_temp.got('cfg')::uuid, 'mock_gateway', 'B-NULLD', pg_temp.utr(97), pg_temp.d() - 4, pg_temp.d() - 4, null, null, 1000, 0, 0, 1000, false, 0, pg_temp.sha('b-nulld'), pg_temp.d(), false),
        (pg_temp.lx(), pg_temp.got('cfg')::uuid, 'mock_gateway', 'B-BADT', pg_temp.utr(98), pg_temp.d() - 4, pg_temp.d() - 4, 'XXXXXX1111', true, 1000, 0, 0, 1000, false, 0, pg_temp.sha('b-badt'), pg_temp.d(), true);
 select pg_temp.as_user(pg_temp.u(3));
-select pg_temp.credits('fde10000-0000-4000-8000-000000000001', format('[{"valueDate":"%s","amountMinor":"123456","utr":"%s"}]', pg_temp.d() - 3, pg_temp.utr(95)));
+select pg_temp.credits('fde10000-0000-4000-8000-000000000001', format('[{"valueDate":"%1$s","amountMinor":"123456","utr":"%2$s"},{"valueDate":"%1$s","amountMinor":"475000","utr":"%3$s"}]', pg_temp.d() - 3, pg_temp.utr(95), pg_temp.utr(94)));
 select pg_temp.as_system();
 select pg_temp.keep('run7', pg_temp.run() ->> 'run_id');
 select pg_temp.as_owner();
 select is((select count(*) from payments.reconciliation_matches m join payments.settlement_batches b on b.id = m.settlement_batch_id where m.run_id = pg_temp.got('run7')::uuid and b.batch_ref = 'B-OLD'), 0::bigint,
-  'a batch recorded before the tie was checked (flag unknown) is never confirmed by a credit');
+  'a batch recorded before the tie was checked whose items do not add up is never confirmed by a credit');
+select is((select count(*) from payments.reconciliation_matches m join payments.settlement_batches b on b.id = m.settlement_batch_id where m.run_id = pg_temp.got('run7')::uuid and b.batch_ref = 'B-LEGACY'), 1::bigint,
+  'while a legacy batch whose items do add up is confirmed by its credit');
+select is(pg_temp.exc_sev_owner('event_payload_conflict', 'settlement_batch_id', (select id from payments.settlement_batches where batch_ref = 'B-OLD')), 'warning/platform',
+  'U13: the run tells the platform that the legacy batch does not add up');
+select pg_temp.as_user(pg_temp.u(5));
+select is((select stage from payments.payment_stages where provider_payment_id = pg_temp.pp(10)), 'bank_confirmed', 'and the stage view agrees: payment 10 is bank confirmed through the legacy batch (its receipt was reversed)');
+select pg_temp.as_owner();
 select is(pg_temp.exc_sev_owner('settlement_account_mismatch', 'settlement_batch_id', (select id from payments.settlement_batches where batch_ref = 'B-NULLD')), 'warning/platform',
   'U15: the run itself tells the platform about a batch with no verified destination, whoever wrote the row');
 select is(pg_temp.exc_sev_owner('event_payload_conflict', 'settlement_batch_id', (select id from payments.settlement_batches where batch_ref = 'B-BADT')), 'warning/platform',

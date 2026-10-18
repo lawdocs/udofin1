@@ -7,8 +7,9 @@
 --      platform gets a warning, and the run counts it ("destination unstated") next to the standing line. Zero "settled to non-lender" is evidence
 --      only when a settlement report exists and no batch lacks a verified destination (report.settlement_evidence.zero_is_evidence).
 --   2. The standing line is computed from the BATCHES (net amount that moved), not from item gross.
---   3. Batch totals are tied to the items when the report is recorded (items_total_mismatch); a batch whose items do not add up, or whose own parts
---      do not add up, is never matched to a bank credit and never "bank_confirmed", and opens an exception for the platform.
+--   3. Batch totals are tied to the items when the report is recorded (items_total_mismatch; a row without the flag is tied from its items when read);
+--      a batch whose items do not add up, or whose own parts do not add up, is never matched to a bank credit and never "bank_confirmed", and opens an
+--      exception for the platform.
 --   4. A settlement reference (UTR) is one settlement of one configuration (unique index); a bank credit confirms at most one batch (run and view);
 --      one match per payment, item, credit, batch and receipt in a run (unique indexes).
 --   5. Receipts are matched to the payment's own loan account; a receipt carrying our reference on another loan is an exception; a payment settled or
@@ -98,7 +99,28 @@ comment on function private.recon_utr_ok(text) is
 -- null = recorded before the check existed: never confirmed.
 alter table payments.settlement_batches add column items_total_mismatch boolean;
 comment on column payments.settlement_batches.items_total_mismatch is
-  'true = the items of the batch do not add up to the batch''s gross, fee, tax and net as the provider reported them (an item-less batch with a non-zero total counts); false = they do; null = recorded before this check existed (treated as not tied). Set only by payments.record_settlement_report.';
+  'true = the items of the batch do not add up to the batch''s gross, fee, tax and net as the provider reported them (an item-less batch with a non-zero total counts); false = they do; null = recorded before this check existed (private.settlement_batch_tied then adds the items up when the batch is read). Set only by payments.record_settlement_report.';
+
+-- Is the batch tied to its items? The stored flag when there is one; otherwise the items are added up now. Runs with the caller's rights (the stage view) or the
+-- run's. A batch that does not exist (the empty side of a join) answers null, never true.
+create or replace function private.settlement_batch_tied(p_batch payments.settlement_batches)
+returns boolean
+language sql
+stable
+set search_path = ''
+as $$
+  select case
+    when p_batch.id is null then null
+    when p_batch.items_total_mismatch is not null then not p_batch.items_total_mismatch
+    else (select coalesce(sum(i.gross_minor), 0) = p_batch.gross_minor and coalesce(sum(i.fee_minor), 0) = p_batch.fee_minor
+                 and coalesce(sum(i.tax_minor), 0) = p_batch.tax_minor and coalesce(sum(i.net_minor), 0) = p_batch.net_minor
+            from payments.settlement_items i where i.batch_id = p_batch.id and i.lender_org_id = p_batch.lender_org_id)
+  end
+$$;
+revoke all on function private.settlement_batch_tied(payments.settlement_batches) from public;
+grant execute on function private.settlement_batch_tied(payments.settlement_batches) to authenticated;
+comment on function private.settlement_batch_tied(payments.settlement_batches) is
+  'True when the items of a settlement batch add up to its gross, fee, tax and net (the stored flag, or the items added up for a row recorded before the flag existed); false when they do not; null for no batch. Used by the reconciliation run and payments.payment_stages.';
 
 -- A settlement reference (UTR) names one settlement of one configuration: a bank credit can confirm at most one batch.
 create unique index settlement_batches_config_utr on payments.settlement_batches (lender_org_id, config_id, settlement_ref);
@@ -548,7 +570,7 @@ begin
     join payments.bank_credits c on c.lender_org_id = p_lender and c.utr = b.settlement_ref and c.amount_minor = b.net_minor and c.value_date <= p_date
     join payments.lender_payment_configs cfg on cfg.id = b.config_id and cfg.lender_org_id = b.lender_org_id and cfg.settlement_account_id = c.settlement_account_id
    where b.lender_org_id = p_lender and b.period_to <= p_date
-     and b.destination_ok is true and b.items_total_mismatch is false and not b.parts_mismatch
+     and b.destination_ok is true and private.settlement_batch_tied(b) is true and not b.parts_mismatch
      and (select count(*) from payments.settlement_batches b2 where b2.lender_org_id = p_lender and b2.settlement_ref = b.settlement_ref and b2.period_to <= p_date) = 1;
   get diagnostics v_m_bank = row_count;
   -- Batches the platform must look at, whatever the bank says: destination not confirmed, a report that does not add up, a UTR carried twice.
@@ -557,7 +579,7 @@ begin
     perform private.recon_raise(p_lender, 'settlement_account_mismatch', 'warning', 'platform', jsonb_build_object('settlement_batch_id', x.id::text));
     v_exc := v_exc + 1;
   end loop;
-  for x in select b.id from payments.settlement_batches b where b.lender_org_id = p_lender and b.period_to <= p_date and (b.items_total_mismatch is true or b.parts_mismatch)
+  for x in select b.id from payments.settlement_batches b where b.lender_org_id = p_lender and b.period_to <= p_date and (private.settlement_batch_tied(b) is not true or b.parts_mismatch)
   loop
     perform private.recon_raise(p_lender, 'event_payload_conflict', 'warning', 'platform', jsonb_build_object('settlement_batch_id', x.id::text));
     v_exc := v_exc + 1;
@@ -726,7 +748,7 @@ left join payments.settlement_batches sb on sb.id = si.batch_id and sb.lender_or
 left join lateral (
   select c.* from payments.bank_credits c join payments.lender_payment_configs cfg on cfg.id = pp.config_id and cfg.lender_org_id = pp.lender_org_id
    where c.lender_org_id = pp.lender_org_id and c.utr = sb.settlement_ref and c.amount_minor = sb.net_minor and c.settlement_account_id = cfg.settlement_account_id
-     and sb.destination_ok is true and sb.items_total_mismatch is false and not sb.parts_mismatch
+     and sb.destination_ok is true and private.settlement_batch_tied(sb) is true and not sb.parts_mismatch
      and (select count(*) from payments.settlement_batches b2 where b2.lender_org_id = sb.lender_org_id and b2.settlement_ref = sb.settlement_ref) = 1
    order by c.value_date limit 1) bc on true
 where pp.status = any (private.payment_success_statuses()) and not pp.duplicate_capture
