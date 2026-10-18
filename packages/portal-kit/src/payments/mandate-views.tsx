@@ -1,7 +1,7 @@
 import { LP_DEBIT_STATUSES, LP_MANDATE_REQUIREMENTS, LP_MANDATE_STATUSES } from '@udofin/contracts';
 import { OpForm, SelectField, TextField } from '../onboarding/forms.js';
 import { EmptyState } from '../states.js';
-import { type LpResult } from './data.js';
+import { lpIsUuid, type LpResult } from './data.js';
 import { lpCount, lpDate, lpDateTimeIst, lpRupees, lpRupeesPlain } from './format.js';
 import {
   DEBIT_STATUS_WORDS,
@@ -128,7 +128,7 @@ export function LpMandatesListView({
   keep,
 }: {
   page: LpResult<MandatePage> | undefined;
-  filters: { status?: string | undefined };
+  filters: { status?: string | undefined; loanAccountId?: string | undefined };
   keep: Readonly<Record<string, string>>;
 }) {
   return (
@@ -140,7 +140,15 @@ export function LpMandatesListView({
         confirmed. A mandate is “active” here only when the provider said so. The borrower’s account
         appears only as the masked reference the borrower typed.
       </p>
+      {lpIsUuid(filters.loanAccountId) ? (
+        <p>
+          Showing only the mandates of one loan account. <a href="/mandates">Show all mandates</a>
+        </p>
+      ) : null}
       <form method="get" action="/mandates" className="form">
+        {lpIsUuid(filters.loanAccountId) ? (
+          <input type="hidden" name="loanAccountId" value={filters.loanAccountId} />
+        ) : null}
         <SelectField
           name="status"
           label="Status"
@@ -341,6 +349,7 @@ export function LpMandateDebitsView({
   };
   keep: Readonly<Record<string, string>>;
 }) {
+  const onlyMandate = lpIsUuid(filters.mandateId) ? filters.mandateId : undefined;
   return (
     <section>
       <h1>Mandate debits</h1>
@@ -350,13 +359,21 @@ export function LpMandateDebitsView({
         organisation or its sponsor bank does, and this list shows what was planned from your
         schedule and what the provider reported. A returned debit creates no charge of Udofin’s.
       </p>
+      {onlyMandate ? (
+        <p>
+          Showing only the debits of one mandate. <a href={`/mandates/${onlyMandate}`}>Open it</a> ·{' '}
+          <a href="/mandates/debits">Show all debits</a>
+        </p>
+      ) : null}
       <p>
-        <a href="/mandates/debits?status=returned">Show returned debits only</a>
+        <a
+          href={`/mandates/debits?${new URLSearchParams({ ...(onlyMandate ? { mandateId: onlyMandate } : {}), status: 'returned' }).toString()}`}
+        >
+          Show returned debits only
+        </a>
       </p>
       <form method="get" action="/mandates/debits" className="form">
-        {filters.mandateId ? (
-          <input type="hidden" name="mandateId" value={filters.mandateId} />
-        ) : null}
+        {onlyMandate ? <input type="hidden" name="mandateId" value={onlyMandate} /> : null}
         <SelectField
           name="status"
           label="Status"

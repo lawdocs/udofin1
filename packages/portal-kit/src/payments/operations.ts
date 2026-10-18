@@ -10,6 +10,7 @@ import {
 import { type ZodType } from 'zod';
 import { type OnboardingApi } from '../onboarding/api.js';
 import { lpParseRupees } from './format.js';
+import { lpCheckStatementHeader } from './statement.js';
 
 /**
  * The only writes the lender payment screens can make. A form names one operation from the table below; the table maps it to one
@@ -67,18 +68,6 @@ const post = async <T>(
   const result = await api.post(path, schema, body, key);
   return result.ok ? { ok: true, data: result.data } : fail(result.code, result.status);
 };
-
-/** The header check of a bank statement: exactly the three columns valueDate, amountMinor and utr, in any order. */
-export function lpCheckStatementHeader(csv: string): { ok: true } | { ok: false } {
-  const text = csv.charCodeAt(0) === 0xfeff ? csv.slice(1) : csv;
-  const header = text.split('\n', 1)[0]?.replace(/\r$/, '') ?? '';
-  const columns = header.split(',').map((column) => column.trim());
-  const wanted = ['valueDate', 'amountMinor', 'utr'];
-  const exact =
-    columns.length === wanted.length &&
-    wanted.every((name) => columns.filter((column) => column === name).length === 1);
-  return exact ? { ok: true } : { ok: false };
-}
 
 /** Splits typed evidence references (separated by spaces, commas or new lines). The server checks them again. */
 export function lpSplitEvidence(text: string): string[] {

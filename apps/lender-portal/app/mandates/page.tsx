@@ -14,7 +14,10 @@ export default async function MandatesRoute({
     <PageFrame me={page.me} current="/mandates">
       <LpMandatesListView
         page={mandates}
-        filters={{ status: firstParam(page.query.status) }}
+        filters={{
+          status: firstParam(page.query.status),
+          loanAccountId: firstParam(page.query.loanAccountId),
+        }}
         keep={keepFilters(page.query, 'mandates')}
       />
     </PageFrame>

@@ -49,7 +49,6 @@ export {
   LpMandatesListView,
 } from './mandate-views.js';
 export {
-  lpCheckStatementHeader,
   lpRunOperation,
   lpSafeReturnPath,
   lpSplitEvidence,
@@ -57,6 +56,7 @@ export {
   LP_OPERATION_NAMES,
   type LpOutcome,
 } from './operations.js';
+export { lpCheckStatementHeader, LP_STATEMENT_COLUMNS } from './statement.js';
 export { LpNotice, type LpViewContext } from './parts.js';
 export {
   LpBankCreditUploadView,

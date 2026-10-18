@@ -6,7 +6,7 @@ import {
 } from '@udofin/contracts';
 import { OpForm, SelectField, TextField } from '../onboarding/forms.js';
 import { EmptyState } from '../states.js';
-import { type LpResult } from './data.js';
+import { lpIsUuid, type LpResult } from './data.js';
 import { lpCount, lpDateTimeIst, lpRupees, lpRupeesPlain } from './format.js';
 import {
   ADJUSTMENT_KIND_WORDS,
@@ -67,7 +67,11 @@ export function LpPaymentsListView({
   error,
 }: {
   page: LpResult<PaymentPage> | undefined;
-  filters: { status?: string | undefined; purpose?: string | undefined };
+  filters: {
+    status?: string | undefined;
+    purpose?: string | undefined;
+    loanAccountId?: string | undefined;
+  };
   /** The filters to carry to the next page of the list. */
   keep: Readonly<Record<string, string>>;
   done?: boolean;
@@ -84,7 +88,15 @@ export function LpPaymentsListView({
         provider reported it in a verified event; it does not mean your loan system has posted it.
         Open a payment to see the four stages as separate facts.
       </p>
+      {lpIsUuid(filters.loanAccountId) ? (
+        <p>
+          Showing only the payments of one loan account. <a href="/payments">Show all payments</a>
+        </p>
+      ) : null}
       <form method="get" action="/payments" className="form">
+        {lpIsUuid(filters.loanAccountId) ? (
+          <input type="hidden" name="loanAccountId" value={filters.loanAccountId} />
+        ) : null}
         <SelectField
           name="status"
           label="Status"
@@ -397,7 +409,17 @@ export function LpPaymentDetailView({
           data.items.length === 0 ? (
             <p>No verified provider event is linked to this payment yet.</p>
           ) : (
-            <LpProviderEventsTable items={data.items} />
+            <>
+              <LpProviderEventsTable items={data.items} />
+              {data.nextCursor !== null && detail?.ok ? (
+                <p>
+                  Only the newest events are shown here.{' '}
+                  <a href={`/payments/events?paymentIntentId=${detail.data.payment.id}`}>
+                    Show all events of this payment
+                  </a>
+                </p>
+              ) : null}
+            </>
           )
         }
       </Loadable>
@@ -416,7 +438,7 @@ export function LpProviderEventsView({
 }: {
   summary: LpResult<WebhookSummary> | undefined;
   events: LpResult<ProviderEventPage> | undefined;
-  filters: { objectKind?: string | undefined };
+  filters: { objectKind?: string | undefined; paymentIntentId?: string | undefined };
   keep: Readonly<Record<string, string>>;
 }) {
   return (
@@ -457,7 +479,17 @@ export function LpProviderEventsView({
         }
       </Loadable>
       <h2>Verified events</h2>
+      {lpIsUuid(filters.paymentIntentId) ? (
+        <p>
+          Showing only the events of one payment.{' '}
+          <a href={`/payments/${filters.paymentIntentId}`}>Open the payment</a> ·{' '}
+          <a href="/payments/events">Show all events</a>
+        </p>
+      ) : null}
       <form method="get" action="/payments/events" className="form">
+        {lpIsUuid(filters.paymentIntentId) ? (
+          <input type="hidden" name="paymentIntentId" value={filters.paymentIntentId} />
+        ) : null}
         <SelectField
           name="objectKind"
           label="About"

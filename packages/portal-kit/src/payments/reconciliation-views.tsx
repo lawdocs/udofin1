@@ -16,6 +16,7 @@ import {
   WhatItChanges,
   type LpViewContext,
 } from './parts.js';
+import { LpStatementInput } from './statement-input.js';
 import {
   type ReconSettingsList,
   type ReconSummary,
@@ -120,7 +121,7 @@ function NonLenderLine({ report }: { report: ReconSummary['report'] }) {
         <p className="muted">
           {noReport
             ? 'No provider settlement report was available to this run, so this line shows nothing yet. Zero here is not evidence.'
-            : 'Zero means none of the settlement reports this run could check names an account other than your verified settlement account. It covers only the inputs this run had.'}
+            : 'Zero is the expected figure. It means none of the settlement reports this run could check names an account other than your verified settlement account. It covers only the inputs this run had.'}
         </p>
       </>
     );
@@ -183,7 +184,7 @@ export function LpReconciliationReportView({
                 ]}
               />
               <p className="muted">
-                Matching is exact: the amount must equal to the paisa. A payment that is not matched
+                Matching is exact: the amount must match to the paisa. A payment that is not matched
                 yet is not necessarily wrong; the waiting times below say how long each source is
                 given.
               </p>
@@ -474,7 +475,8 @@ export function LpBankCreditUploadView({
           YYYY-MM-DD and the amount in whole paise (150050 means ₹1,500.50). Any other column, for
           example a narration that may carry a name, makes the server refuse the whole file and
           store nothing. A file holds at most {lpCount(LP_BANK_CREDIT_MAX_ROWS)} lines. The portal
-          checks the first line before sending; the server checks every line and decides.
+          looks at the first line in your browser and again before sending; the server checks every
+          line and decides.
         </p>
       </WhatItChanges>
       {ctx.caps.reconcile && ctx.lenderId ? (
@@ -503,23 +505,7 @@ export function LpBankCreditUploadView({
                     label: `${account.maskedRef} (${lpWord(SETTLEMENT_ACCOUNT_STATUS_WORDS, account.verificationStatus)}${account.usable ? '' : ', not usable now'})`,
                   }))}
                 />
-                <div className="field">
-                  <label htmlFor="bank-credit-file">Statement file (CSV)</label>
-                  <input
-                    id="bank-credit-file"
-                    name="file"
-                    type="file"
-                    accept=".csv,text/csv,text/plain"
-                  />
-                </div>
-                <div className="field">
-                  <label htmlFor="bank-credit-text">Or paste the statement text</label>
-                  <textarea id="bank-credit-text" name="csv" rows={6} autoComplete="off" />
-                  <small className="muted">
-                    Give either a file or pasted text, not both. Do not include names, narrations or
-                    account numbers.
-                  </small>
-                </div>
+                <LpStatementInput />
                 <ConfirmField label="I confirm that this statement has only the three columns and that I want to upload it." />
               </OpForm>
             )

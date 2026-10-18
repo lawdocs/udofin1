@@ -18,6 +18,7 @@ export default async function PaymentsRoute({
         filters={{
           status: firstParam(page.query.status),
           purpose: firstParam(page.query.purpose),
+          loanAccountId: firstParam(page.query.loanAccountId),
         }}
         keep={keepFilters(page.query, 'payments')}
         done={notice.done}

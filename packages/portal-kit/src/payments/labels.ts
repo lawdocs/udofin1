@@ -66,7 +66,8 @@ export const STAGE_WORDS: Readonly<
 
 export const STAGE_SOURCE_WORDS: Readonly<Record<keyof typeof STAGE_WORDS, string>> = {
   provider_captured: 'Source: a verified event from the payment provider.',
-  provider_settled: 'Source: the provider’s settlement report lists this payment.',
+  provider_settled:
+    'Source: the provider’s settlement report lists this payment with the same reference and amount.',
   bank_confirmed:
     'Source: a bank credit that you uploaded matches the provider’s settlement (same bank reference and amount) and your settlement account.',
   lender_posted:

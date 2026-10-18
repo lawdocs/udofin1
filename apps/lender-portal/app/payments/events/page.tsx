@@ -22,7 +22,10 @@ export default async function ProviderEventsRoute({
       <LpProviderEventsView
         summary={summary}
         events={events}
-        filters={{ objectKind: firstParam(page.query.objectKind) }}
+        filters={{
+          objectKind: firstParam(page.query.objectKind),
+          paymentIntentId: firstParam(page.query.paymentIntentId),
+        }}
         keep={keepFilters(page.query, 'events')}
       />
     </PageFrame>
