@@ -628,11 +628,11 @@ export function ConflictList({
   ctx: ServicingContext;
 }) {
   return (
-    <ul className="plain-list">
+    <div>
       {conflicts.map((c) => {
         const manage = mayIn(ctx.grants, c.lenderId, 'syncManage');
         return (
-          <li key={c.id} className="card">
+          <article key={c.id} className="card">
             <h3>{recordTypeWords(c.recordType)}: two reports differ</h3>
             <p>{conflictReasonWords(c.conflictReason)}</p>
             <dl className="facts">
@@ -692,10 +692,10 @@ export function ConflictList({
             {c.status !== 'resolved' && !manage ? (
               <p className="muted">Your role cannot acknowledge or resolve conflicts.</p>
             ) : null}
-          </li>
+          </article>
         );
       })}
-    </ul>
+    </div>
   );
 }
 
@@ -776,9 +776,9 @@ function AnomalyDetails({ a }: { a: LsAnomaly }) {
 
 export function AnomalyList({ anomalies }: { anomalies: readonly LsAnomaly[] }) {
   return (
-    <ul className="plain-list">
+    <div>
       {anomalies.map((a) => (
-        <li key={a.id} className="card">
+        <article key={a.id} className="card">
           <h3>
             {severityWords(a.severity)}: {anomalyWords(a.kind)}
           </h3>
@@ -791,9 +791,9 @@ export function AnomalyList({ anomalies }: { anomalies: readonly LsAnomaly[] }) 
           <p>
             <a href={`/loans/${a.loanAccountId}`}>Open the loan</a>
           </p>
-        </li>
+        </article>
       ))}
-    </ul>
+    </div>
   );
 }
 

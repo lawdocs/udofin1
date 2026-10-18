@@ -16,6 +16,7 @@ export {
   type StageAction as ServicingStageAction,
 } from './stage-form.js';
 export { type ServicingContext } from './common.js';
+export { openLenderDocument as openServicingDocument } from './document-file.js';
 export {
   servicingGrants,
   parseListQuery as parseServicingQuery,

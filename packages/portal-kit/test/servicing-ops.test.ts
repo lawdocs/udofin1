@@ -26,6 +26,7 @@ import {
 } from '@udofin/contracts';
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
+import { type OnboardingApi } from '../src/onboarding/api.js';
 import {
   loadCorrectableImports,
   loadDocumentContent,
@@ -50,6 +51,7 @@ import {
   realDate,
   rupeesOrNotReported,
 } from '../src/servicing/format.js';
+import { openLenderDocument } from '../src/servicing/document-file.js';
 import {
   noticeUrl,
   runServicingOperation,
@@ -473,6 +475,95 @@ describe('a document’s bytes are checked again before they are streamed', () =
     expect(await verifiedDocumentBytes(content({ sizeBytes: bytes.length + 1 }))).toBeNull();
     expect(await verifiedDocumentBytes(content({ contentBase64: 'not base64!' }))).toBeNull();
     expect(await verifiedDocumentBytes(content({ contentBase64: 'abc' }))).toBeNull();
+  });
+});
+
+describe('opening a lender document streams the stored file or a short refusal', () => {
+  const bytes = new TextEncoder().encode('%PDF-1.4 sample');
+  const sha = createHash('sha256').update(bytes).digest('hex');
+  const stored = (over: Record<string, unknown> = {}) => ({
+    documentId: DOC,
+    kind: 'statement',
+    mimeType: 'application/pdf',
+    sha256: sha,
+    sizeBytes: bytes.length,
+    lenderReference: 'STMT/SAMPLE/001',
+    contentBase64: Buffer.from(bytes).toString('base64'),
+    ...over,
+  });
+  const path = `/v1/lender/loans/${LOAN}/documents/${DOC}/content?purpose=view`;
+  /** An API that answers the content route with a stored document, or fails with a status and a code. */
+  const apiWith = (
+    answer: { data: unknown } | { status: number; code: string },
+  ): OnboardingApi => ({
+    get: (requested) => {
+      expect(requested).toBe(path);
+      return Promise.resolve(
+        'data' in answer
+          ? { ok: true as const, status: 200, data: answer.data as never }
+          : { ok: false as const, status: answer.status, code: answer.code },
+      );
+    },
+    post: () => Promise.reject(new Error('a document is never opened with a write')),
+  });
+
+  it('streams the exact bytes as a PDF that the browser may not sniff, cache or run', async () => {
+    const response = await openLenderDocument(apiWith({ data: stored() }), LOAN, DOC);
+    expect(response.status).toBe(200);
+    expect(Buffer.from(await response.arrayBuffer()).toString('utf8')).toBe('%PDF-1.4 sample');
+    expect(response.headers.get('content-type')).toBe('application/pdf');
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(response.headers.get('content-security-policy')).toContain('sandbox');
+    // The file name carries no lender reference and no person: only the start of the document id.
+    expect(response.headers.get('content-disposition')).toBe(
+      `inline; filename="document-${DOC.slice(0, 8)}.pdf"`,
+    );
+  });
+
+  it('refuses bytes whose fingerprint or size differ from the recorded ones, and says only that', async () => {
+    for (const bad of [
+      { sha256: SHA },
+      { sizeBytes: bytes.length + 1 },
+      { contentBase64: '%%%' },
+    ]) {
+      const response = await openLenderDocument(apiWith({ data: stored(bad) }), LOAN, DOC);
+      expect(response.status).toBe(502);
+      expect(await response.text()).toBe('Not available');
+    }
+  });
+
+  it('maps each refusal to a short status and repeats nothing the API said', async () => {
+    const cases: [number, number][] = [
+      [404, 404],
+      [401, 403],
+      [403, 403],
+      [409, 409],
+      [503, 503],
+      [500, 502],
+      [422, 502],
+    ];
+    for (const [from, to] of cases) {
+      const response = await openLenderDocument(
+        apiWith({ status: from, code: 'secret_internal_detail' }),
+        LOAN,
+        DOC,
+      );
+      const body = await response.text();
+      expect(response.status, String(from)).toBe(to);
+      expect(body).toMatch(/^(Not found|Not available)$/);
+      expect(body).not.toContain('secret_internal_detail');
+      expect(response.headers.get('cache-control')).toBe('no-store');
+    }
+  });
+
+  it('does not call the API for a loan or document that is not an id', async () => {
+    const api: OnboardingApi = {
+      get: () => Promise.reject(new Error('the API must not be called')),
+      post: () => Promise.reject(new Error('the API must not be called')),
+    };
+    expect((await openLenderDocument(api, '../x', DOC)).status).toBe(404);
+    expect((await openLenderDocument(api, LOAN, 'not-an-id')).status).toBe(404);
   });
 });
 
