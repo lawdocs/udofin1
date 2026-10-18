@@ -562,24 +562,24 @@ describe('the route table of the module', () => {
       ['post', '/v1/lender/settlement-accounts/:id/withdraw', 'withdrawSettlementAccount', true],
       ['get', '/v1/lender/secret-ref-prefix', 'getSecretRefPrefix', false],
     ];
-    for (const [method, path, operationId, writes] of wanted) {
+    const staffRoute = (operationId: string) => {
       const route = routes.find((r) => r.operationId === operationId);
-      expect(route, operationId).toBeDefined();
-      expect([route?.method, route?.path, route?.auth], operationId).toEqual([
-        method,
-        path,
-        'staff',
-      ]);
-      expect(route?.idempotent === true, operationId).toBe(writes);
+      if (!route || route.auth === 'none') throw new Error(`no staff route ${operationId}`);
+      return route;
+    };
+    for (const [method, path, operationId, writes] of wanted) {
+      const route = staffRoute(operationId);
+      expect([route.method, route.path, route.auth], operationId).toEqual([method, path, 'staff']);
+      expect(route.idempotent === true, operationId).toBe(writes);
     }
     // The lender-scoped writes name the lender in the body and key idempotency per lender, like every other lender write.
     for (const operationId of ['withdrawMerchantClaim', 'withdrawSettlementAccount']) {
-      const route = routes.find((r) => r.operationId === operationId);
+      const route = staffRoute(operationId);
       expect(
-        route?.idempotencyTenant?.({ body: { lenderId: 'lender-1' } } as never),
+        route.idempotencyTenant?.({ body: { lenderId: 'lender-1' } } as never),
         operationId,
       ).toBe('lender-1');
-      expect(route?.body?.safeParse({}).success, operationId).toBe(false);
+      expect(route.body?.safeParse({}).success, operationId).toBe(false);
     }
     // A hold is lifted with a reason, and the answer carries an id and a status only.
     const release = routes.find((r) => r.operationId === 'releasePaymentConfigHold');
