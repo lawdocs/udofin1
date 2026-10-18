@@ -8,7 +8,7 @@
 -- Synthetic data only (labelled SAMPLE). Error codes are reported as SQLSTATE|hint.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(204);
+select plan(207);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -301,6 +301,19 @@ select is(pg_temp.land(pg_temp.ly(), 'evt_s1p', 'payment', 'captured', 'order_S1
 select is((select count(*) from payments.provider_payments where provider_payment_ref = 'pay_S1'), 2::bigint, 'two provider payments, one per lender');
 select is((select (status, amount_minor, intent_id = pg_temp.got('s1x')::uuid, duplicate_capture)::text from payments.provider_payments where provider_payment_ref = 'pay_S1' and lender_org_id = pg_temp.lx()), '(captured,475000,t,f)',
   'lender X''s payment row is exactly as it was');
+-- Rows that point at an event point at an event of their own lender (composite keys).
+select pg_temp.as_owner();
+select is(pg_temp.err(format($$insert into payments.provider_payments (lender_org_id, config_id, provider, provider_payment_ref, order_ref, intent_id, loan_account_id, status, rank, first_event_id, last_event_id)
+  select %L, %L, 'mock_gateway', 'pay_FK', 'order_FK', %L, %L, 'created', 10, e.id, e.id from payments.provider_events e where e.provider_event_id = 'evt_s1' and e.lender_org_id = %L$$,
+  pg_temp.ly(), pg_temp.got('cy'), pg_temp.got('s1y'), pg_temp.lid(22), pg_temp.lx())), '23503|', 'a provider payment of lender Y cannot name lender X''s event as its first or last event');
+select is(pg_temp.err(format($$insert into payments.payment_adjustments (lender_org_id, provider_payment_id, kind, object_ref, amount_minor, source_event_id)
+  select %L, pp.id, 'refund', 'rfd_FK', 100, e.id from payments.provider_payments pp, payments.provider_events e
+   where pp.lender_org_id = %L and pp.provider_payment_ref = 'pay_S1' and e.provider_event_id = 'evt_s1' and e.lender_org_id = %L$$, pg_temp.ly(), pg_temp.ly(), pg_temp.lx())), '23503|',
+  'an adjustment of lender Y cannot cite lender X''s event');
+select is(pg_temp.err(format($$insert into payments.event_processing (event_id, lender_org_id, outcome, reason_class)
+  select e.id, %L, 'applied', 'fk_probe' from payments.provider_events e where e.provider_event_id = 'evt_s1' and e.lender_org_id = %L$$, pg_temp.ly(), pg_temp.lx())), '23503|',
+  'and a processing row of lender Y cannot be written for lender X''s event');
+select pg_temp.as_system();
 -- The same payment reference under ANOTHER intent of the same lender is never merged.
 select pg_temp.mk('c2', 2, 'installment', 475000, 'order_C2');
 select pg_temp.mk('c3', 3, 'installment', 475000, 'order_C3');

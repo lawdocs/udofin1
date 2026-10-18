@@ -118,6 +118,18 @@ alter table payments.webhook_receipts
   add constraint webhook_receipts_event_lender_fk foreign key (event_id, lender_org_id) references payments.provider_events (id, lender_org_id) on delete restrict not valid,
   add constraint webhook_receipts_event_has_lender check (event_id is null or lender_org_id is not null) not valid;
 
+-- Every row that points at an event points at an event of its OWN lender (composite keys; NOT VALID so that history is not rewritten, enforced for new rows).
+alter table payments.provider_payments drop constraint provider_payments_first_event_id_fkey, drop constraint provider_payments_last_event_id_fkey;
+alter table payments.provider_payments
+  add constraint provider_payments_first_event_fk foreign key (first_event_id, lender_org_id) references payments.provider_events (id, lender_org_id) on delete restrict not valid,
+  add constraint provider_payments_last_event_fk foreign key (last_event_id, lender_org_id) references payments.provider_events (id, lender_org_id) on delete restrict not valid;
+alter table payments.payment_adjustments drop constraint payment_adjustments_source_event_id_fkey;
+alter table payments.payment_adjustments
+  add constraint payment_adjustments_source_event_fk foreign key (source_event_id, lender_org_id) references payments.provider_events (id, lender_org_id) on delete restrict not valid;
+alter table payments.event_processing drop constraint event_processing_event_id_fkey;
+alter table payments.event_processing
+  add constraint event_processing_event_lender_fk foreign key (event_id, lender_org_id) references payments.provider_events (id, lender_org_id) on delete restrict not valid;
+
 alter table payments.provider_payments drop constraint provider_payments_provider_provider_payment_ref_key;
 alter table payments.provider_payments
   add constraint provider_payments_lender_ref_key unique (provider, lender_org_id, provider_payment_ref);
@@ -397,7 +409,11 @@ declare
   v_pol payments.lender_payment_policies;
   v_existing payments.payment_intents;
   v_n integer;
-  q servicing.foreclosure_quotes;
+  v_q_id uuid;
+  v_q_total bigint;
+  v_q_until timestamptz;
+  v_q_asof timestamptz;
+  v_q_flagged boolean;
   v_due bigint;
   v_seq integer;
   v_id uuid;
@@ -455,29 +471,30 @@ begin
 
   if p_purpose = 'foreclosure' then
     -- Exactly the amount of the newest unexpired quotation the lender reported, and never one whose parts do not add up.
-    select * into q from servicing.latest_valid_quote(p_loan);
+    select lq.id, lq.total_minor, lq.valid_until, lq.as_of, lq.total_mismatch into v_q_id, v_q_total, v_q_until, v_q_asof, v_q_flagged
+      from servicing.latest_valid_quote(p_loan) lq;
     if not found then
       raise exception 'there is no unexpired foreclosure quotation' using errcode = '55000', hint = 'quote_required';
     end if;
-    if p_quote is not null and p_quote <> q.id then
+    if p_quote is not null and p_quote <> v_q_id then
       raise exception 'the quotation is not the current one' using errcode = '55000', hint = 'quote_not_current';
     end if;
-    if q.total_mismatch then
+    if v_q_flagged then
       raise exception 'the lender''s quotation does not add up: ask the lender for a corrected one' using errcode = '55000', hint = 'quote_flagged';
     end if;
-    if p_amount_minor <> q.total_minor then
+    if p_amount_minor <> v_q_total then
       raise exception 'the amount must equal the lender''s quotation' using errcode = '22023', hint = 'amount_not_allowed';
     end if;
     -- A payment captured after the quotation was made is not in it: the quotation no longer states what is owed.
     if exists (select 1 from payments.provider_payments pp
                 where pp.loan_account_id = p_loan and pp.lender_org_id = l.lender_org_id and pp.status = any (v_success) and not pp.duplicate_capture
-                  and coalesce(pp.captured_at, pp.created_at) > q.as_of
+                  and coalesce(pp.captured_at, pp.created_at) > v_q_asof
                   and pp.amount_minor > coalesce((select sum(a.amount_minor) from payments.payment_adjustments a
                                                    where a.provider_payment_id = pp.id and a.lender_org_id = pp.lender_org_id and a.kind in ('refund', 'chargeback', 'reversal')), 0)) then
       raise exception 'a payment was received after the lender''s quotation: ask the lender for a new one' using errcode = '55000', hint = 'quote_not_current';
     end if;
     -- The link never outlives the quotation it is bound to.
-    v_expires := least(v_expires, q.valid_until);
+    v_expires := least(v_expires, v_q_until);
   else
     select * into r from private.servicing_borrower_loans(p_loan);
     if not found then
@@ -541,7 +558,7 @@ begin
     insert into payments.payment_intents (lender_org_id, loan_account_id, borrower_id, purpose, amount_minor, provider, config_id, idempotency_key, created_by,
                                           quote_id, target_installment_seq, link_expires_at)
     values (l.lender_org_id, p_loan, v_borrower, p_purpose, p_amount_minor, v_cfg.provider, v_cfg.id, p_idempotency_key, v_uid,
-            q.id, v_seq, v_expires)
+            v_q_id, v_seq, v_expires)
     returning id into v_id;
   exception when unique_violation then
     -- Either a concurrent request with the same key (a replay) or an open intent for the same installment and purpose.
@@ -833,7 +850,11 @@ declare
   r record;
   v_cfg payments.lender_payment_configs;
   v_pol payments.lender_payment_policies;
-  v_q servicing.foreclosure_quotes;
+  v_q_id uuid;
+  v_q_total bigint;
+  v_q_until timestamptz;
+  v_q_asof timestamptz;
+  v_q_flagged boolean;
   v_pen servicing.penal_charge_texts;
   v_n integer;
   v_lender text;
@@ -911,15 +932,16 @@ begin
     end if;
     -- A foreclosure payment equals the lender's unexpired quotation; it does not depend on the balance report. Not offered when a payment was
     -- received after the quotation was made (request_payment refuses it: quote_not_current).
-    select * into v_q from servicing.latest_valid_quote(p_loan);
+    select lq.id, lq.total_minor, lq.valid_until, lq.as_of, lq.total_mismatch into v_q_id, v_q_total, v_q_until, v_q_asof, v_q_flagged
+      from servicing.latest_valid_quote(p_loan) lq;
     if found and not exists (select 1 from payments.provider_payments pp
                               where pp.loan_account_id = p_loan and pp.lender_org_id = l.lender_org_id and pp.status = any (v_success) and not pp.duplicate_capture
-                                and coalesce(pp.captured_at, pp.created_at) > v_q.as_of
+                                and coalesce(pp.captured_at, pp.created_at) > v_q_asof
                                 and pp.amount_minor > coalesce((select sum(a.amount_minor) from payments.payment_adjustments a
                                                                  where a.provider_payment_id = pp.id and a.lender_org_id = pp.lender_org_id and a.kind in ('refund', 'chargeback', 'reversal')), 0)) then
       v_purposes := v_purposes || jsonb_build_array(jsonb_build_object(
-        'purpose', 'foreclosure', 'amount_source', 'lender_quote', 'amount_minor', v_q.total_minor, 'min_minor', v_q.total_minor, 'max_minor', v_q.total_minor,
-        'quote_id', v_q.id, 'valid_until', v_q.valid_until, 'flagged', v_q.total_mismatch));
+        'purpose', 'foreclosure', 'amount_source', 'lender_quote', 'amount_minor', v_q_total, 'min_minor', v_q_total, 'max_minor', v_q_total,
+        'quote_id', v_q_id, 'valid_until', v_q_until, 'flagged', v_q_flagged));
     end if;
   end if;
 
@@ -1434,7 +1456,8 @@ begin
     perform private.record_event_processing(e.id, e.lender_org_id, 'applied', 'no_adjustment_for_status', i.id);
     return jsonb_build_object('outcome', 'applied', 'reason', 'no_adjustment_for_status');
   end if;
-  -- The payment the refund concerns: the one the provider names, or (when it names none) the intent's only captured payment. Never a guess.
+  -- The payment the refund concerns: the one the provider names, or (when it names none) the intent's one and only provider payment. Never a
+  -- guess: with a second payment on the intent (a duplicate capture, or an attempt in flight) and no name, a person decides.
   v_have := false;
   if e.parent_payment_ref is not null then
     select * into pp from payments.provider_payments x
@@ -1443,10 +1466,8 @@ begin
      for update;
     v_have := found;
   else
-    select count(*) into v_n from payments.provider_payments x
-     where x.intent_id = i.id and x.lender_org_id = i.lender_org_id and x.status = any (v_success);
+    select count(*) into v_n from payments.provider_payments x where x.intent_id = i.id and x.lender_org_id = i.lender_org_id;
     if v_n > 1 then
-      -- Two captured payments (a duplicate capture) and the event does not say which one it refunds: a person decides.
       perform private.raise_exception_impl(e.lender_org_id, 'refund_unmatched', 'warning', 'lender', jsonb_build_object('intent_id', i.id::text, 'event_id', e.id::text));
       perform private.record_event_processing(e.id, e.lender_org_id, 'exception', 'ambiguous_payment', i.id);
       return jsonb_build_object('outcome', 'exception', 'reason', 'ambiguous_payment');
@@ -1490,4 +1511,4 @@ begin
 end
 $$;
 comment on function payments.apply_provider_event(uuid) is
-  'System only (the worker). Idempotent: an event that already has a finished event_processing row is not applied again, and concurrent applications are serialised by an advisory lock on the event id plus the intent row lock, so exactly one application happens. payment events upsert payments.provider_payments for THIS lender (status, rank, amount): a capture is always recorded (a late capture after expired or cancelled included) and flags a second capture on the intent as duplicate_capture with a duplicate_payment exception, whenever it arrives; a status that is not a success never moves a captured payment (payment_status_conflict exception, the row and its amount are untouched); a refunded, disputed or returned status on a payment object opens a payment_status_conflict exception and changes nothing; the same provider payment reference under another intent is a platform exception; the intent moves to succeeded ONLY through the existing guard (verified event, same intent, lender, provider, a success status, equal amount and currency); a different amount keeps the intent pending and opens amount_mismatch; money on a closed intent or a loan that is no longer active opens payment_on_closed_intent; a foreclosure capture after its quotation lapsed opens amount_mismatch. A refund or chargeback becomes a compensating row in payments.payment_adjustments against the payment it names (parent_payment_ref) or the intent''s only captured payment; with two captured payments and no name it is a refund_unmatched exception; it is deferred (bounded retries) when its capture has not been seen. Settlement events are recorded for reconciliation; mandate and debit events go to private.apply_mandate_event. Every state change and its event_processing row commit in one transaction.';
+  'System only (the worker). Idempotent: an event that already has a finished event_processing row is not applied again, and concurrent applications are serialised by an advisory lock on the event id plus the intent row lock, so exactly one application happens. payment events upsert payments.provider_payments for THIS lender (status, rank, amount): a capture is always recorded (a late capture after expired or cancelled included) and flags a second capture on the intent as duplicate_capture with a duplicate_payment exception, whenever it arrives; a status that is not a success never moves a captured payment (payment_status_conflict exception, the row and its amount are untouched); a refunded, disputed or returned status on a payment object opens a payment_status_conflict exception and changes nothing; the same provider payment reference under another intent is a platform exception; the intent moves to succeeded ONLY through the existing guard (verified event, same intent, lender, provider, a success status, equal amount and currency); a different amount keeps the intent pending and opens amount_mismatch; money on a closed intent or a loan that is no longer active opens payment_on_closed_intent; a foreclosure capture after its quotation lapsed opens amount_mismatch. A refund or chargeback becomes a compensating row in payments.payment_adjustments against the payment it names (parent_payment_ref) or, when it names none, the intent''s one and only provider payment; with a second payment on the intent and no name it is a refund_unmatched exception (nothing is guessed); it is deferred (bounded retries) when its capture has not been seen. Settlement events are recorded for reconciliation; mandate and debit events go to private.apply_mandate_event. Every state change and its event_processing row commit in one transaction.';
