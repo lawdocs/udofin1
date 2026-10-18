@@ -463,26 +463,26 @@ describe.skipIf(!enabled)(
           };
           await batch(
             1,
-            `UTR${tag}0001`,
+            `UTRX${tag.toUpperCase()}0000001`,
             { ref: pay(1).ref, gross: pay(1).amount, fee: 9_500, tax: 1_710 },
             true,
             'XXXXXX0000',
           );
           const b2 = await batch(
             2,
-            `UTR${tag}0002`,
+            `UTRX${tag.toUpperCase()}0000002`,
             { ref: pay(2).ref, gross: pay(2).amount, fee: 9_500, tax: 1_710 },
             true,
             'XXXXXX0000',
           );
           const b3 = await batch(
             3,
-            `UTR${tag}0003`,
+            `UTRX${tag.toUpperCase()}0000003`,
             { ref: pay(3).ref, gross: pay(3).amount, fee: 12_000, tax: 2_160 },
             true,
             'XXXXXX0000',
           );
-          await batch(4, `UTR${tag}0004`, null, false, 'XXXXXX9999');
+          await batch(4, `UTRX${tag.toUpperCase()}0000004`, null, false, 'XXXXXX9999');
           for (const [n, b] of [
             [2, b2],
             [3, b3],
@@ -490,7 +490,7 @@ describe.skipIf(!enabled)(
             await c.query(
               `insert into payments.bank_credits (lender_org_id, settlement_account_id, value_date, amount_minor, utr, recorded_by)
                values ($1, $2, current_date - 1, $3, $4, $5)`,
-              [lender, account, b.net, `UTR${tag}000${String(n)}`, maker],
+              [lender, account, b.net, `UTRX${tag.toUpperCase()}000000${String(n)}`, maker],
             );
           await c.query(
             `insert into servicing.lms_receipts (lender_org_id, loan_account_id, kind, lms_receipt_ref, amount_minor, value_date, bank_reference, source_system,
@@ -2086,8 +2086,9 @@ describe.skipIf(!enabled)(
     // Bank credits: JSON and CSV
     // ================================================================================================================
     describe('bank credits', () => {
-      const stamp = randomUUID().slice(0, 6).toUpperCase();
-      const utr = (n: number) => `BNK${stamp}${String(n).padStart(4, '0')}`;
+      // Eight digits after BANK: the bank reference rule needs four capital letters first and at least six digits, and refuses long letter runs.
+      const stamp = String(Math.floor(Math.random() * 1e8)).padStart(8, '0');
+      const utr = (n: number) => `BANK${stamp}${String(n).padStart(4, '0')}`;
       const today = () => runDate;
       const upload = (
         user: string | null,
@@ -2120,7 +2121,7 @@ describe.skipIf(!enabled)(
           settlement_account_id: string;
         }>(
           'select utr, amount_minor, recorded_by, settlement_account_id from payments.bank_credits where utr like $1 order by utr',
-          [`BNK${stamp}%`],
+          [`BANK${stamp}%`],
         );
         expect(saved.map((r) => [r.utr, r.amount_minor])).toEqual([
           [utr(1), '100000'],
@@ -2134,11 +2135,11 @@ describe.skipIf(!enabled)(
         const again = await upload(ids.aRecon, jsonBody(rows), { key });
         expect(again.headers['idempotent-replayed']).toBe('true');
         expect(again.json()).toEqual({ inserted: 3, duplicates: 0 });
-        expect(await stored(`BNK${stamp}`)).toBe(3);
+        expect(await stored(`BANK${stamp}`)).toBe(3);
         // The same credits under a new key are duplicates, not a second copy.
         const duplicate = await upload(ids.aRecon, jsonBody(rows));
         expect(duplicate.json()).toEqual({ inserted: 0, duplicates: 3 });
-        expect(await stored(`BNK${stamp}`)).toBe(3);
+        expect(await stored(`BANK${stamp}`)).toBe(3);
       });
 
       it('refuses a bank reference that differs from one already recorded, and stores none of that upload', async () => {
@@ -2321,7 +2322,7 @@ describe.skipIf(!enabled)(
           await refused(`VALUEDATE,AMOUNTMINOR,UTR\n${today()},1000,${utr(122)}\n`);
           await refused(`${header}\n`);
           await refused(header);
-          expect(await stored('BNK' + stamp + '012')).toBe(0);
+          expect(await stored('BANK' + stamp + '012')).toBe(0);
         });
 
         it('refuses quotes, a wrong number of fields, a blank line and bad values, naming the line and field but never the value', async () => {
@@ -2339,7 +2340,7 @@ describe.skipIf(!enabled)(
           await refused(`${header}\n2026-02-30x,1000,${utr(138)}\n`);
           await refused(`${header}\n${today()},1000,AB CD EF\n`);
           await refused(`${header}\n${today()},1000,${utr(139)}\0\n`);
-          expect(await stored('BNK' + stamp + '013')).toBe(0);
+          expect(await stored('BANK' + stamp + '013')).toBe(0);
         });
 
         it('refuses the whole upload when one line among many is bad, and when there are too many lines', async () => {
