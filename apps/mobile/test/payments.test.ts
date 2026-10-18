@@ -25,6 +25,7 @@ import { hi } from '../src/i18n/hi';
 import { hiPayments } from '../src/i18n/hi.payments';
 import { createMandatesClient } from '../src/borrower/mandates';
 import {
+  canOfferMandateSetup,
   canOpenAuthorisation,
   canRequestCancellation,
   debitView,
@@ -34,6 +35,7 @@ import {
   mandateDraftReducer,
   mandateHeadline,
   mandateListItemView,
+  mandateSetupNotice,
   mandateSetupView,
   mandateView,
   maskedAccountRef,
@@ -1122,7 +1124,13 @@ describe('error words', () => {
     expect(payErrorKey('stepup_required')).toBe('mandate.err.stepup');
     expect(en[payErrorKey('stepup_required')]).toMatch(/one-time code.*step 1/);
     expect(payErrorKey('integrity_insufficient')).toBe('mandate.err.integrity');
-    expect(en[payErrorKey('integrity_insufficient')]).toMatch(/security check/);
+    // No check is run on the phone by this version of the app, so the words must not say one failed (A37).
+    const said = en[payErrorKey('integrity_insufficient')];
+    expect(said).toContain('not be set up in this version of the app');
+    expect(said).not.toMatch(/security|did not pass|failed|device|phone/i);
+    const saidHindi = hi[payErrorKey('integrity_insufficient')];
+    expect(saidHindi).toContain('इस संस्करण');
+    expect(saidHindi).not.toMatch(/सुरक्षा जाँच|पास नहीं|फ़ोन ने|डिवाइस/);
   });
 
   it('falls back to the shared words, then the generic sentence, and never shows server text', () => {
@@ -1337,6 +1345,36 @@ describe('mandate setup view', () => {
 // ---------------------------------------------------------------------------------------------------------------
 // Mandates: status, cancellation, debits
 // ---------------------------------------------------------------------------------------------------------------
+describe('mandate setup is offered only where the API can accept it (A37)', () => {
+  it('offers the form only at the device-integrity levels the API accepts for a mandate', () => {
+    expect(canOfferMandateSetup('device')).toBe(true);
+    expect(canOfferMandateSetup('strong')).toBe(true);
+    expect(canOfferMandateSetup('none')).toBe(false);
+    expect(canOfferMandateSetup('basic')).toBe(false);
+    expect(canOfferMandateSetup(null)).toBe(false);
+  });
+
+  it('says plainly that setup is not available in this version of the app, without blaming the phone', () => {
+    expect(mandateSetupNotice('device')).toBeNull();
+    expect(mandateSetupNotice('strong')).toBeNull();
+    // Unknown level (the account state is not loaded): the screen shows its own loading or error state, not this sentence.
+    expect(mandateSetupNotice(null)).toBeNull();
+    for (const level of ['none', 'basic'] as const) {
+      const notice = mandateSetupNotice(level);
+      expect(notice, level).not.toBeNull();
+      const english = text(notice, enCtx);
+      expect(english).toBe(
+        'Setting up auto-pay is not available in this version of the app. You can still pay once, whenever you choose.',
+      );
+      expect(english).not.toMatch(/security|check|did not pass|failed|device|phone|attest/i);
+      const hindi = text(notice, hiCtx);
+      expect(hindi).toContain('इस संस्करण में उपलब्ध नहीं');
+      expect(hindi).not.toMatch(/सुरक्षा|जाँच|पास नहीं|फ़ोन|डिवाइस/);
+      expect(enPayments['mandate.setup.payOnce']).toBe('Make a one-time payment');
+    }
+  });
+});
+
 describe('mandate status words', () => {
   const head = (status: string) => mandateHeadline(status, LENDER);
   const all = (status: string, ctx: Ctx = enCtx) =>
@@ -1931,6 +1969,23 @@ describe('what the screens may do (source checks)', () => {
     expect(src).toContain("action: 'mandate_creation'");
     expect(src).toContain('contextRef: mandateId');
     expect(src).toContain('usePreventScreenCapture()');
+  });
+
+  it('shows the setup form only when the integrity level allows it, with the one-time payment route otherwise', () => {
+    const src = code('app/(app)/payments/mandate-setup.tsx');
+    expect(src).toContain('const { meState, refresh: reloadMe } = useBorrower();');
+    expect(src).toContain("meState.kind === 'ready' ? meState.me.integrityLevel : null");
+    expect(src).toContain('const notice = mandateSetupNotice(level);');
+    // The form is drawn only inside `available`, and `available` needs a known level and no notice.
+    expect(src).toContain('const available = offerable && level !== null && notice === null;');
+    expect(src).toContain('{available ? (');
+    expect(src.indexOf('{available ? (')).toBeLessThan(src.indexOf("t('mandate.send.title')"));
+    expect(src.indexOf('{available ? (')).toBeLessThan(src.indexOf('void send()'));
+    // The notice has the one-time payment button, to the same Pay route the loan home uses.
+    expect(src).toContain("t('mandate.setup.payOnce')");
+    expect(src).toContain('router.replace(payHref(loanId))');
+    // No attestation is attempted here.
+    expect(src).not.toMatch(/integrityNonce|verifyIntegrity|attest/i);
   });
 
   it('starts with nothing selected and posts only the resolved request', () => {

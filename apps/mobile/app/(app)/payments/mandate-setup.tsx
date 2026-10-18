@@ -1,12 +1,14 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { usePreventScreenCapture } from 'expo-screen-capture';
 import { useMemo, useReducer, useRef, useState } from 'react';
+import { useBorrower } from '../../../src/borrower/BorrowerProvider';
 import {
   emptyMandateDraft,
   forgetMandateDraftId,
   mandateDraftId,
   mandateDraftReducer,
   mandateSetupView,
+  mandateSetupNotice,
   maskedAccountRef,
   parseDayMonthYear,
   railTitle,
@@ -20,6 +22,7 @@ import {
 } from '../../../src/borrower/payments-errors';
 import { firstParam, isUuid, newAttemptKey } from '../../../src/borrower/payments-ids';
 import { ctxFor, type Word } from '../../../src/borrower/payments-view';
+import { payHref } from '../../../src/borrower/servicing-view';
 import { useLoad } from '../../../src/borrower/useLoad';
 import { useMandatesClient } from '../../../src/borrower/usePayments';
 import { useI18n } from '../../../src/i18n/I18nProvider';
@@ -42,6 +45,10 @@ import {
  * borrower types only the last four digits of the bank account; the app builds the masked reference itself, so a full account
  * number can never be typed or sent. Nothing is pre-selected. Creating the request does not set anything up: the mandate becomes
  * active only when the provider confirms it (see mandate.tsx).
+ *
+ * The form is offered only when the borrower's device-integrity level is one the API accepts for a mandate ('device' or 'strong').
+ * This version of the app cannot raise that level, so today every borrower sees a plain notice instead, with the one-time payment
+ * route (see `canOfferMandateSetup` in mandates-view.ts and the notes in docs/specs/08a-notes/fixes-M.md).
  */
 export default function MandateSetupScreen() {
   const params = useLocalSearchParams<{ loanId?: string | string[] }>();
@@ -65,6 +72,7 @@ function SetupBody({ loanId }: { loanId: string }) {
   const router = useRouter();
   const { t, language } = useI18n();
   const client = useMandatesClient();
+  const { meState, refresh: reloadMe } = useBorrower();
   const ctx = useMemo(() => ctxFor(language), [language]);
   const say = (w: Word) => t(w.key, w.vars);
   const { state, reload } = useLoad(() => client.mandateOptions(loanId), [client, loanId]);
@@ -80,7 +88,9 @@ function SetupBody({ loanId }: { loanId: string }) {
     [state, ctx],
   );
 
-  if (state.kind === 'loading') return <Loading label={t('common.loading')} />;
+  if (state.kind === 'loading' || meState.kind === 'loading') {
+    return <Loading label={t('common.loading')} />;
+  }
   if (state.kind === 'error' || view === null) {
     return (
       <ScrollScreen>
@@ -135,7 +145,10 @@ function SetupBody({ loanId }: { loanId: string }) {
     router.replace({ pathname: '/payments/mandate', params: { mandateId: result.data.id } });
   }
 
-  const available = view.unavailable === null && view.existingMandateId === null;
+  const level = meState.kind === 'ready' ? meState.me.integrityLevel : null;
+  const notice = mandateSetupNotice(level);
+  const offerable = view.unavailable === null && view.existingMandateId === null;
+  const available = offerable && level !== null && notice === null;
 
   return (
     <ScrollScreen>
@@ -158,6 +171,23 @@ function SetupBody({ loanId }: { loanId: string }) {
       ) : null}
       {view.unavailable && view.existingMandateId === null ? (
         <Banner tone="warning">{say(view.unavailable)}</Banner>
+      ) : null}
+
+      {offerable && meState.kind === 'error' ? (
+        <ErrorState
+          message={t(payErrorKey(meState.code))}
+          retryLabel={t('common.retry')}
+          onRetry={() => void reloadMe()}
+        />
+      ) : null}
+      {offerable && notice ? (
+        <>
+          <Banner tone="info">{say(notice)}</Banner>
+          <Button
+            title={t('mandate.setup.payOnce')}
+            onPress={() => router.replace(payHref(loanId))}
+          />
+        </>
       ) : null}
 
       {available ? (

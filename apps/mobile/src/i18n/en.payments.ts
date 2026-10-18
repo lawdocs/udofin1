@@ -170,6 +170,9 @@ export const enPayments = {
   'mandate.setup.viewExisting': 'View it',
   'mandate.setup.rails': 'Choose how to set it up',
   'mandate.setup.railsNote': 'Nothing is selected for you. Choose one option.',
+  'mandate.setup.notInThisVersion':
+    'Setting up auto-pay is not available in this version of the app. You can still pay once, whenever you choose.',
+  'mandate.setup.payOnce': 'Make a one-time payment',
   'mandate.unavailable.loan_not_active':
     'Auto-pay cannot be set up because this loan is not active. Please contact {lender} if you have questions.',
   'mandate.unavailable.collection_target_invalid':
@@ -218,8 +221,9 @@ export const enPayments = {
   // ---- mandates: errors ----
   'mandate.err.stepup':
     'A one-time code check is needed for this request. Confirm with a code in step 1, then send the request again.',
+  // The app cannot obtain the device attestation the API requires, so no check was run on the phone: this says what is true.
   'mandate.err.integrity':
-    'This device did not pass the security check needed to set up auto-pay, so the request was not accepted.',
+    'Auto-pay cannot be set up in this version of the app, so the request was not accepted. You can still make a one-time payment.',
   'mandate.err.providerNotCapable':
     "Auto-pay is not available with this lender's payment provider.",
   'mandate.err.creditor':
