@@ -1269,30 +1269,74 @@ describe('mandates', () => {
     expect(store.called('recordPreDebitNotice')).toEqual([[ID(70), 'accepted', 'mock-notice-1']]);
   });
 
-  it('notice outcomes: accepted if any channel took it, not_configured only if none could carry it, otherwise failed (retry)', () => {
-    expect(noticeOutcomeOf([accepted, { state: 'not_configured' }])).toEqual({
+  const inApp = (result: ChannelSendResult) => ({ channel: 'in_app' as const, result });
+  const push = (result: ChannelSendResult) => ({ channel: 'push' as const, result });
+
+  it('notice outcomes: accepted only if a channel that reaches the borrower took it; the in-app inbox alone is not enough (A54)', () => {
+    // push is the channel that reaches the borrower.
+    expect(noticeOutcomeOf([inApp({ state: 'not_configured' }), push(accepted)])).toEqual({
       state: 'accepted',
       providerRef: null,
     });
     expect(
-      noticeOutcomeOf([{ state: 'failed', reason: 'invalid_request' }, accepted]),
+      noticeOutcomeOf([inApp({ state: 'failed', reason: 'invalid_request' }), push(accepted)]),
     ).toMatchObject({ state: 'accepted' });
-    expect(noticeOutcomeOf([{ state: 'not_configured' }, { state: 'not_configured' }])).toEqual({
+    expect(
+      noticeOutcomeOf([inApp(accepted), push({ state: 'accepted', providerRef: 'PUSH-REF-1' })]),
+    ).toEqual({ state: 'accepted', providerRef: 'PUSH-REF-1' });
+    // The in-app inbox accepts and writes nothing for a notice: with push not configured, nothing carried it. The database's word
+    // for that is not_configured (the notice stays late and the lender is told); it is never recorded as sent.
+    expect(noticeOutcomeOf([inApp(accepted), push({ state: 'not_configured' })])).toEqual({
       state: 'not_configured',
       providerRef: null,
     });
+    expect(noticeOutcomeOf([inApp(accepted)])).toEqual({
+      state: 'not_configured',
+      providerRef: null,
+    });
+    expect(noticeOutcomeOf([inApp({ state: 'accepted', providerRef: 'INBOX-REF-1' })])).toEqual({
+      state: 'not_configured',
+      providerRef: null,
+    });
+    // A push that failed or did not answer may work next time: released for a retry, whatever the inbox said.
     expect(
-      noticeOutcomeOf([
-        { state: 'failed', reason: 'invalid_request' },
-        { state: 'not_configured' },
-      ]),
+      noticeOutcomeOf([inApp(accepted), push({ state: 'failed', reason: 'invalid_request' })]),
     ).toEqual({ state: 'failed', providerRef: null });
     expect(
-      noticeOutcomeOf([{ state: 'unknown', reason: 'timeout' }, { state: 'not_configured' }]).state,
+      noticeOutcomeOf([inApp(accepted), push({ state: 'unknown', reason: 'timeout' })]).state,
     ).toBe('failed');
     expect(
-      noticeOutcomeOf([{ state: 'accepted', providerRef: 'https://x.invalid' }]).providerRef,
-    ).toBeNull();
+      noticeOutcomeOf([
+        inApp({ state: 'not_configured' }),
+        push({ state: 'accepted', providerRef: 'https://x.invalid' }),
+      ]),
+    ).toEqual({ state: 'accepted', providerRef: null });
+    // sms is never sent and never counts.
+    expect(
+      noticeOutcomeOf([{ channel: 'sms', result: accepted }, push({ state: 'not_configured' })])
+        .state,
+    ).toBe('not_configured');
+  });
+
+  it('with push not configured (staging, production) an accepted in-app message is NOT recorded as a notice that was sent (A54)', async () => {
+    const store = fakeStore({
+      claimPreDebitNotices: () => Promise.resolve([{ noticeId: ID(72), borrowerId: BORROWER }]),
+    });
+    const channels = channelsOf(accepted, { state: 'not_configured' });
+    const { instance, lines } = jobs({ store, channels });
+    await instance.run('mandates');
+    expect(store.called('recordPreDebitNotice')).toEqual([[ID(72), 'not_configured', null]]);
+    expect(lines.join('\n')).toContain('"not_configured":1');
+    expect(lines.join('\n')).toContain('"accepted":0');
+    // A push that failed is released for a retry, not recorded as late and not as sent.
+    const flaky = fakeStore({
+      claimPreDebitNotices: () => Promise.resolve([{ noticeId: ID(73), borrowerId: BORROWER }]),
+    });
+    await jobs({
+      store: flaky,
+      channels: channelsOf(accepted, { state: 'unknown', reason: 'timeout' }),
+    }).instance.run('mandates');
+    expect(flaky.called('recordPreDebitNotice')).toEqual([[ID(73), 'failed', null]]);
   });
 
   it('a notice no channel could carry is recorded as not_configured and the delivery is never claimed', async () => {

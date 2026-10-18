@@ -14,7 +14,10 @@ import {
  * text: the borrower reads the message in the app, after signing in, from the database (servicing.my_reminders; the pre-debit
  * notice is a fixed factual line the app builds from the debit). So what leaves this module is an opaque id and a fixed title key.
  *
- *   in_app   the database is the inbox. "Sending" means recording that the message is there; nothing leaves the system.
+ *   in_app   the database is the inbox. "Sending" means recording that the message is there; nothing leaves the system. That is
+ *            true of a reminder (servicing.my_reminders lists it). It is NOT true of a pre-debit notice: no inbox row exists for a
+ *            notice, so the in-app channel accepts it and writes nothing, and its acceptance must not count as the borrower having
+ *            been told (see noticeOutcomeOf in periodic-jobs.ts).
  *   push     there is no push provider. The labelled mock exists in local development and tests only; everywhere else the
  *            unconfigured placeholder answers `not_configured`, which the database records as such (never as sent).
  *   sms      never sent (no provider, no DLT registration). The jobs record `not_configured` without calling anything.

@@ -1056,6 +1056,38 @@ describe.skipIf(!enabled)('scheduled jobs and servicing handlers against a real 
       expect(await openExceptions('mandate_notice_late')).toBeGreaterThan(0);
     });
 
+    it('an in-app inbox that accepts is not enough: with push not configured the notice is late, the lender is told and the debit stays un-notified (A54)', async () => {
+      await transaction(async (c) => {
+        await c.query(`set local session_replication_role = replica`);
+        await c.query(
+          `update payments.pre_debit_notices set notice_due_at = now() - interval '1 minute', claimed_until = null, sent_at = null, status = 'planned', delivery_state = null where mandate_id = $1::uuid`,
+          [mandate.m14],
+        );
+        await c.query(
+          `update payments.mandate_debits set status = 'scheduled', rank = 10 where mandate_id = $1::uuid`,
+          [mandate.m14],
+        );
+      });
+      // The real channels of a deployed environment: the in-app inbox accepts anything, push is the unconfigured placeholder.
+      const staging = periodic({ channels: createServiceChannels({ environment: 'production' }) });
+      await staging.run('mandates');
+      const notices = await q<{ status: string; delivery_state: string | null; sent: boolean }>(
+        `select status, delivery_state, sent_at is not null as sent from payments.pre_debit_notices where mandate_id = $1::uuid`,
+        [mandate.m14],
+      );
+      expect(notices.length).toBeGreaterThan(0);
+      expect(
+        notices.every((n) => n.status === 'late' && n.delivery_state === null && !n.sent),
+      ).toBe(true);
+      expect(
+        await scalar<number>(
+          `select count(*)::int as v from payments.mandate_debits where mandate_id = $1::uuid and status = 'notified'`,
+          [mandate.m14],
+        ),
+      ).toBe(0);
+      expect(await openExceptions('mandate_notice_late')).toBeGreaterThan(0);
+    });
+
     it('applies an authenticated debit report to the planned debit, one call per report, and a returned debit touches no payment', async () => {
       const ref = await scalar<string>(
         `select provider_mandate_ref as v from payments.mandates where id = $1::uuid`,

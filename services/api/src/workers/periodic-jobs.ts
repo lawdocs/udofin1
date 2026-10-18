@@ -639,9 +639,9 @@ export function createPeriodicJobs(
             recipientRef: notice.borrowerId,
             titleKey: 'payment_update',
           };
-          const results = [
-            await sendOnChannel(channels, 'in_app', message),
-            await sendOnChannel(channels, 'push', message),
+          const results: NoticeChannelResult[] = [
+            { channel: 'in_app', result: await sendOnChannel(channels, 'in_app', message) },
+            { channel: 'push', result: await sendOnChannel(channels, 'push', message) },
           ];
           const outcome = noticeOutcomeOf(results);
           await store.recordPreDebitNotice(notice.noticeId, outcome.state, outcome.providerRef);
@@ -891,22 +891,45 @@ export function reminderRecordOf(result: ChannelSendResult): {
   }
 }
 
+export type NoticeChannel = 'in_app' | 'push' | 'sms';
+export interface NoticeChannelResult {
+  readonly channel: NoticeChannel;
+  readonly result: ChannelSendResult;
+}
+
 /**
- * One state for a pre-debit notice that went to several channels. Accepted if any channel took it (the database then marks the
- * debit notified; `delivered` is never claimed here). Not configured only when no channel could carry it at all. Anything else is
- * a failure the database releases for a retry.
+ * The channels whose acceptance means a pre-debit notice reached, or is on its way to, the borrower. The in-app channel is NOT
+ * one of them for a notice: for a reminder the database row is the inbox the app reads (servicing.my_reminders), so the in-app
+ * channel accepting it is true; a pre-debit notice has no inbox row (the app builds its line from the debit), so the in-app
+ * channel accepts it and writes nothing. Counting that acceptance would record the notice as sent, and the debit as notified, when
+ * the borrower was told nothing but what the mandate screen already shows. sms is never sent. Add a channel here only when it
+ * really tells the borrower.
  */
-export function noticeOutcomeOf(results: readonly ChannelSendResult[]): {
+export const NOTICE_CHANNELS_THAT_REACH_THE_BORROWER: readonly NoticeChannel[] = ['push'];
+
+/**
+ * One state for a pre-debit notice that went to several channels, judged on the channels that can reach the borrower
+ * (NOTICE_CHANNELS_THAT_REACH_THE_BORROWER). Accepted if one of them took it (the database then marks the debit notified;
+ * `delivered` is never claimed here). `not_configured`, the database's word for "no channel can carry this notice", when none of
+ * them can, which includes the case where only the in-app channel accepted: the notice stays late and the lender is told
+ * (`mandate_notice_late`) instead of being shown as sent. Anything else is a failure the database releases for a retry.
+ */
+export function noticeOutcomeOf(results: readonly NoticeChannelResult[]): {
   state: NoticeState;
   providerRef: string | null;
 } {
-  const taken = results.flatMap((result) => (result.state === 'accepted' ? [result] : []));
+  const reaching = results.filter((entry) =>
+    NOTICE_CHANNELS_THAT_REACH_THE_BORROWER.includes(entry.channel),
+  );
+  const taken = reaching.flatMap((entry) =>
+    entry.result.state === 'accepted' ? [entry.result] : [],
+  );
   if (taken.length > 0) {
-    // A channel that gave a usable reference supplies it (the in-app inbox has none).
+    // A channel that gave a usable reference supplies it.
     const ref = taken.map((result) => safeProviderRef(result.providerRef)).find((r) => r !== null);
     return { state: 'accepted', providerRef: ref ?? null };
   }
-  if (results.every((result) => result.state === 'not_configured')) {
+  if (reaching.every((entry) => entry.result.state === 'not_configured')) {
     return { state: 'not_configured', providerRef: null };
   }
   return { state: 'failed', providerRef: null };
