@@ -1228,6 +1228,37 @@ describe('payment detail: four separate stages', () => {
     expect(text(container)).toContain('never change the payment amount');
   });
 
+  it('says so when the API has cut the lists at its cap, and only then', () => {
+    const base = detail();
+    const [first] = base.providerPayments;
+    if (!first) throw new Error('the fixture has a provider payment');
+    const many = <T extends { id: string }>(item: T, n: number): T[] =>
+      Array.from({ length: n }, (_, i) => ({ ...item, id: uid(1000 + i) }));
+    const adjustment = {
+      id: uid(22),
+      providerPaymentId: uid(20),
+      kind: 'refund' as const,
+      objectRef: 'refund-ref-1',
+      amountMinor: 100,
+      occurredAt: STAMP,
+      createdAt: STAMP,
+    };
+    const capped = show({
+      ...base,
+      providerPayments: many(first, 200),
+      adjustments: many(adjustment, 200),
+    });
+    expect(text(capped.container)).toContain('At most 200 provider payments are shown');
+    expect(text(capped.container)).toContain('At most 200 refunds, chargebacks and corrections');
+    capped.unmount();
+    const short = show({
+      ...base,
+      providerPayments: many(first, 199),
+      adjustments: many(adjustment, 199),
+    });
+    expect(text(short.container)).not.toContain('At most 200');
+  });
+
   it('shows the processing outcome of each event, or that none exists yet', () => {
     const { container } = show(detail(), [
       event(),
@@ -2399,12 +2430,18 @@ describe('bank statement: the first line is checked in the browser', () => {
   it('looks only at the start of a very large file', async () => {
     const user = userEvent.setup();
     show();
+    const read = vi.spyOn(FileReader.prototype, 'readAsText');
     const big = `${GOOD}${'UTR-TEST-0001,2026-10-15,100\n'.repeat(20000)}`;
+    expect(big.length).toBeGreaterThan(500_000);
     await user.upload(
       screen.getByLabelText('Statement file (CSV)'),
       new File([big], 'statement.csv', { type: 'text/csv' }),
     );
     expect(await screen.findByText(/The first line names the three columns/)).toBeTruthy();
+    // Only the first few thousand characters are read in the browser, never the whole statement.
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(read.mock.calls[0]?.[0].size).toBeLessThanOrEqual(4096);
+    read.mockRestore();
   });
 
   it('says so when a file and pasted text are both given', async () => {

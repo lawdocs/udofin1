@@ -53,6 +53,9 @@ const YES_NO = [
 
 type ProviderEventRow = ProviderEventPage['items'][number];
 
+/** The API returns at most this many provider payments and this many adjustments for one payment request. */
+const LIST_CAP = 200;
+
 /** The provider's mode in plain words. A test mode is said out loud. */
 const modeWords = (mode: string | null) => (mode ? lpWord(MANDATE_MODE_WORDS, mode) : 'Not stated');
 
@@ -370,6 +373,11 @@ export function LpPaymentDetailView({
                   </section>
                 ))
               )}
+              {data.providerPayments.length >= LIST_CAP ? (
+                <p className="muted">
+                  At most {lpCount(LIST_CAP)} provider payments are shown for one payment request.
+                </p>
+              ) : null}
               <h2>Refunds, chargebacks and corrections</h2>
               <p className="muted">
                 These are separate entries. They never change the payment amount shown above.
@@ -399,6 +407,11 @@ export function LpPaymentDetailView({
                   </tbody>
                 </table>
               )}
+              {data.adjustments.length >= LIST_CAP ? (
+                <p className="muted">
+                  At most {lpCount(LIST_CAP)} refunds, chargebacks and corrections are shown.
+                </p>
+              ) : null}
             </>
           );
         }}
