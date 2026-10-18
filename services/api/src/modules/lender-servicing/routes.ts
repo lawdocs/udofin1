@@ -1624,6 +1624,12 @@ export function lenderServicingRoutes(deps: { documents?: DocumentStore }): Rout
         assertUploadAllowed(bytes, body.mimeType);
         const sha256 = sha256Hex(bytes);
         // The same reference with the same bytes is the same document: the database returns the existing one and nothing new is stored.
+        // The lookup and the registration are two statements, so two requests for the same reference could both find nothing; the
+        // second would then be told "existing" by the database after it had stored a second object that nothing points to (A6). One
+        // lock per reference, held to the end of this transaction, makes the second request wait and find the first one's record.
+        await tx.query('select pg_advisory_xact_lock(hashtextextended($1::text, 0))', [
+          `servicing.document:${params.id}:${body.kind}:${body.lenderReference}`,
+        ]);
         const earlier = await tx.query<{ id: string; sha256: string }>(
           `select d.id, d.sha256 from servicing.loan_documents d
             where d.loan_account_id = $1::uuid and d.kind = $2 and d.lender_reference = $3`,

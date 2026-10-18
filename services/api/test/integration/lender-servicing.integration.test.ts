@@ -2737,6 +2737,72 @@ describe.skipIf(!enabled)('lender servicing over HTTP', () => {
       expect([again.statusCode, code(again)]).toEqual([409, 'request_not_open']);
     });
 
+    it("answers the borrower's open request when the lender sends a document that is already on record again, without storing a second object (A6)", async () => {
+      const request = async (from: string, to: string) => {
+        const id = randomUUID();
+        await transaction(async (c) => {
+          await c.query(
+            `insert into servicing.document_requests (id, lender_org_id, loan_account_id, kind, period_from, period_to, requested_by, idempotency_key)
+             values ($1::uuid, $2::uuid, $3::uuid, 'statement', $4::date, $5::date, $6::uuid, $7)`,
+            [id, ids.lenderA, A1(), from, to, ids.b1, `ls-req-a6-${id}`],
+          );
+        }, true);
+        return id;
+      };
+      const statusOf = (id: string) =>
+        scalar<string>(`select status as v from servicing.document_requests where id = $1`, [id]);
+      const fulfilledBy = (id: string) =>
+        scalar<string | null>(
+          `select fulfilled_document_id::text as v from servicing.document_requests where id = $1`,
+          [id],
+        );
+      const covered = await request(dateOnly(55), dateOnly(35));
+      const before = storeFiles().length;
+      // The same file and reference as the proactive upload, now naming the request it answers.
+      const res = await upload(docUser(), A1(), ref1, {
+        contentBase64: bytes1.toString('base64'),
+        requestId: covered,
+      });
+      expect([res.statusCode, res.json()]).toEqual([200, { documentId: docs.one, existing: true }]);
+      expect(await statusOf(covered)).toBe('fulfilled');
+      expect(await fulfilledBy(covered)).toBe(docs.one);
+      expect(storeFiles()).toHaveLength(before);
+      // Sending it once more for the same request is a plain replay.
+      const again = await upload(docUser(), A1(), ref1, {
+        contentBase64: bytes1.toString('base64'),
+        requestId: covered,
+      });
+      expect([again.statusCode, again.json()]).toEqual([
+        200,
+        { documentId: docs.one, existing: true },
+      ]);
+      // A request the document does not cover is not answered by it, and nothing changes.
+      const wider = await request(dateOnly(100), dateOnly(80));
+      const refused = await upload(docUser(), A1(), ref1, {
+        contentBase64: bytes1.toString('base64'),
+        requestId: wider,
+      });
+      expect([refused.statusCode, code(refused)]).toEqual([409, 'period_does_not_cover_request']);
+      expect(await statusOf(wider)).toBe('requested');
+      expect(storeFiles()).toHaveLength(before);
+    });
+
+    it('leaves one record and one stored object when two requests register the same new reference at once (A6)', async () => {
+      const reference = `RACE-${RUN}`;
+      const content = pdf(`race ${RUN}`).toString('base64');
+      const before = storeFiles().length;
+      const [first, second] = await Promise.all([
+        upload(docUser(), A1(), reference, { contentBase64: content }),
+        upload(docUser(), A1(), reference, { contentBase64: content }),
+      ]);
+      expect([first.statusCode, second.statusCode].sort()).toEqual([200, 201]);
+      const rows = await documentRows(reference);
+      expect(rows).toHaveLength(1);
+      expect(first.json<{ documentId: string }>().documentId).toBe(rows[0]?.id);
+      expect(second.json<{ documentId: string }>().documentId).toBe(rows[0]?.id);
+      expect(storeFiles()).toHaveLength(before + 1);
+    });
+
     it('registers a no-dues certificate against a closed loan, answers its request, and the closure record shows it', async () => {
       const res = await upload(docUser(), loan.A2 ?? '', `NOC-${RUN}`, {
         kind: 'noc',
