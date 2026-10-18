@@ -25,14 +25,9 @@ export function parseDayMonthYear(text: string): string | null {
   const day = Number(m[1]);
   const month = Number(m[2]);
   const year = Number(m[3]);
+  // A day or month that does not exist rolls the date into another month or year, so comparing both catches it.
   const probe = new Date(Date.UTC(year, month - 1, day));
-  if (
-    probe.getUTCFullYear() !== year ||
-    probe.getUTCMonth() !== month - 1 ||
-    probe.getUTCDate() !== day
-  ) {
-    return null;
-  }
+  if (probe.getUTCFullYear() !== year || probe.getUTCMonth() !== month - 1) return null;
   const two = (n: number) => String(n).padStart(2, '0');
   return `${String(year)}-${two(month)}-${two(day)}`;
 }

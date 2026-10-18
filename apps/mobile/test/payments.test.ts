@@ -1094,7 +1094,9 @@ describe('error words', () => {
   });
 
   it('maps the step-up and device-check codes to plain words about what to do', () => {
-    expect(en[payErrorKey('stepup_required')]).toMatch(/one-time code/);
+    expect(payErrorKey('stepup_required')).toBe('mandate.err.stepup');
+    expect(en[payErrorKey('stepup_required')]).toMatch(/one-time code.*step 1/);
+    expect(payErrorKey('integrity_insufficient')).toBe('mandate.err.integrity');
     expect(en[payErrorKey('integrity_insufficient')]).toMatch(/security check/);
   });
 
