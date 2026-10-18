@@ -12,6 +12,8 @@ import { describe, expect, it } from 'vitest';
 import {
   auditErrors,
   groupRowErrors,
+  importTextOfRows,
+  NON_FINITE_NUMBER_TEXT,
   toImportRecord,
 } from '../src/modules/lender-servicing/routes.js';
 
@@ -143,6 +145,72 @@ describe('toImportRecord', () => {
     const record = toImportRecord(report) as { installments: Record<string, unknown>[] };
     expect(record.installments.map((i) => i.fees)).toEqual(['1.50', '0.00']);
     expect(record.installments.map((i) => i.installment_seq)).toEqual([1, 2]);
+  });
+});
+
+describe('the text the importer reads for JSON records (A8)', () => {
+  const importText = (records: unknown[]) =>
+    parseLmsImportFile(importTextOfRows(records), {
+      format: 'json',
+      kind: 'loan',
+      sourceSystem: 'file_import',
+      now: NOW,
+    });
+
+  it('writes finite values exactly as JSON.stringify does, nulls included', () => {
+    const records = [{ ...loan, penal_charges: null, nested: { n: -0.5, list: [1, 'a', null] } }];
+    expect(importTextOfRows(records)).toBe(JSON.stringify(records));
+  });
+
+  it('keeps a number that is not finite visible to the importer instead of writing null (an absent optional field)', () => {
+    const overflow = JSON.parse(`{"penal_charges": 1e999, "days_past_due": -1e999}`) as Record<
+      string,
+      number
+    >;
+    expect(overflow.penal_charges).toBe(Infinity);
+    // The old text: the field became null and was read as absent, so the record was accepted and the figure lost.
+    const old = parseLmsImportFile(JSON.stringify([{ ...loan, ...overflow }]), {
+      format: 'json',
+      kind: 'loan',
+      sourceSystem: 'file_import',
+      now: NOW,
+    });
+    expect(old.importable).toBe(true);
+    // The new text: the record is refused with the class of the field, as when the same record is sent as text.
+    const result = importText([{ ...loan, ...overflow }]);
+    expect(result.importable).toBe(false);
+    expect(result.rows).toEqual([]);
+    expect(result.errors).toEqual([
+      { rowNumber: 1, field: 'penal_charges', code: 'invalid_amount' },
+      { rowNumber: 1, field: 'days_past_due', code: 'invalid_integer' },
+    ]);
+    const asText = parseLmsImportFile(
+      `[${JSON.stringify(loan).replace('"penal_charges":"0.00"', '"penal_charges":1e999')}]`,
+      { format: 'json', kind: 'loan', sourceSystem: 'file_import', now: NOW },
+    );
+    expect(asText.errors).toEqual([
+      { rowNumber: 1, field: 'penal_charges', code: 'invalid_amount' },
+    ]);
+  });
+
+  it('never turns a non-finite number into a valid reference, status or date', () => {
+    const result = importText([
+      {
+        ...loan,
+        lms_loan_ref: Infinity,
+        status: Infinity,
+        disbursement_date: Infinity,
+        reported_as_of: Infinity,
+      },
+    ]);
+    expect(result.importable).toBe(false);
+    expect(result.errors.map((e) => e.code).sort()).toEqual([
+      'invalid_date',
+      'invalid_reference',
+      'invalid_status',
+      'invalid_timestamp',
+    ]);
+    expect(NON_FINITE_NUMBER_TEXT).not.toMatch(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$/);
   });
 });
 

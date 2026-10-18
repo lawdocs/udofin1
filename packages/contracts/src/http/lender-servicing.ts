@@ -65,6 +65,13 @@ export const LS_BATCH_STATUSES = [
   'failed',
 ] as const;
 export const LS_ROW_ERROR_OUTCOMES = ['error', 'quarantined'] as const;
+/**
+ * What `rowNo` counts in an answer. `file_row`: a row of the file the lender sent (a refused file; CSV rows are counted
+ * after the header). `record_position`: the position of the record in the list of distinct records the importer extracted
+ * (identical repeated records are counted once, and every installment row of one CSV schedule is one record), which is how
+ * the database numbers the records it checks against what the lender already reported.
+ */
+export const LS_ROW_NUMBERINGS = ['file_row', 'record_position'] as const;
 export const LS_ANOMALY_KINDS = [
   'status_regression',
   'terminal_status_changed',
@@ -379,7 +386,7 @@ export const LsImportBatch = z.strictObject({
 export type LsImportBatch = z.infer<typeof LsImportBatch>;
 export const LsImportBatchPage = Page(LsImportBatch);
 
-/** A row-level problem: the position, the classes and the NAMES of the fields at fault. Never a value. */
+/** A row-level problem: the position (see `rowNumbering` of the answer), the classes and the NAMES of the fields at fault. Never a value. */
 export const LsImportRowError = z.strictObject({
   rowNo: z.number().int().min(0),
   outcome: z.enum(LS_ROW_ERROR_OUTCOMES),
@@ -392,6 +399,8 @@ export const LsImportDetail = z.strictObject({
   batch: LsImportBatch,
   errors: z.array(LsImportRowError),
   errorsTruncated: z.boolean(),
+  /** What `errors[].rowNo` counts. A stored batch always says `record_position`. Absent only in answers of older versions. */
+  rowNumbering: z.enum(LS_ROW_NUMBERINGS).optional(),
 });
 
 /** A file the importer refused before any record reached the database: audited without row values, no batch exists. */
@@ -411,6 +420,8 @@ export const LsImportOutcome = z.strictObject({
   refusedFile: LsRefusedFile.nullable(),
   errors: z.array(LsImportRowError),
   errorsTruncated: z.boolean(),
+  /** What `errors[].rowNo` counts: `file_row` for a refused file, `record_position` when a batch was stored. */
+  rowNumbering: z.enum(LS_ROW_NUMBERINGS).optional(),
 });
 export type LsImportOutcome = z.infer<typeof LsImportOutcome>;
 

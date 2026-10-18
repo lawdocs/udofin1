@@ -250,6 +250,21 @@ export function toImportRecord(report: ImportReport): Record<string, unknown> {
   }
 }
 
+/**
+ * What stands in the importer's text for a number that is not finite (JSON written as 1e999 is read as Infinity). It is not a
+ * valid reference, amount, integer, date, timestamp or status, so the importer refuses the record with the class of the
+ * field, exactly as it does for the same record sent as text. A plain JSON.stringify would write such a number as null,
+ * which the importer reads as an absent optional field: the lender's figure would be dropped silently.
+ */
+export const NON_FINITE_NUMBER_TEXT = 'non-finite number';
+
+/** The text the importer reads for JSON records (`rows`): the records as sent, with no value changed or lost. */
+export function importTextOfRows(rows: unknown): string {
+  return JSON.stringify(rows, (_key, value: unknown) =>
+    typeof value === 'number' && !Number.isFinite(value) ? NON_FINITE_NUMBER_TEXT : value,
+  );
+}
+
 /** The field names a refusal may carry: the format's own, never text from the file. */
 const KNOWN_FIELDS: ReadonlySet<string> = new Set<string>([
   ...LMS_LOAN_FIELDS,
@@ -924,6 +939,7 @@ async function importOutcome(tx: UserTx, id: string, existing: boolean) {
     batch: mapBatch(batch),
     refusedFile: null,
     ...(await loadRowErrors(tx, batch)),
+    rowNumbering: 'record_position' as const,
   };
 }
 
@@ -1385,7 +1401,7 @@ export function lenderServicingRoutes(deps: { documents?: DocumentStore }): Rout
       summary:
         'Stage a file of loan, receipt or schedule reports of the lender: validate it as a whole and store the preview (nothing is applied)',
       description:
-        'Needs servicing.manual_entry (and loan.read) of the lender, a second factor, the servicing_sync switch on and an active file_import (or manual) connection. Send the file as text (`content` with `fileFormat` csv or json) or as JSON records (`rows`). Format udofin-lms-import-v1 (packages/adapters/src/lms.ts); money is a decimal rupee STRING; at most 5 MiB and 10,000 records. ALL OR NOTHING (owner decision of 14 Oct 2026): if any record has an error the whole file is invalid, nothing is applied and the answer lists the row numbers, error classes and field NAMES, never a value; correct the file and send it again (`resubmissionOf` links the new batch to the old). The same file twice returns the same batch (`existing`). A file the importer cannot accept at all (unparseable, too large, unknown column) is audited without row values and answers 200 with `refusedFile` and no batch. Committing is a separate step and needs servicing.sync.manage. Status 201 for a new batch.',
+        'Needs servicing.manual_entry (and loan.read) of the lender, a second factor, the servicing_sync switch on and an active file_import (or manual) connection. Send the file as text (`content` with `fileFormat` csv or json) or as JSON records (`rows`). Format udofin-lms-import-v1 (packages/adapters/src/lms.ts); money is a decimal rupee STRING; at most 5 MiB and 10,000 records. ALL OR NOTHING (owner decision of 14 Oct 2026): if any record has an error the whole file is invalid, nothing is applied and the answer lists the row numbers, error classes and field NAMES, never a value (`rowNumbering` says what a number counts: for a file the importer refuses it is a row of your file, CSV rows counted after the header; for a stored batch it is the position of the record among the distinct records found in the file, where identical repeated records count once and all installment rows of one CSV schedule are one record); correct the file and send it again (`resubmissionOf` links the new batch to the old). The same file twice returns the same batch (`existing`). A file the importer cannot accept at all (unparseable, too large, unknown column) is audited without row values and answers 200 with `refusedFile` and no batch. Committing is a separate step and needs servicing.sync.manage. Status 201 for a new batch.',
       tags: ['Servicing (lender)'],
       auth: 'staff',
       idempotent: true,
@@ -1397,7 +1413,7 @@ export function lenderServicingRoutes(deps: { documents?: DocumentStore }): Rout
       bodyLimit: IMPORT_BODY_LIMIT,
       handler: async ({ tx, auth, body, idempotencyKey }) => {
         await requireReader(tx, body.lenderId);
-        const text = body.content ?? JSON.stringify(body.rows);
+        const text = body.content ?? importTextOfRows(body.rows);
         const parsed = parseLmsImportFile(text, {
           format: body.content === undefined ? 'json' : (body.fileFormat ?? 'json'),
           kind: body.kind,
@@ -1432,6 +1448,7 @@ export function lenderServicingRoutes(deps: { documents?: DocumentStore }): Rout
               },
               errors: grouped.rows,
               errorsTruncated: grouped.truncated,
+              rowNumbering: 'file_row' as const,
             },
           };
         }
@@ -1461,7 +1478,7 @@ export function lenderServicingRoutes(deps: { documents?: DocumentStore }): Rout
       operationId: 'getLenderImport',
       summary: 'One import batch with its row-level problems',
       description:
-        "Needs loan.read; another lender's batch answers 404. The problems are row numbers, error classes and the names of the fields at fault (servicing.import_errors): never a value. At most 1,000 rows are listed (`errorsTruncated`).",
+        "Needs loan.read; another lender's batch answers 404. The problems are record positions (`rowNumbering` is `record_position`: the position among the distinct records found in the file, identical repeated records counted once, all installment rows of one CSV schedule one record, so not always a row of the file), error classes and the names of the fields at fault (servicing.import_errors): never a value. At most 1,000 rows are listed (`errorsTruncated`).",
       tags: ['Servicing (lender)'],
       auth: 'staff',
       params: Id,
@@ -1474,7 +1491,11 @@ export function lenderServicingRoutes(deps: { documents?: DocumentStore }): Rout
         if (!batch) throw notFound();
         return {
           status: 200,
-          body: { batch: mapBatch(batch), ...(await loadRowErrors(tx, batch)) },
+          body: {
+            batch: mapBatch(batch),
+            ...(await loadRowErrors(tx, batch)),
+            rowNumbering: 'record_position' as const,
+          },
         };
       },
     }),
