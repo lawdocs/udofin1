@@ -37,7 +37,14 @@ export class HandoffVaultError extends Error {
   }
 }
 
-const KEY_VERSION = /^[A-Za-z0-9._-]{1,40}$/;
+/**
+ * A key version is stored beside the ciphertext and named in an audit event, so it must be a short label. The same rule as
+ * `payments.store_handoff_link` (migration 20261018000920): 1 to 16 characters, and no run of 9 digits (a number is not a label).
+ */
+const KEY_VERSION = /^[A-Za-z0-9._-]{1,16}$/;
+const LONG_NUMBER = /[0-9]{9}/;
+const isKeyVersion = (value: string): boolean =>
+  KEY_VERSION.test(value) && !LONG_NUMBER.test(value);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const NONCE_BYTES = 12;
 const TAG_BYTES = 16;
@@ -92,7 +99,7 @@ export function parseHandoffKeyring(
   }
   const keys = new Map<string, Uint8Array>();
   for (const [version, value] of Object.entries(raw)) {
-    if (!KEY_VERSION.test(version) || typeof value !== 'string') {
+    if (!isKeyVersion(version) || typeof value !== 'string') {
       throw new HandoffVaultError('config');
     }
     const bytes = Buffer.from(value, 'base64');
@@ -102,7 +109,7 @@ export function parseHandoffKeyring(
     }
     keys.set(version, new Uint8Array(bytes));
   }
-  if (!KEY_VERSION.test(activeVersion) || !keys.has(activeVersion)) {
+  if (!isKeyVersion(activeVersion) || !keys.has(activeVersion)) {
     throw new HandoffVaultError('config');
   }
   return { activeVersion, keys };

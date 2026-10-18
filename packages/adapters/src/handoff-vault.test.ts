@@ -134,6 +134,26 @@ describe('hand-off vault', () => {
       }
     });
 
+    it('takes a key version of 1 to 16 characters without a run of 9 digits, as the database does', () => {
+      for (const version of ['v1', 'k2026-10', 'A'.repeat(16), 'v.1_a-2', '12345678']) {
+        expect(
+          parseHandoffKeyring(JSON.stringify({ [version]: KEY_A }), version)?.activeVersion,
+          version,
+        ).toBe(version);
+      }
+      for (const version of ['A'.repeat(17), 'k'.repeat(40), 'v123456789', '202610181530', 'a b']) {
+        expect(
+          () => parseHandoffKeyring(JSON.stringify({ [version]: KEY_A }), version),
+          version,
+        ).toThrow(HandoffVaultError);
+        // and an old version in the ring is refused too, not only the active one
+        expect(
+          () => parseHandoffKeyring(JSON.stringify({ v1: KEY_A, [version]: KEY_A }), 'v1'),
+          version,
+        ).toThrow(HandoffVaultError);
+      }
+    });
+
     it('never echoes a key in an error message', () => {
       try {
         parseHandoffKeyring(JSON.stringify({ v1: KEY_A.slice(0, 20) }), 'v1');
