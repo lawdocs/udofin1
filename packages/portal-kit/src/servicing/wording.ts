@@ -338,6 +338,8 @@ const ERROR: Readonly<Record<string, string>> = {
   format_unsupported: 'That file format version is not supported.',
   import_has_errors:
     'This file has errors, so it cannot be applied. Correct it and upload it again.',
+  import_apply_failed:
+    'Applying the file failed and was rolled back. Nothing was applied. The result below says what happened.',
   batch_rejected: 'This file was discarded and cannot be applied.',
   batch_failed: 'Applying this file failed earlier. Upload the file again.',
   batch_not_previewed: 'This file is not ready to be applied.',

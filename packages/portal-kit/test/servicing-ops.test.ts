@@ -805,6 +805,37 @@ describe('applying and discarding a file are separate explicit steps', () => {
     expect(calls).toEqual([{ path: `/v1/lender/imports/${BATCH}/commit`, body: {}, key: KEY }]);
   });
 
+  it('does not call a commit done when the API says applying failed and was rolled back', async () => {
+    const failedAnswer = {
+      existing: false,
+      batch: batch({
+        status: 'failed',
+        failedAt: '2026-10-16T09:31:00.000000+00:00',
+        failureClass: '40P01',
+      }),
+      refusedFile: null,
+      errors: [],
+      errorsTruncated: false,
+    };
+    const committedAnswer = {
+      ...failedAnswer,
+      batch: batch({
+        status: 'committed',
+        committedAt: '2026-10-16T09:30:00.000000+00:00',
+        appliedCounts: { new: 8 },
+      }),
+    };
+    const form = () =>
+      formOf({ op: 'servicing.import.commit', ...base, id: BATCH, reviewed: 'on' });
+    const failed = await runServicingOperation(recordingApi(failedAnswer).api, form());
+    expect(failed).toEqual({ ok: false, code: 'import_apply_failed' });
+    // The words say nothing was applied and never show the database class.
+    expect(servicingErrorMessage('import_apply_failed')).toMatch(/Nothing was applied/);
+    expect(servicingErrorMessage('import_apply_failed')).not.toContain('40P01');
+    const applied = await runServicingOperation(recordingApi(committedAnswer).api, form());
+    expect(applied).toEqual({ ok: true });
+  });
+
   it('applying never discards and discarding never applies', async () => {
     const { api, calls } = recordingApi();
     await runServicingOperation(

@@ -346,6 +346,7 @@ export type ServicingOutcome = { ok: true; stage?: StageState } | { ok: false; c
 
 const KEY = /^[A-Za-z0-9._:-]{16,128}$/;
 const STAGE_OPERATION = 'servicing.import.stage';
+const COMMIT_OPERATION = 'servicing.import.commit';
 
 /**
  * Runs the operation a form names. Unknown operations are refused without any call to the API. A caller that serves one
@@ -369,9 +370,13 @@ export async function runServicingOperation(
   if (typeof key !== 'string' || !KEY.test(key)) return { ok: false, code: 'validation_failed' };
   const result = await operation.run(api, form, key);
   if (!result.ok) return { ok: false, code: safeErrorCode(result.code) };
-  const staged = LsImportOutcome.safeParse(result.data);
-  return name === 'servicing.import.stage' && staged.success
-    ? { ok: true, stage: stageStateFrom(staged.data) }
+  const outcome = LsImportOutcome.safeParse(result.data);
+  // A commit that fails inside the database is an HTTP 200 whose batch says "failed": nothing was applied, so it is not
+  // reported as done.
+  if (name === COMMIT_OPERATION && outcome.success && outcome.data.batch?.status === 'failed')
+    return { ok: false, code: 'import_apply_failed' };
+  return name === STAGE_OPERATION && outcome.success
+    ? { ok: true, stage: stageStateFrom(outcome.data) }
     : { ok: true };
 }
 

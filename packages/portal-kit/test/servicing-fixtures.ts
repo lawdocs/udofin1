@@ -70,8 +70,11 @@ export const contextFor = (
 });
 
 /** `over` replaces fields of the base fixture; the result is parsed by the contract schema. */
-const make = <S extends z.ZodType>(schema: S, base: Record<string, unknown>, over: object) =>
-  schema.parse({ ...base, ...over }) as z.infer<S>;
+const make = <S extends z.ZodType>(
+  schema: S,
+  base: Record<string, unknown>,
+  over: object,
+): z.infer<S> => schema.parse({ ...base, ...over });
 
 export const loanRow = (over: object = {}) =>
   make(

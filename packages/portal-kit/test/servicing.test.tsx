@@ -3,7 +3,7 @@
 // the guards that hide a write form from a role that may not use it, and the cross-checks that no screen invents a figure,
 // shows a raw server code or posts anything outside the allow-list.
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { userEvent } from '@testing-library/user-event';
 import { type ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as kit from '../src/index.js';
@@ -127,7 +127,9 @@ describe('Loans list', () => {
     expect(within(row).getByText('Active')).toBeTruthy();
     expect(within(row).getAllByText('₹1,25,000.00')).toHaveLength(2);
     expect(within(row).getByText('As reported 16 Oct 2026, 15:45 IST')).toBeTruthy();
-    expect(within(row).getByText('The newest report is within the threshold of 1,440 minutes')).toBeTruthy();
+    expect(
+      within(row).getByText('The newest report is within the threshold of 1,440 minutes'),
+    ).toBeTruthy();
   });
 
   it('says a missing disbursement was not reported, never zero', () => {
@@ -144,7 +146,12 @@ describe('Loans list', () => {
         loanRow({
           id: LOAN,
           lmsLoanRef: 'NO-REPORT',
-          sync: sync({ newestReportedAsOf: null, newestReceivedAt: null, newestReportedStatus: null, stale: true }),
+          sync: sync({
+            newestReportedAsOf: null,
+            newestReceivedAt: null,
+            newestReportedStatus: null,
+            stale: true,
+          }),
         }),
         loanRow({
           id: LOAN_2,
@@ -157,16 +164,25 @@ describe('Loans list', () => {
     expect(within(none).getByText('No report received yet')).toBeTruthy();
     expect(within(none).getByText('Not reported')).toBeTruthy();
     const old = screen.getByRole('row', { name: /OLD-REPORT/ });
-    expect(within(old).getByText(/Stale: the newest report is older than the threshold of 1,440 minutes/)).toBeTruthy();
+    expect(
+      within(old).getByText(
+        /Stale: the newest report is older than the threshold of 1,440 minutes/,
+      ),
+    ).toBeTruthy();
     expect(within(old).getByText('A conflict is waiting')).toBeTruthy();
     expect(within(old).getByText('A warning was flagged on the newest report')).toBeTruthy();
   });
 
   it('pages with an opaque cursor and offers a way back to the newest', () => {
-    const { container } = view(page([loanRow()], 'abc_DEF-123'), { status: 'active', cursor: 'prev-1' });
+    const { container } = view(page([loanRow()], 'abc_DEF-123'), {
+      status: 'active',
+      cursor: 'prev-1',
+    });
     const older = screen.getByRole('link', { name: 'Older loans' });
     expect(older.getAttribute('href')).toBe('/loans?status=active&cursor=abc_DEF-123');
-    expect(screen.getByRole('link', { name: 'Back to the newest loans' }).getAttribute('href')).toBe('/loans?status=active');
+    expect(
+      screen.getByRole('link', { name: 'Back to the newest loans' }).getAttribute('href'),
+    ).toBe('/loans?status=active');
     expect(ops(container)).toEqual([]);
   });
 
@@ -174,7 +190,10 @@ describe('Loans list', () => {
     const ctx: ServicingContext = {
       action: vi.fn(),
       returnTo: '/loans',
-      grants: [...grantsFor(['loan.read'], LENDER_A, 'Sample Finance Ltd'), ...grantsFor(['loan.read'], LENDER_B, 'Other Finance Ltd')],
+      grants: [
+        ...grantsFor(['loan.read'], LENDER_A, 'Sample Finance Ltd'),
+        ...grantsFor(['loan.read'], LENDER_B, 'Other Finance Ltd'),
+      ],
     };
     view(page([loanRow({ lenderId: LENDER_B })]), {}, ctx);
     expect(screen.getByRole('columnheader', { name: 'Lender' })).toBeTruthy();
@@ -195,7 +214,9 @@ describe('Loan detail: figures as the lender reported them', () => {
   it('states whose figures these are and when', () => {
     render(detailPage());
     expect(
-      screen.getByText(/As reported by Sample Finance Ltd on 16 Oct 2026, 15:45 IST \(received by Udofin on 16 Oct 2026, 15:50 IST\)/),
+      screen.getByText(
+        /As reported by Sample Finance Ltd on 16 Oct 2026, 15:45 IST \(received by Udofin on 16 Oct 2026, 15:50 IST\)/,
+      ),
     ).toBeTruthy();
     expect(screen.getByText(/Source: file import\./)).toBeTruthy();
   });
@@ -203,7 +224,8 @@ describe('Loan detail: figures as the lender reported them', () => {
   it('shows every reported figure exactly', () => {
     render(detailPage());
     const table = screen.getByRole('table', { name: 'Figures exactly as reported' });
-    const cell = (label: string) => within(table).getByRole('row', { name: new RegExp(`^${label}`) });
+    const cell = (label: string) =>
+      within(table).getByRole('row', { name: new RegExp(`^${label}`) });
     expect(within(cell('Outstanding principal')).getByText('₹1,00,000.50')).toBeTruthy();
     expect(within(cell('Overdue principal')).getByText('₹1,000.00')).toBeTruthy();
     expect(within(cell('Overdue interest')).getByText('₹250.50')).toBeTruthy();
@@ -250,14 +272,20 @@ describe('Loan detail: figures as the lender reported them', () => {
       }),
     );
     expect(screen.getByText('₹9,999.99')).toBeTruthy();
-    expect(screen.getByText(/do not add up to the overdue total reported\. Both are shown exactly as reported; nothing was corrected\./)).toBeTruthy();
+    expect(
+      screen.getByText(
+        /do not add up to the overdue total reported\. Both are shown exactly as reported; nothing was corrected\./,
+      ),
+    ).toBeTruthy();
     // The sum of the parts (₹1,300.50) is not worked out anywhere on the screen.
     expect(text(container)).not.toContain('₹1,300.50');
   });
 
   it('shows a note it has no wording for in general words, not as the code', () => {
     const { container } = render(
-      detailPage({ detail: ok(loanDetail({ report: report({ flags: ['internal_review_flag'] }) })) }),
+      detailPage({
+        detail: ok(loanDetail({ report: report({ flags: ['internal_review_flag'] }) })),
+      }),
     );
     expect(screen.getByText('A note was recorded with this report.')).toBeTruthy();
     expect(text(container)).not.toContain('internal_review_flag');
@@ -269,11 +297,19 @@ describe('Loan detail: figures as the lender reported them', () => {
       schedule: null,
       receipts: [],
       loan: loanRow({
-        sync: { ...loanRow().sync, newestReportedAsOf: null, newestReceivedAt: null, newestReportedStatus: null, stale: true },
+        sync: {
+          ...loanRow().sync,
+          newestReportedAsOf: null,
+          newestReceivedAt: null,
+          newestReportedStatus: null,
+          stale: true,
+        },
       }),
     });
     const { container } = render(detailPage({ detail: ok(noReport) }));
-    expect(screen.getAllByText('No report has been received for this loan yet.').length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText('No report has been received for this loan yet.').length,
+    ).toBeGreaterThan(0);
     expect(screen.getByText('No schedule has been received for this loan yet.')).toBeTruthy();
     expect(screen.getByText('No receipt has been reported for this loan yet.')).toBeTruthy();
     expect(screen.queryByRole('table', { name: 'Figures exactly as reported' })).toBeNull();
@@ -283,15 +319,15 @@ describe('Loan detail: figures as the lender reported them', () => {
   it('shows a plain banner when the figures are stale', () => {
     render(
       detailPage({
-        detail: ok(
-          loanDetail({ loan: loanRow({ sync: { ...loanRow().sync, stale: true } }) }),
-        ),
+        detail: ok(loanDetail({ loan: loanRow({ sync: { ...loanRow().sync, stale: true } }) })),
       }),
     );
     const banner = screen.getByRole('status');
     expect(within(banner).getByText('These figures may be out of date')).toBeTruthy();
     expect(within(banner).getByText(/older than the threshold of 1,440 minutes/)).toBeTruthy();
-    expect(within(banner).getByText(/What is shown is what your system last reported\./)).toBeTruthy();
+    expect(
+      within(banner).getByText(/What is shown is what your system last reported\./),
+    ).toBeTruthy();
   });
 
   it('shows no stale banner for a report within the threshold', () => {
@@ -305,7 +341,9 @@ describe('Loan detail: figures as the lender reported them', () => {
       ...detail,
       schedule: detail.schedule && {
         ...detail.schedule,
-        installments: detail.schedule.installments.map((i, n) => (n === 0 ? { ...i, totalMinor: 1_250_001 } : i)),
+        installments: detail.schedule.installments.map((i, n) =>
+          n === 0 ? { ...i, totalMinor: 1_250_001 } : i,
+        ),
       },
     };
     render(detailPage({ detail: ok(bent) }));
@@ -324,7 +362,9 @@ describe('Loan detail: figures as the lender reported them', () => {
     expect(within(reversal).getByText('Reversal')).toBeTruthy();
     expect(within(reversal).getByText('RC-SAMPLE-1')).toBeTruthy();
     expect(within(reversal).getByText('₹1.00')).toBeTruthy();
-    const receipt = within(table).getByRole('rowheader', { name: 'RC-SAMPLE-1' }).closest('tr') as HTMLElement;
+    const receipt = within(table)
+      .getByRole('rowheader', { name: 'RC-SAMPLE-1' })
+      .closest('tr') as HTMLElement;
     expect(within(receipt).getByText('upi')).toBeTruthy();
     expect(within(receipt).getByText('₹12,500.00')).toBeTruthy();
   });
@@ -333,7 +373,15 @@ describe('Loan detail: figures as the lender reported them', () => {
     const { container, rerender } = render(detailPage({ detail: fail(500, 'boom: stack trace') }));
     expect(screen.getByText('Could not load this loan')).toBeTruthy();
     expect(text(container)).not.toContain('boom');
-    rerender(detailPage({ documents: fail(500, 'x_y'), quotes: fail(403, 'forbidden'), requests: fail(500), conflicts: fail(500), anomalies: fail(500) }));
+    rerender(
+      detailPage({
+        documents: fail(500, 'x_y'),
+        quotes: fail(403, 'forbidden'),
+        requests: fail(500),
+        conflicts: fail(500),
+        anomalies: fail(500),
+      }),
+    );
     expect(screen.getByText('Could not load the documents')).toBeTruthy();
     expect(screen.getByText('You cannot view the quotations')).toBeTruthy();
     expect(screen.getByText('Could not load the document requests')).toBeTruthy();
@@ -345,9 +393,13 @@ describe('Loan detail: figures as the lender reported them', () => {
     const { rerender } = render(detailPage({ done: true }));
     expect(screen.getByRole('status', { name: '' }).textContent).toMatch(/recorded/);
     rerender(detailPage({ error: 'lender_reference_reused' }));
-    expect(screen.getByRole('alert').textContent).toBe('That reference was already used with a different file.');
+    expect(screen.getByRole('alert').textContent).toBe(
+      'That reference was already used with a different file.',
+    );
     rerender(detailPage({ error: 'some raw server message: relation "x" does not exist' }));
-    expect(screen.getByRole('alert').textContent).toBe('The action could not be completed. Nothing was changed.');
+    expect(screen.getByRole('alert').textContent).toBe(
+      'The action could not be completed. Nothing was changed.',
+    );
   });
 });
 
@@ -371,7 +423,23 @@ describe('Loan detail: conflicts and flags', () => {
 // -------------------------------------------------------------------------------------------------------------------
 describe('Loan detail: documents, quotations and closure', () => {
   it('lists a document with a link that opens the stored file in a new tab', () => {
-    render(detailPage({ documents: ok({ items: [document(), document({ documentId: DOC_2, lenderReference: 'NOC/1', kind: 'noc', supersededById: DOC, periodFrom: null, periodTo: null })] }) }));
+    render(
+      detailPage({
+        documents: ok({
+          items: [
+            document(),
+            document({
+              documentId: DOC_2,
+              lenderReference: 'NOC/1',
+              kind: 'noc',
+              supersededById: DOC,
+              periodFrom: null,
+              periodTo: null,
+            }),
+          ],
+        }),
+      }),
+    );
     const row = screen.getByRole('row', { name: /STMT\/SAMPLE\/001/ });
     const link = within(row).getByRole('link', { name: 'Open the PDF' });
     expect(link.getAttribute('href')).toBe(`/loans/${LOAN}/documents/${DOC}/file`);
@@ -381,7 +449,11 @@ describe('Loan detail: documents, quotations and closure', () => {
     expect(within(row).getByText('1 Oct 2026, 10:00 IST')).toBeTruthy();
     expect(within(row).getByText('1 Apr 2026 to 30 Sep 2026')).toBeTruthy();
     expect(within(row).getByText('1,23,456 bytes')).toBeTruthy();
-    expect(within(row).getByText(`${SHA.slice(0, 16)}…`).getAttribute('title')).toBe(SHA);
+    expect(
+      within(row)
+        .getByText(`${SHA.slice(0, 16)}…`)
+        .getAttribute('title'),
+    ).toBe(SHA);
     const old = screen.getByRole('row', { name: /NOC\/1/ });
     expect(within(old).getByText('Replaced by a newer document')).toBeTruthy();
     expect(within(old).getByText('No-dues certificate (NOC)')).toBeTruthy();
@@ -396,7 +468,12 @@ describe('Loan detail: documents, quotations and closure', () => {
   it('offers to register a document with every control labelled, answering only an open non-quotation request', () => {
     const { container } = render(
       detailPage({
-        documents: ok({ items: [document(), document({ documentId: DOC_2, lenderReference: 'OLD/1', supersededById: DOC })] }),
+        documents: ok({
+          items: [
+            document(),
+            document({ documentId: DOC_2, lenderReference: 'OLD/1', supersededById: DOC }),
+          ],
+        }),
         requests: page([
           docRequest({ id: REQUEST, kind: 'noc' }),
           docRequest({ id: REQUEST_2, kind: 'foreclosure_quote' }),
@@ -404,19 +481,33 @@ describe('Loan detail: documents, quotations and closure', () => {
       }),
     );
     expect(ops(container)).toContain('servicing.document.register');
-    const form = container.querySelector('input[value="servicing.document.register"]')?.closest('form');
+    const form = container
+      .querySelector('input[value="servicing.document.register"]')
+      ?.closest('form');
     expect(form?.getAttribute('enctype')).toBe('multipart/form-data');
-    const file = within(form as HTMLElement).getByLabelText('The signed PDF') as HTMLInputElement;
+    const file = within(form as HTMLElement).getByLabelText<HTMLInputElement>('The signed PDF');
     expect(file.type).toBe('file');
     expect(file.accept).toBe('application/pdf');
     expect(file.required).toBe(true);
-    for (const label of ['What it is', 'Your reference for this document', 'Issued at (India time)', 'Period from (optional)', 'Period to (optional)', 'Replaces an earlier document (optional)', "Answers a borrower's request (optional)"]) {
+    for (const label of [
+      'What it is',
+      'Your reference for this document',
+      'Issued at (India time)',
+      'Period from (optional)',
+      'Period to (optional)',
+      'Replaces an earlier document (optional)',
+      "Answers a borrower's request (optional)",
+    ]) {
       expect(within(form as HTMLElement).getByLabelText(label), label).toBeTruthy();
     }
-    const replaces = within(form as HTMLElement).getByLabelText('Replaces an earlier document (optional)') as HTMLSelectElement;
+    const replaces = within(form as HTMLElement).getByLabelText<HTMLSelectElement>(
+      'Replaces an earlier document (optional)',
+    );
     // Only a document that is not already replaced can be replaced.
     expect([...replaces.options].map((o) => o.value)).toEqual(['', DOC]);
-    const answers = within(form as HTMLElement).getByLabelText("Answers a borrower's request (optional)") as HTMLSelectElement;
+    const answers = within(form as HTMLElement).getByLabelText<HTMLSelectElement>(
+      "Answers a borrower's request (optional)",
+    );
     expect([...answers.options].map((o) => o.value)).toEqual(['', REQUEST]);
     expect(form?.querySelector('input[name="loanId"]')?.getAttribute('value')).toBe(LOAN);
   });
@@ -425,7 +516,14 @@ describe('Loan detail: documents, quotations and closure', () => {
     const { container } = render(
       detailPage({
         ctx: readOnly(`/loans/${LOAN}`),
-        conflicts: page([conflict(), conflict({ id: CONFLICT_2, status: 'acknowledged', acknowledgedAt: '2026-10-12T04:00:00.000000+00:00' })]),
+        conflicts: page([
+          conflict(),
+          conflict({
+            id: CONFLICT_2,
+            status: 'acknowledged',
+            acknowledgedAt: '2026-10-12T04:00:00.000000+00:00',
+          }),
+        ]),
         requests: page([docRequest()]),
         quotes: page([quote()]),
         detail: ok(loanDetail({ loan: loanRow({ status: 'closed' }) })),
@@ -443,7 +541,12 @@ describe('Loan detail: documents, quotations and closure', () => {
     // The person may write in lender B only; this loan belongs to lender A.
     const ctx = contextFor(ALL_PERMISSIONS, `/loans/${LOAN}`, LENDER_B);
     const { container } = render(
-      detailPage({ ctx, requests: page([docRequest()]), conflicts: page([conflict()]), detail: ok(loanDetail({ loan: loanRow({ status: 'closed' }) })) }),
+      detailPage({
+        ctx,
+        requests: page([docRequest()]),
+        conflicts: page([conflict()]),
+        detail: ok(loanDetail({ loan: loanRow({ status: 'closed' }) })),
+      }),
     );
     expect(ops(container)).toEqual([]);
   });
@@ -451,8 +554,18 @@ describe('Loan detail: documents, quotations and closure', () => {
   it('draws only the forms for the permissions the person holds', () => {
     const closed = ok(loanDetail({ loan: loanRow({ status: 'closed' }) }));
     const open = { conflicts: page([conflict()]), requests: page([docRequest()]), detail: closed };
-    const only = (permission: string) => ops(render(detailPage({ ...open, ctx: contextFor(['loan.read', permission], `/loans/${LOAN}`) })).container);
-    expect(only('servicing.document.issue').sort()).toEqual(['servicing.closure.open', 'servicing.document.register', 'servicing.quote.record', 'servicing.request.decline']);
+    const only = (permission: string) =>
+      ops(
+        render(
+          detailPage({ ...open, ctx: contextFor(['loan.read', permission], `/loans/${LOAN}`) }),
+        ).container,
+      );
+    expect(only('servicing.document.issue').sort()).toEqual([
+      'servicing.closure.open',
+      'servicing.document.register',
+      'servicing.quote.record',
+      'servicing.request.decline',
+    ]);
     cleanup();
     expect(only('servicing.sync.manage')).toEqual(['servicing.conflict.acknowledge']);
     cleanup();
@@ -462,56 +575,109 @@ describe('Loan detail: documents, quotations and closure', () => {
   it('shows a quotation as the lender stated it, with its validity as a date and time and no timer', () => {
     const { container } = render(detailPage({ quotes: page([quote()]) }));
     expect(screen.getByText('Quotation FQ-SAMPLE-1')).toBeTruthy();
-    expect(screen.getByText(/As quoted by your organisation as of 15 Oct 2026, 10:30 IST\. Valid until 22 Oct 2026, 23:59 IST\./)).toBeTruthy();
+    expect(
+      screen.getByText(
+        /As quoted by your organisation as of 15 Oct 2026, 10:30 IST\. Valid until 22 Oct 2026, 23:59 IST\./,
+      ),
+    ).toBeTruthy();
     const table = screen.getByRole('table', { name: 'Figures exactly as quoted' });
-    expect(within(within(table).getByRole('row', { name: /^Principal/ })).getByText('₹90,000.00')).toBeTruthy();
-    expect(within(within(table).getByRole('row', { name: /^Prepayment charge/ })).getByText('₹2,700.00')).toBeTruthy();
-    expect(within(within(table).getByRole('row', { name: /^Total/ })).getByText('₹93,950.00')).toBeTruthy();
+    expect(
+      within(within(table).getByRole('row', { name: /^Principal/ })).getByText('₹90,000.00'),
+    ).toBeTruthy();
+    expect(
+      within(within(table).getByRole('row', { name: /^Prepayment charge/ })).getByText('₹2,700.00'),
+    ).toBeTruthy();
+    expect(
+      within(within(table).getByRole('row', { name: /^Total/ })).getByText('₹93,950.00'),
+    ).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
-    expect(text(container)).not.toMatch(/countdown|expires in|time left|remaining|hours left|minutes left/i);
+    expect(text(container)).not.toMatch(
+      /countdown|expires in|time left|remaining|hours left|minutes left/i,
+    );
   });
 
   it('flags a quotation whose parts do not add up, shows the lender’s total unchanged, and says it must not be paid', () => {
-    const { container } = render(detailPage({ quotes: page([quote({ totalMinor: 100, totalMismatch: true })]) }));
+    const { container } = render(
+      detailPage({ quotes: page([quote({ totalMinor: 100, totalMismatch: true })]) }),
+    );
     const alert = screen.getByRole('alert');
-    expect(alert.textContent).toMatch(/Flagged: the parts do not add up to the total your organisation stated\./);
+    expect(alert.textContent).toMatch(
+      /Flagged: the parts do not add up to the total your organisation stated\./,
+    );
     expect(alert.textContent).toMatch(/has not been corrected\. It must not be paid\./);
-    expect(within(screen.getByRole('table', { name: 'Figures exactly as quoted' })).getByText('₹1.00')).toBeTruthy();
+    expect(
+      within(screen.getByRole('table', { name: 'Figures exactly as quoted' })).getByText('₹1.00'),
+    ).toBeTruthy();
     // The sum of the parts (₹93,950.00) is nowhere on the screen as a total.
-    expect(within(screen.getByRole('table', { name: 'Figures exactly as quoted' })).queryByText('₹93,950.00')).toBeNull();
+    expect(
+      within(screen.getByRole('table', { name: 'Figures exactly as quoted' })).queryByText(
+        '₹93,950.00',
+      ),
+    ).toBeNull();
     expect(text(container)).not.toContain('₹93,950.00');
   });
 
   it('links the letter of a quotation to the stored file', () => {
     render(detailPage({ quotes: page([quote({ letterDocumentId: DOC })]) }));
-    expect(screen.getByRole('link', { name: 'Open the quotation letter' }).getAttribute('href')).toBe(`/loans/${LOAN}/documents/${DOC}/file`);
+    expect(
+      screen.getByRole('link', { name: 'Open the quotation letter' }).getAttribute('href'),
+    ).toBe(`/loans/${LOAN}/documents/${DOC}/file`);
   });
 
   it('offers to record a quotation with labelled controls and rupee amounts', () => {
     const { container } = render(
       detailPage({
-        documents: ok({ items: [document({ documentId: DOC, kind: 'foreclosure_quote', lenderReference: 'FQL/1' }), document({ documentId: DOC_2, kind: 'statement' })] }),
-        requests: page([docRequest({ id: REQUEST, kind: 'noc' }), docRequest({ id: REQUEST_2, kind: 'foreclosure_quote' })]),
+        documents: ok({
+          items: [
+            document({ documentId: DOC, kind: 'foreclosure_quote', lenderReference: 'FQL/1' }),
+            document({ documentId: DOC_2, kind: 'statement' }),
+          ],
+        }),
+        requests: page([
+          docRequest({ id: REQUEST, kind: 'noc' }),
+          docRequest({ id: REQUEST_2, kind: 'foreclosure_quote' }),
+        ]),
       }),
     );
-    const form = container.querySelector('input[value="servicing.quote.record"]')?.closest('form') as HTMLElement;
-    for (const label of ['Your reference for this quotation', 'As of (India time, not in the future)', 'Valid until (India time)', 'Principal (rupees)', 'Interest (rupees)', 'Charges (rupees)', 'Prepayment charge (rupees)', 'Total as you state it (rupees)']) {
+    const form = container
+      .querySelector('input[value="servicing.quote.record"]')
+      ?.closest('form') as HTMLElement;
+    for (const label of [
+      'Your reference for this quotation',
+      'As of (India time, not in the future)',
+      'Valid until (India time)',
+      'Principal (rupees)',
+      'Interest (rupees)',
+      'Charges (rupees)',
+      'Prepayment charge (rupees)',
+      'Total as you state it (rupees)',
+    ]) {
       expect(within(form).getByLabelText(label), label).toBeTruthy();
     }
-    const letters = within(form).getByLabelText('Quotation letter you registered (optional)') as HTMLSelectElement;
+    const letters = within(form).getByLabelText<HTMLSelectElement>(
+      'Quotation letter you registered (optional)',
+    );
     expect([...letters.options].map((o) => o.value)).toEqual(['', DOC]);
-    const requests = within(form).getByLabelText("Answers a borrower's request (optional)") as HTMLSelectElement;
+    const requests = within(form).getByLabelText<HTMLSelectElement>(
+      "Answers a borrower's request (optional)",
+    );
     expect([...requests.options].map((o) => o.value)).toEqual(['', REQUEST_2]);
-    expect(within(form).getAllByText('Digits with up to two decimals, for example 12500.50.')).toHaveLength(5);
+    expect(
+      within(form).getAllByText('Digits with up to two decimals, for example 12500.50.'),
+    ).toHaveLength(5);
   });
 
   it('offers to record security only for a loan reported closed or foreclosed, with nothing pre-ticked', () => {
     const { container, rerender } = render(detailPage());
     expect(ops(container)).not.toContain('servicing.closure.open');
-    expect(screen.getByText(/Closure records appear once your system reports this loan closed or foreclosed\./)).toBeTruthy();
+    expect(
+      screen.getByText(
+        /Closure records appear once your system reports this loan closed or foreclosed\./,
+      ),
+    ).toBeTruthy();
     rerender(detailPage({ detail: ok(loanDetail({ loan: loanRow({ status: 'foreclosed' }) })) }));
     expect(ops(container)).toContain('servicing.closure.open');
-    const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
+    const boxes = screen.getAllByRole<HTMLInputElement>('checkbox');
     expect(boxes).toHaveLength(5);
     expect(boxes.every((b) => !b.checked)).toBe(true);
     expect(boxes.every((b) => b.name === 'collateralTypes')).toBe(true);
@@ -522,36 +688,76 @@ describe('Loan detail: documents, quotations and closure', () => {
 
 // -------------------------------------------------------------------------------------------------------------------
 describe('Document requests', () => {
-  const view = (pageResult: Parameters<typeof DocumentRequestsPage>[0]['page'], query = { status: 'requested' }, ctx = full('/loans/requests?status=requested')) =>
-    render(<DocumentRequestsPage page={pageResult} query={query} ctx={ctx} />);
+  const view = (
+    pageResult: Parameters<typeof DocumentRequestsPage>[0]['page'],
+    query = { status: 'requested' },
+    ctx = full('/loans/requests?status=requested'),
+  ) => render(<DocumentRequestsPage page={pageResult} query={query} ctx={ctx} />);
 
   it('opens on the requests that wait for an answer, without naming the borrower', () => {
-    const { container } = view(page([docRequest(), docRequest({ id: REQUEST_2, kind: 'statement', periodFrom: '2026-04-01', periodTo: '2026-09-30' })]));
-    expect((screen.getByLabelText('Status') as HTMLSelectElement).value).toBe('requested');
+    const { container } = view(
+      page([
+        docRequest(),
+        docRequest({
+          id: REQUEST_2,
+          kind: 'statement',
+          periodFrom: '2026-04-01',
+          periodTo: '2026-09-30',
+        }),
+      ]),
+    );
+    expect(screen.getByLabelText<HTMLSelectElement>('Status').value).toBe('requested');
     expect(screen.getByText('No-dues certificate (NOC)')).toBeTruthy();
     expect(screen.getByText('1 Apr 2026 to 30 Sep 2026')).toBeTruthy();
-    expect(screen.getAllByText('Open: waiting for your organisation', { selector: 'dd' })).toHaveLength(2);
-    expect(screen.getAllByRole('link', { name: 'Open the loan to answer this request' })[0]?.getAttribute('href')).toBe(`/loans/${LOAN}#documents`);
+    expect(
+      screen.getAllByText('Open: waiting for your organisation', { selector: 'dd' }),
+    ).toHaveLength(2);
+    expect(
+      screen
+        .getAllByRole('link', { name: 'Open the loan to answer this request' })[0]
+        ?.getAttribute('href'),
+    ).toBe(`/loans/${LOAN}#documents`);
     expect(text(container)).toContain('The borrower is not named here.');
   });
 
   it('labels the default target as Udofin’s, not a regulatory deadline, and says when none is set', () => {
-    view(page([docRequest({ dueBy: null }), docRequest({ id: REQUEST_2, dueBy: '2026-10-21T08:00:00.000000+00:00' })]));
-    expect(screen.getAllByText('Udofin’s default target (not a regulatory deadline)')).toHaveLength(2);
+    view(
+      page([
+        docRequest({ dueBy: null }),
+        docRequest({ id: REQUEST_2, dueBy: '2026-10-21T08:00:00.000000+00:00' }),
+      ]),
+    );
+    expect(screen.getAllByText('Udofin’s default target (not a regulatory deadline)')).toHaveLength(
+      2,
+    );
     expect(screen.getByText('None set')).toBeTruthy();
     expect(screen.getByText('21 Oct 2026, 13:30 IST')).toBeTruthy();
   });
 
   it('sends a quotation request to the quotation form and declines with a note the borrower can read', () => {
     const { container } = view(page([docRequest({ kind: 'foreclosure_quote' })]));
-    expect(screen.getByRole('link', { name: 'Open the loan to answer this request' }).getAttribute('href')).toBe(`/loans/${LOAN}#quotes`);
+    expect(
+      screen
+        .getByRole('link', { name: 'Open the loan to answer this request' })
+        .getAttribute('href'),
+    ).toBe(`/loans/${LOAN}#quotes`);
     expect(ops(container)).toEqual(['servicing.request.decline']);
-    expect(screen.getByLabelText(/Why \(10 to 500 characters; the borrower can read this; no personal details\)/)).toBeTruthy();
+    expect(
+      screen.getByLabelText(
+        /Why \(10 to 500 characters; the borrower can read this; no personal details\)/,
+      ),
+    ).toBeTruthy();
   });
 
   it('shows a decided request with the lender’s note and no decline form', () => {
     const { container } = view(
-      page([docRequest({ status: 'declined', lenderNote: 'The loan is not closed yet', decidedAt: '2026-10-15T08:00:00.000000+00:00' })]),
+      page([
+        docRequest({
+          status: 'declined',
+          lenderNote: 'The loan is not closed yet',
+          decidedAt: '2026-10-15T08:00:00.000000+00:00',
+        }),
+      ]),
     );
     expect(screen.getByText('Declined', { selector: 'dd' })).toBeTruthy();
     expect(screen.getByText('The loan is not closed yet')).toBeTruthy();
@@ -560,7 +766,9 @@ describe('Document requests', () => {
 
   it('links the document that answered a fulfilled request', () => {
     view(page([docRequest({ status: 'fulfilled', fulfilledDocumentId: DOC })]));
-    expect(screen.getByRole('link', { name: 'Open the document that answered it' }).getAttribute('href')).toBe(`/loans/${LOAN}/documents/${DOC}/file`);
+    expect(
+      screen.getByRole('link', { name: 'Open the document that answered it' }).getAttribute('href'),
+    ).toBe(`/loans/${LOAN}/documents/${DOC}/file`);
   });
 
   it('shows no decline form to a role without the permission', () => {
@@ -583,26 +791,38 @@ describe('Document requests', () => {
 
 // -------------------------------------------------------------------------------------------------------------------
 describe('Closures and security release', () => {
-  const view = (pageResult: Parameters<typeof ClosuresPage>[0]['page'], ctx = full('/loans/closures')) =>
-    render(<ClosuresPage page={pageResult} query={{}} ctx={ctx} />);
+  const view = (
+    pageResult: Parameters<typeof ClosuresPage>[0]['page'],
+    ctx = full('/loans/closures'),
+  ) => render(<ClosuresPage page={pageResult} query={{}} ctx={ctx} />);
 
   it('shows the closure, the no-dues status and each release task as the lender recorded them', () => {
     view(page([closure()]));
     expect(screen.getByText('Closed loan, Sample Finance Ltd')).toBeTruthy();
-    expect(screen.getByText(/10 Oct 2026, 10:30 IST \(when your report was recorded, not your closure date\)/)).toBeTruthy();
+    expect(
+      screen.getByText(
+        /10 Oct 2026, 10:30 IST \(when your report was recorded, not your closure date\)/,
+      ),
+    ).toBeTruthy();
     expect(screen.getByText('Not registered yet')).toBeTruthy();
     const open = screen.getByRole('region', { name: 'Release of Lien on mutual fund units' });
     expect(within(open).getByText('Open: not yet confirmed by your organisation')).toBeTruthy();
     expect(within(open).getByText('9 Nov 2026, 10:30 IST')).toBeTruthy();
     const done = screen.getByRole('region', { name: 'Release of Pledge of demat holdings' });
-    expect(within(done).getByText('Confirmed by your organisation', { selector: 'dd' })).toBeTruthy();
-    expect(within(done).getByText(/12 Oct 2026, 10:30 IST, your reference REL\/SAMPLE\/7/)).toBeTruthy();
+    expect(
+      within(done).getByText('Confirmed by your organisation', { selector: 'dd' }),
+    ).toBeTruthy();
+    expect(
+      within(done).getByText(/12 Oct 2026, 10:30 IST, your reference REL\/SAMPLE\/7/),
+    ).toBeTruthy();
     expect(within(done).queryByRole('button')).toBeNull();
   });
 
   it('labels default dates as Udofin’s, not a regulatory deadline, and shows a dash when none is set', () => {
     view(page([closure()]));
-    expect(screen.getAllByText('Udofin’s default target (not a regulatory deadline)').length).toBeGreaterThanOrEqual(2);
+    expect(
+      screen.getAllByText('Udofin’s default target (not a regulatory deadline)').length,
+    ).toBeGreaterThanOrEqual(2);
     // The no-dues certificate and the confirmed task have no default date; the open task has one.
     expect(screen.getAllByText('—')).toHaveLength(2);
     expect(screen.getByText('9 Nov 2026, 10:30 IST')).toBeTruthy();
@@ -610,13 +830,17 @@ describe('Closures and security release', () => {
 
   it('links the no-dues certificate once it is registered', () => {
     view(page([closure({ nocDocumentId: DOC, nocIssuedAt: '2026-10-11T05:00:00.000000+00:00' })]));
-    expect(screen.getByRole('link', { name: 'Open the PDF' }).getAttribute('href')).toBe(`/loans/${LOAN}/documents/${DOC}/file`);
+    expect(screen.getByRole('link', { name: 'Open the PDF' }).getAttribute('href')).toBe(
+      `/loans/${LOAN}/documents/${DOC}/file`,
+    );
   });
 
   it('offers to confirm a release or record a delay only for an open task, and says Udofin never confirms', () => {
     const { container } = view(page([closure()]));
     expect(ops(container).sort()).toEqual(['servicing.closure.confirm', 'servicing.closure.delay']);
-    expect(screen.getAllByText(/Udofin holds no collateral and never confirms a release\./).length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText(/Udofin holds no collateral and never confirms a release\./).length,
+    ).toBeGreaterThan(0);
     expect(container.querySelector('input[name="taskId"]')?.getAttribute('value')).toBe(TASK);
     expect(screen.getByLabelText('Your confirmation reference')).toBeTruthy();
   });
@@ -643,7 +867,9 @@ describe('Closures and security release', () => {
 
 // -------------------------------------------------------------------------------------------------------------------
 describe('Imports and sync', () => {
-  const stageAction = vi.fn((_previous: StageState, _form: FormData) => Promise.resolve<StageState>({ status: 'idle' }));
+  const stageAction = vi.fn((_previous: StageState, _form: FormData) =>
+    Promise.resolve<StageState>({ status: 'idle' }),
+  );
   const view = (
     over: Partial<Parameters<typeof SyncPage>[0]> = {},
     ctx: ServicingContext = full('/imports'),
@@ -670,19 +896,49 @@ describe('Imports and sync', () => {
     expect(within(card).getByText('Receipts, Repayment schedules')).toBeTruthy();
     expect(within(card).getByText('120')).toBeTruthy();
     expect(within(card).getByText('Loans with no report yet').nextSibling?.textContent).toBe('3');
-    expect(within(card).getByText('Loans with no report or an old report (stale)').nextSibling?.textContent).toBe('7');
+    expect(
+      within(card).getByText('Loans with no report or an old report (stale)').nextSibling
+        ?.textContent,
+    ).toBe('7');
     expect(within(card).getByText('As reported on 16 Oct 2026, 14:30 IST')).toBeTruthy();
   });
 
   it('says when there is no connection, so no file can be uploaded yet', () => {
-    view({ status: ok({ items: [syncItem({ connection: null, newestReportedAsOf: null, loans: { total: 0, neverReported: 0, stale: 0, withOpenConflict: 0, withWarning: 0 } })] }) });
-    expect(screen.getByText(/No connection has been set up for this lender, so no file can be uploaded yet\./)).toBeTruthy();
+    view({
+      status: ok({
+        items: [
+          syncItem({
+            connection: null,
+            newestReportedAsOf: null,
+            loans: { total: 0, neverReported: 0, stale: 0, withOpenConflict: 0, withWarning: 0 },
+          }),
+        ],
+      }),
+    });
+    expect(
+      screen.getByText(
+        /No connection has been set up for this lender, so no file can be uploaded yet\./,
+      ),
+    ).toBeTruthy();
     expect(screen.getByText('None yet', { selector: 'dd' })).toBeTruthy();
   });
 
   it('labels a mock connection as for testing only', () => {
     const item = syncItem();
-    view({ status: ok({ items: [{ ...item, connection: item.connection && { ...item.connection, kind: 'mock', providerMode: 'mock' } }] }) });
+    view({
+      status: ok({
+        items: [
+          {
+            ...item,
+            connection: item.connection && {
+              ...item.connection,
+              kind: 'mock',
+              providerMode: 'mock',
+            },
+          },
+        ],
+      }),
+    });
     expect(screen.getByText('Mock connection (for testing only)')).toBeTruthy();
     expect(screen.getByText('Mock mode: for testing only, never for real data')).toBeTruthy();
   });
@@ -690,27 +946,49 @@ describe('Imports and sync', () => {
   it('states that the lender system is the system of record and that files are all or nothing', () => {
     view();
     expect(screen.getByText(/Your lender system is the system of record\./)).toBeTruthy();
-    expect(screen.getAllByText(/nothing is applied unless every row is valid/i).length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText(/nothing is applied unless every row is valid/i).length,
+    ).toBeGreaterThan(0);
   });
 
   it('pre-fills the connection form with what is recorded and ticks only the declared capabilities', () => {
     const { container } = view();
-    const form = container.querySelector('input[value="servicing.connection.set"]')?.closest('form') as HTMLElement;
-    expect((within(form).getByLabelText('How reports reach Udofin') as HTMLSelectElement).value).toBe('file_import');
-    expect((within(form).getByLabelText('Connection status') as HTMLSelectElement).value).toBe('active');
-    expect((within(form).getByLabelText(/A report is stale after this many minutes/) as HTMLInputElement).value).toBe('1440');
-    const ticked = (within(form).getAllByRole('checkbox') as HTMLInputElement[]).filter((c) => c.checked).map((c) => c.name);
+    const form = container
+      .querySelector('input[value="servicing.connection.set"]')
+      ?.closest('form') as HTMLElement;
+    expect(within(form).getByLabelText<HTMLSelectElement>('How reports reach Udofin').value).toBe(
+      'file_import',
+    );
+    expect(within(form).getByLabelText<HTMLSelectElement>('Connection status').value).toBe(
+      'active',
+    );
+    expect(
+      within(form).getByLabelText<HTMLInputElement>(/A report is stale after this many minutes/)
+        .value,
+    ).toBe('1440');
+    const ticked = within(form)
+      .getAllByRole<HTMLInputElement>('checkbox')
+      .filter((c) => c.checked)
+      .map((c) => c.name);
     expect(ticked.sort()).toEqual(['cap_receipts', 'cap_schedule']);
     // A connector with no specification cannot be chosen here.
-    const kinds = [...(within(form).getByLabelText('How reports reach Udofin') as HTMLSelectElement).options].map((o) => o.value);
+    const kinds = [
+      ...within(form).getByLabelText<HTMLSelectElement>('How reports reach Udofin').options,
+    ].map((o) => o.value);
     expect(kinds).toEqual(['file_import', 'manual']);
   });
 
   it('ticks nothing and starts as a draft when there is no connection yet', () => {
     const { container } = view({ status: ok({ items: [syncItem({ connection: null })] }) });
-    const form = container.querySelector('input[value="servicing.connection.set"]')?.closest('form') as HTMLElement;
-    expect((within(form).getByLabelText('Connection status') as HTMLSelectElement).value).toBe('draft');
-    expect((within(form).getAllByRole('checkbox') as HTMLInputElement[]).every((c) => !c.checked)).toBe(true);
+    const form = container
+      .querySelector('input[value="servicing.connection.set"]')
+      ?.closest('form') as HTMLElement;
+    expect(within(form).getByLabelText<HTMLSelectElement>('Connection status').value).toBe('draft');
+    expect(
+      within(form)
+        .getAllByRole<HTMLInputElement>('checkbox')
+        .every((c) => !c.checked),
+    ).toBe(true);
   });
 
   it('hides the connection form from a role that may not manage the sync', () => {
@@ -729,26 +1007,55 @@ describe('Imports and sync', () => {
     view();
     expect(screen.getByLabelText('File (UTF-8 text)')).toBeTruthy();
     expect(screen.getByText(/At most 5 MiB and 10,000 records in one file/)).toBeTruthy();
-    expect(screen.getByText(/never a name, phone number, PAN, Aadhaar or account number/)).toBeTruthy();
+    expect(
+      screen.getByText(/never a name, phone number, PAN, Aadhaar or account number/),
+    ).toBeTruthy();
     expect(screen.getByText(/Nothing is applied by uploading\./)).toBeTruthy();
   });
 
   it('lists the files received with their status in words and a link to each result', () => {
-    view({ imports: page([batch(), batch({ id: '0190a000-0000-7000-8000-000000000699', status: 'invalid', kind: 'receipt', rowCount: 1200 })]) });
+    view({
+      imports: page([
+        batch(),
+        batch({
+          id: '0190a000-0000-7000-8000-000000000699',
+          status: 'invalid',
+          kind: 'receipt',
+          rowCount: 1200,
+        }),
+      ]),
+    });
     const table = screen.getByRole('table', { name: 'Files received, newest first' });
     const rows = within(table).getAllByRole('row').slice(1);
     expect(rows).toHaveLength(2);
-    expect(within(rows[0] as HTMLElement).getByText('Preview ready: nothing has been applied yet')).toBeTruthy();
-    expect(within(rows[1] as HTMLElement).getByText('Not importable: nothing was applied')).toBeTruthy();
+    expect(
+      within(rows[0] as HTMLElement).getByText('Preview ready: nothing has been applied yet'),
+    ).toBeTruthy();
+    expect(
+      within(rows[1] as HTMLElement).getByText('Not importable: nothing was applied'),
+    ).toBeTruthy();
     expect(within(rows[1] as HTMLElement).getByText('1,200')).toBeTruthy();
-    expect(within(rows[0] as HTMLElement).getByRole('link', { name: 'Open the result' }).getAttribute('href')).toBe(`/imports/${BATCH}`);
+    expect(
+      within(rows[0] as HTMLElement)
+        .getByRole('link', { name: 'Open the result' })
+        .getAttribute('href'),
+    ).toBe(`/imports/${BATCH}`);
   });
 
   it('offers only earlier invalid, discarded or failed files as something to correct, preselecting the one chosen', () => {
     const invalid = batch({ id: '0190a000-0000-7000-8000-000000000611', status: 'invalid' });
     const ok1 = batch({ id: '0190a000-0000-7000-8000-000000000612', status: 'committed' });
-    view({ corrections: [invalid, ok1, batch({ id: '0190a000-0000-7000-8000-000000000613', status: 'previewed' })], correctionOf: invalid.id });
-    const select = screen.getByLabelText('This file corrects an earlier file (optional)') as HTMLSelectElement;
+    view({
+      corrections: [
+        invalid,
+        ok1,
+        batch({ id: '0190a000-0000-7000-8000-000000000613', status: 'previewed' }),
+      ],
+      correctionOf: invalid.id,
+    });
+    const select = screen.getByLabelText<HTMLSelectElement>(
+      'This file corrects an earlier file (optional)',
+    );
     expect([...select.options].map((o) => o.value)).toEqual(['', invalid.id]);
     expect(select.value).toBe(invalid.id);
   });
@@ -768,24 +1075,46 @@ describe('Imports and sync', () => {
 describe('Import result', () => {
   const rowErrors = [
     { rowNo: 0, outcome: 'error' as const, errorCodes: ['missing_column'], fieldNames: ['status'] },
-    { rowNo: 3, outcome: 'error' as const, errorCodes: ['invalid_amount', 'amount_not_positive'], fieldNames: ['sanctioned_amount'] },
+    {
+      rowNo: 3,
+      outcome: 'error' as const,
+      errorCodes: ['invalid_amount', 'amount_not_positive'],
+      fieldNames: ['sanctioned_amount'],
+    },
     { rowNo: 12, outcome: 'quarantined' as const, errorCodes: ['unknown_loan'], fieldNames: [] },
   ];
-  const detail = (status: string, over: object = {}, errors = [] as typeof rowErrors, truncated = false) =>
-    ok({ batch: batch({ status, ...over }), errors, errorsTruncated: truncated });
-  const view = (result: Parameters<typeof ImportDetailPage>[0]['detail'], ctx = full(`/imports/${BATCH}`), extra: object = {}) =>
-    render(<ImportDetailPage detail={result} ctx={ctx} {...extra} />);
+  const detail = (
+    status: string,
+    over: object = {},
+    errors = [] as typeof rowErrors,
+    truncated = false,
+  ) => ok({ batch: batch({ status, ...over }), errors, errorsTruncated: truncated });
+  const view = (
+    result: Parameters<typeof ImportDetailPage>[0]['detail'],
+    ctx = full(`/imports/${BATCH}`),
+    extra: object = {},
+  ) => render(<ImportDetailPage detail={result} ctx={ctx} {...extra} />);
 
   it('shows a preview with its counts, and offers apply and discard as two separate forms', () => {
     const { container } = view(detail('previewed'));
-    expect(screen.getByRole('heading', { name: 'Preview ready: nothing has been applied yet' })).toBeTruthy();
+    expect(
+      screen.getByRole('heading', { name: 'Preview ready: nothing has been applied yet' }),
+    ).toBeTruthy();
     const counts = screen.getByRole('table', { name: 'Records by result' });
-    expect(within(within(counts).getByRole('row', { name: /^New records/ })).getByText('8')).toBeTruthy();
-    expect(within(within(counts).getByRole('row', { name: /^Rows with errors/ })).getByText('0')).toBeTruthy();
+    expect(
+      within(within(counts).getByRole('row', { name: /^New records/ })).getByText('8'),
+    ).toBeTruthy();
+    expect(
+      within(within(counts).getByRole('row', { name: /^Rows with errors/ })).getByText('0'),
+    ).toBeTruthy();
     expect(text(container)).toContain('Nothing is applied unless every row is valid.');
     expect(ops(container).sort()).toEqual(['servicing.import.commit', 'servicing.import.reject']);
-    const commit = container.querySelector('input[value="servicing.import.commit"]')?.closest('form') as HTMLElement;
-    const reject = container.querySelector('input[value="servicing.import.reject"]')?.closest('form') as HTMLElement;
+    const commit = container
+      .querySelector('input[value="servicing.import.commit"]')
+      ?.closest('form') as HTMLElement;
+    const reject = container
+      .querySelector('input[value="servicing.import.reject"]')
+      ?.closest('form') as HTMLElement;
     expect(commit).not.toBe(reject);
     expect(within(commit).getByRole('button', { name: 'Apply this file' })).toBeTruthy();
     expect(within(reject).getByRole('button', { name: 'Discard this file' })).toBeTruthy();
@@ -794,7 +1123,9 @@ describe('Import result', () => {
 
   it('does not tick the review box for the person, and names the batch in both forms', () => {
     const { container } = view(detail('previewed'));
-    const box = screen.getByLabelText('I have reviewed this preview and want to apply it') as HTMLInputElement;
+    const box = screen.getByLabelText<HTMLInputElement>(
+      'I have reviewed this preview and want to apply it',
+    );
     expect(box.type).toBe('checkbox');
     expect(box.checked).toBe(false);
     expect(box.name).toBe('reviewed');
@@ -805,17 +1136,27 @@ describe('Import result', () => {
 
   it('asks for a reason to discard a file, in a labelled box', () => {
     view(detail('previewed'));
-    expect(screen.getByLabelText(/Why you are discarding it \(10 to 1,000 characters, no personal details\)/)).toBeTruthy();
+    expect(
+      screen.getByLabelText(
+        /Why you are discarding it \(10 to 1,000 characters, no personal details\)/,
+      ),
+    ).toBeTruthy();
   });
 
   it('lets a role that only uploads discard but not apply', () => {
-    const { container } = view(detail('previewed'), contextFor(['loan.read', 'servicing.manual_entry'], `/imports/${BATCH}`));
+    const { container } = view(
+      detail('previewed'),
+      contextFor(['loan.read', 'servicing.manual_entry'], `/imports/${BATCH}`),
+    );
     expect(ops(container)).toEqual(['servicing.import.reject']);
     expect(screen.getByText('Your role cannot apply a file.')).toBeTruthy();
   });
 
   it('lets a role that only manages the sync apply and discard', () => {
-    const { container } = view(detail('previewed'), contextFor(['loan.read', 'servicing.sync.manage'], `/imports/${BATCH}`));
+    const { container } = view(
+      detail('previewed'),
+      contextFor(['loan.read', 'servicing.sync.manage'], `/imports/${BATCH}`),
+    );
     expect(ops(container).sort()).toEqual(['servicing.import.commit', 'servicing.import.reject']);
   });
 
@@ -828,32 +1169,49 @@ describe('Import result', () => {
   });
 
   it('shows neither apply nor discard to a person with no rights in this lender', () => {
-    const { container } = view(detail('previewed'), contextFor(ALL_PERMISSIONS, `/imports/${BATCH}`, LENDER_B));
+    const { container } = view(
+      detail('previewed'),
+      contextFor(ALL_PERMISSIONS, `/imports/${BATCH}`, LENDER_B),
+    );
     expect(ops(container)).toEqual([]);
   });
 
   it('lists the rows at fault by row number, kind of problem and column, with no values', () => {
-    const { container } = view(detail('invalid', { counts: { ...batch().counts, error: 2, quarantined: 1, new: 0 } }, rowErrors));
+    const { container } = view(
+      detail(
+        'invalid',
+        { counts: { ...batch().counts, error: 2, quarantined: 1, new: 0 } },
+        rowErrors,
+      ),
+    );
     const table = screen.getByRole('table', { name: 'Problems found, by row' });
     const whole = within(table).getByRole('row', { name: /Whole file/ });
     expect(within(whole).getByText('A required column is missing.')).toBeTruthy();
     expect(within(whole).getByText('status')).toBeTruthy();
     const row3 = within(table).getByRole('row', { name: /^3 / });
-    expect(within(row3).getByText('An amount is not plain rupees with at most two decimals.')).toBeTruthy();
+    expect(
+      within(row3).getByText('An amount is not plain rupees with at most two decimals.'),
+    ).toBeTruthy();
     expect(within(row3).getByText('An amount must be more than zero.')).toBeTruthy();
     expect(within(row3).getByText('sanctioned_amount')).toBeTruthy();
     const held = within(table).getByRole('row', { name: /^12 / });
     expect(within(held).getByText('Held aside')).toBeTruthy();
     expect(within(held).getByText('—')).toBeTruthy();
     // The error classes are words, never the stored code.
-    expect(text(container)).not.toMatch(/invalid_amount|missing_column|amount_not_positive|unknown_loan/);
+    expect(text(container)).not.toMatch(
+      /invalid_amount|missing_column|amount_not_positive|unknown_loan/,
+    );
   });
 
   it('offers no apply for a file that is not importable, only a way to upload a corrected one', () => {
     const { container } = view(detail('invalid', {}, rowErrors));
-    expect(screen.getByRole('heading', { name: 'Not importable: nothing was applied' })).toBeTruthy();
+    expect(
+      screen.getByRole('heading', { name: 'Not importable: nothing was applied' }),
+    ).toBeTruthy();
     expect(ops(container)).toEqual([]);
-    expect(screen.getByRole('link', { name: 'Upload a corrected file' }).getAttribute('href')).toBe(`/imports?correct=${BATCH}#upload`);
+    expect(screen.getByRole('link', { name: 'Upload a corrected file' }).getAttribute('href')).toBe(
+      `/imports?correct=${BATCH}#upload`,
+    );
   });
 
   it('says only the first 1,000 problem rows are listed when the API says the list was cut', () => {
@@ -874,17 +1232,28 @@ describe('Import result', () => {
   });
 
   it('shows when an applied file was applied and what applying did, in words', () => {
-    view(detail('committed', { committedAt: '2026-10-16T09:30:00.000000+00:00', appliedCounts: { new: 8, changed: 1, ignored_older: 1, mystery: 2 } }));
+    view(
+      detail('committed', {
+        committedAt: '2026-10-16T09:30:00.000000+00:00',
+        appliedCounts: { new: 8, changed: 1, ignored_older: 1, mystery: 2 },
+      }),
+    );
     expect(screen.getByText('16 Oct 2026, 15:00 IST', { selector: 'dd' })).toBeTruthy();
     const table = screen.getByRole('table', { name: 'What applying did' });
-    expect(within(within(table).getByRole('row', { name: /^New records/ })).getByText('8')).toBeTruthy();
-    expect(within(within(table).getByRole('row', { name: /^Older than a report/ })).getByText('1')).toBeTruthy();
+    expect(
+      within(within(table).getByRole('row', { name: /^New records/ })).getByText('8'),
+    ).toBeTruthy();
+    expect(
+      within(within(table).getByRole('row', { name: /^Older than a report/ })).getByText('1'),
+    ).toBeTruthy();
     expect(within(table).getByRole('row', { name: /^Another outcome/ })).toBeTruthy();
     expect(text(table)).not.toContain('mystery');
   });
 
   it('never shows the SQLSTATE class of a failed apply', () => {
-    const { container } = view(detail('failed', { failedAt: '2026-10-16T09:31:00.000000+00:00', failureClass: '40P01' }));
+    const { container } = view(
+      detail('failed', { failedAt: '2026-10-16T09:31:00.000000+00:00', failureClass: '40P01' }),
+    );
     expect(text(container)).not.toContain('40P01');
     expect(screen.getByText('Applying failed')).toBeTruthy();
   });
@@ -917,7 +1286,14 @@ describe('The upload form', () => {
     fileSha256: SHA,
     byteSize: 400,
     recordCount: 0,
-    errors: [{ rowNo: 0, outcome: 'error', errorCodes: ['unknown_column'], fieldNames: ['mystery_column'] }],
+    errors: [
+      {
+        rowNo: 0,
+        outcome: 'error',
+        errorCodes: ['unknown_column'],
+        fieldNames: ['mystery_column'],
+      },
+    ],
     errorsTruncated: false,
   };
   const csv = () => new File(['lms_loan_ref\nLN-1\n'], 'whatever.csv', { type: 'text/csv' });
@@ -931,19 +1307,27 @@ describe('The upload form', () => {
   };
 
   it('shows the size cap, labels every control and starts with nothing chosen for the person', () => {
-    const { container } = render(<ImportStageForm action={vi.fn()} lenders={lenders} corrections={[]} />);
+    const { container } = render(
+      <ImportStageForm action={vi.fn()} lenders={lenders} corrections={[]} />,
+    );
     expect(screen.getByText(/At most 5 MiB and 10,000 records/)).toBeTruthy();
     expect(screen.getByLabelText('What the file contains')).toBeTruthy();
     expect(screen.getByLabelText('File format')).toBeTruthy();
-    const file = screen.getByLabelText('File (UTF-8 text)') as HTMLInputElement;
+    const file = screen.getByLabelText<HTMLInputElement>('File (UTF-8 text)');
     expect(file.required).toBe(true);
     expect(container.querySelector('input[name="lenderId"]')?.getAttribute('value')).toBe(LENDER_A);
     expect(screen.queryByLabelText('This file corrects an earlier file (optional)')).toBeNull();
   });
 
   it('asks which lender when the person belongs to several', () => {
-    render(<ImportStageForm action={vi.fn()} lenders={[...lenders, { id: LENDER_B, name: 'Other Finance Ltd' }]} corrections={[]} />);
-    const select = screen.getByLabelText('Lender') as HTMLSelectElement;
+    render(
+      <ImportStageForm
+        action={vi.fn()}
+        lenders={[...lenders, { id: LENDER_B, name: 'Other Finance Ltd' }]}
+        corrections={[]}
+      />,
+    );
+    const select = screen.getByLabelText<HTMLSelectElement>('Lender');
     expect(select.value).toBe('');
     expect([...select.options].map((o) => o.value)).toEqual(['', LENDER_A, LENDER_B]);
   });
@@ -973,11 +1357,17 @@ describe('The upload form', () => {
   it('shows the problems of a refused file at once, without values, and says nothing was applied', async () => {
     const action = vi.fn(() => Promise.resolve<StageState>(refusal));
     const user = userEvent.setup();
-    const { container } = render(<ImportStageForm action={action} lenders={lenders} corrections={[]} />);
+    const { container } = render(
+      <ImportStageForm action={action} lenders={lenders} corrections={[]} />,
+    );
     await submitFile(user);
     const alert = await screen.findByRole('alert');
-    expect(within(alert).getByText('The file was not accepted and nothing was applied')).toBeTruthy();
-    expect(within(alert).getByText('The file has a column the format does not define.')).toBeTruthy();
+    expect(
+      within(alert).getByText('The file was not accepted and nothing was applied'),
+    ).toBeTruthy();
+    expect(
+      within(alert).getByText('The file has a column the format does not define.'),
+    ).toBeTruthy();
     // A column name the format does not define is not echoed back.
     expect(text(container)).not.toContain('mystery_column');
     expect(within(alert).getByText('a column the format does not define')).toBeTruthy();
@@ -986,16 +1376,25 @@ describe('The upload form', () => {
   });
 
   it('shows an error as a sentence and never the text the server sent', async () => {
-    const action = vi.fn(() => Promise.resolve<StageState>({ status: 'error', code: 'connection_not_active' }));
+    const action = vi.fn(() =>
+      Promise.resolve<StageState>({ status: 'error', code: 'connection_not_active' }),
+    );
     const user = userEvent.setup();
     render(<ImportStageForm action={action} lenders={lenders} corrections={[]} />);
     await submitFile(user);
-    expect((await screen.findByRole('alert')).textContent).toBe('There is no active connection that allows this upload. Set the connection up first.');
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      'There is no active connection that allows this upload. Set the connection up first.',
+    );
   });
 
   it('says the file is being checked while it waits, and cannot be sent twice meanwhile', async () => {
     let finish: (state: StageState) => void = () => undefined;
-    const action = vi.fn(() => new Promise<StageState>((resolve) => { finish = resolve; }));
+    const action = vi.fn(
+      () =>
+        new Promise<StageState>((resolve) => {
+          finish = resolve;
+        }),
+    );
     const user = userEvent.setup();
     render(<ImportStageForm action={action} lenders={lenders} corrections={[]} />);
     await submitFile(user);
@@ -1007,8 +1406,17 @@ describe('The upload form', () => {
   });
 
   it('offers the earlier file to correct, preselected when it was chosen on arrival', () => {
-    render(<ImportStageForm action={vi.fn()} lenders={lenders} corrections={[{ id: BATCH, label: 'Loan reports, 10 records' }]} correctionOf={BATCH} />);
-    const select = screen.getByLabelText('This file corrects an earlier file (optional)') as HTMLSelectElement;
+    render(
+      <ImportStageForm
+        action={vi.fn()}
+        lenders={lenders}
+        corrections={[{ id: BATCH, label: 'Loan reports, 10 records' }]}
+        correctionOf={BATCH}
+      />,
+    );
+    const select = screen.getByLabelText<HTMLSelectElement>(
+      'This file corrects an earlier file (optional)',
+    );
     expect(select.value).toBe(BATCH);
     expect(within(select).getByRole('option', { name: 'No, this is a new file' })).toBeTruthy();
   });
@@ -1022,35 +1430,51 @@ describe('The upload form', () => {
 
 // -------------------------------------------------------------------------------------------------------------------
 describe('Conflicts', () => {
-  const view = (pageResult: Parameters<typeof ConflictsPage>[0]['page'], ctx = full('/imports/conflicts'), query = {}) =>
-    render(<ConflictsPage page={pageResult} query={query} ctx={ctx} />);
-  const acknowledged = conflict({ status: 'acknowledged', acknowledgedAt: '2026-10-12T04:00:00.000000+00:00' });
+  const view = (
+    pageResult: Parameters<typeof ConflictsPage>[0]['page'],
+    ctx = full('/imports/conflicts'),
+    query = {},
+  ) => render(<ConflictsPage page={pageResult} query={query} ctx={ctx} />);
+  const acknowledged = conflict({
+    status: 'acknowledged',
+    acknowledgedAt: '2026-10-12T04:00:00.000000+00:00',
+  });
 
   it('shows an open conflict with both times and only the acknowledge step', () => {
     const { container } = view(page([conflict()]));
     expect(screen.getByText('Loan report: two reports differ')).toBeTruthy();
-    expect(screen.getByText('The same record was reported twice with different content.')).toBeTruthy();
+    expect(
+      screen.getByText('The same record was reported twice with different content.'),
+    ).toBeTruthy();
     expect(screen.getByText('Open: waiting to be acknowledged', { selector: 'dd' })).toBeTruthy();
     expect(screen.getByText('SRC-SAMPLE-9')).toBeTruthy();
     expect(screen.getAllByText('As reported 10 Oct 2026, 09:30 IST')).toHaveLength(2);
     expect(ops(container)).toEqual(['servicing.conflict.acknowledge']);
-    expect(screen.getByRole('link', { name: 'Open the loan' }).getAttribute('href')).toBe(`/loans/${LOAN}`);
+    expect(screen.getByRole('link', { name: 'Open the loan' }).getAttribute('href')).toBe(
+      `/loans/${LOAN}`,
+    );
     expect(text(container)).toContain('changes neither');
   });
 
   it('offers the resolve step only after acknowledgement, with labelled controls and nothing preselected', () => {
     const { container } = view(page([acknowledged]));
     expect(ops(container)).toEqual(['servicing.conflict.resolve']);
-    const version = screen.getByLabelText('Which report does your organisation confirm?') as HTMLSelectElement;
+    const version = screen.getByLabelText<HTMLSelectElement>(
+      'Which report does your organisation confirm?',
+    );
     expect(version.value).toBe('');
     expect(version.required).toBe(true);
     expect([...version.options].map((o) => o.value)).toEqual(['', 'existing', 'incoming']);
-    expect(screen.getByLabelText(/Why \(10 to 1,000 characters, no personal details\)/)).toBeTruthy();
+    expect(
+      screen.getByLabelText(/Why \(10 to 1,000 characters, no personal details\)/),
+    ).toBeTruthy();
     for (const slot of [1, 2, 3]) {
       expect(screen.getByLabelText(`Reference ${String(slot)}: kind`)).toBeTruthy();
       expect(screen.getByLabelText(`Reference ${String(slot)}: the reference itself`)).toBeTruthy();
     }
-    expect(screen.getByText(/Neither report is changed, applied, hidden or deleted\./)).toBeTruthy();
+    expect(
+      screen.getByText(/Neither report is changed, applied, hidden or deleted\./),
+    ).toBeTruthy();
   });
 
   it('shows a resolved conflict with the version the lender confirmed and its note', () => {
@@ -1065,7 +1489,11 @@ describe('Conflicts', () => {
         }),
       ]),
     );
-    expect(screen.getByText(/13 Oct 2026, 09:30 IST: your organisation confirmed the report that arrived later\./)).toBeTruthy();
+    expect(
+      screen.getByText(
+        /13 Oct 2026, 09:30 IST: your organisation confirmed the report that arrived later\./,
+      ),
+    ).toBeTruthy();
     expect(screen.getByText(/Note: Checked against the lender system screen/)).toBeTruthy();
     expect(ops(container)).toEqual([]);
   });
@@ -1073,25 +1501,39 @@ describe('Conflicts', () => {
   it('shows no step to a role that may not manage the sync', () => {
     const { container } = view(page([conflict(), acknowledged]), readOnly('/imports/conflicts'));
     expect(ops(container)).toEqual([]);
-    expect(screen.getAllByText('Your role cannot acknowledge or resolve conflicts.')).toHaveLength(2);
+    expect(screen.getAllByText('Your role cannot acknowledge or resolve conflicts.')).toHaveLength(
+      2,
+    );
   });
 
   it('shows no step for a conflict of a lender where the person holds no right', () => {
-    const { container } = view(page([conflict()]), contextFor(ALL_PERMISSIONS, '/imports/conflicts', LENDER_B));
+    const { container } = view(
+      page([conflict()]),
+      contextFor(ALL_PERMISSIONS, '/imports/conflicts', LENDER_B),
+    );
     expect(ops(container)).toEqual([]);
   });
 
   it('filters by status with a plain form and is empty, failing or forbidden in words', () => {
     view(page([]), full('/imports/conflicts'), { status: 'open' });
     expect(screen.getByText('No conflicts')).toBeTruthy();
-    expect((screen.getByLabelText('Status') as HTMLSelectElement).value).toBe('open');
+    expect(screen.getByLabelText<HTMLSelectElement>('Status').value).toBe('open');
     cleanup();
     view(fail(500));
     expect(screen.getByText('Could not load the conflicts')).toBeTruthy();
   });
 
   it('writes each reason and status it knows in words, and does not print one it does not', () => {
-    const { container } = view(page([conflict({ conflictReason: 'sequence_reused' }), { ...conflict({ id: CONFLICT_2 }), conflictReason: 'brand_new_reason', recordType: 'mystery' } as never]));
+    const { container } = view(
+      page([
+        conflict({ conflictReason: 'sequence_reused' }),
+        {
+          ...conflict({ id: CONFLICT_2 }),
+          conflictReason: 'brand_new_reason',
+          recordType: 'mystery',
+        } as never,
+      ]),
+    );
     expect(screen.getByText('A sequence number was reused for different content.')).toBeTruthy();
     expect(text(container)).not.toMatch(/brand_new_reason|mystery/);
   });
@@ -1103,8 +1545,14 @@ describe('Flags', () => {
     expect(screen.getByText('Warning: The reported status moved backwards.')).toBeTruthy();
     expect(screen.getByText('Held before: Closed, ₹5,000.00.')).toBeTruthy();
     expect(screen.getByText('Newly reported: Active.')).toBeTruthy();
-    expect(screen.getByText(/Nothing was corrected; the figures are as your system reported them on 12 Oct 2026, 09:30 IST \(from manual import\)\./)).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Open the loan' }).getAttribute('href')).toBe(`/loans/${LOAN}`);
+    expect(
+      screen.getByText(
+        /Nothing was corrected; the figures are as your system reported them on 12 Oct 2026, 09:30 IST \(from manual import\)\./,
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Open the loan' }).getAttribute('href')).toBe(
+      `/loans/${LOAN}`,
+    );
   });
 
   it('is empty, failing or forbidden in words', () => {
@@ -1122,21 +1570,98 @@ describe('Across every screen', () => {
 
   /** Every page, drawn for a person who holds every permission and given data for every state. */
   const everyPage = (): ReactElement[] => [
-    <LoansPage key="l" page={page([loanRow(), loanRow({ id: LOAN_2, status: 'closed', disbursedAmountMinor: null })], 'next_1')} query={{}} ctx={full()} />,
+    <LoansPage
+      key="l"
+      page={page(
+        [loanRow(), loanRow({ id: LOAN_2, status: 'closed', disbursedAmountMinor: null })],
+        'next_1',
+      )}
+      query={{}}
+      ctx={full()}
+    />,
     detailPage({
-      detail: ok(loanDetail({ loan: loanRow({ status: 'closed', sync: { ...loanRow().sync, stale: true } }), report: report({ flags: ['overdue_total_mismatch'] }) })),
-      conflicts: page([conflict(), conflict({ id: '0190a000-0000-7000-8000-000000000511', status: 'acknowledged', acknowledgedAt: '2026-10-12T04:00:00.000000+00:00' })]),
+      detail: ok(
+        loanDetail({
+          loan: loanRow({ status: 'closed', sync: { ...loanRow().sync, stale: true } }),
+          report: report({ flags: ['overdue_total_mismatch'] }),
+        }),
+      ),
+      conflicts: page([
+        conflict(),
+        conflict({
+          id: '0190a000-0000-7000-8000-000000000511',
+          status: 'acknowledged',
+          acknowledgedAt: '2026-10-12T04:00:00.000000+00:00',
+        }),
+      ]),
       anomalies: page([anomaly()]),
-      documents: ok({ items: [document(), document({ documentId: DOC_2, lenderReference: 'OLD/1', supersededById: DOC })] }),
-      quotes: page([quote(), quote({ id: '0190a000-0000-7000-8000-000000000702', lenderQuoteRef: 'FQ-2', totalMinor: 7, totalMismatch: true, letterDocumentId: DOC })]),
+      documents: ok({
+        items: [
+          document(),
+          document({ documentId: DOC_2, lenderReference: 'OLD/1', supersededById: DOC }),
+        ],
+      }),
+      quotes: page([
+        quote(),
+        quote({
+          id: '0190a000-0000-7000-8000-000000000702',
+          lenderQuoteRef: 'FQ-2',
+          totalMinor: 7,
+          totalMismatch: true,
+          letterDocumentId: DOC,
+        }),
+      ]),
       requests: page([docRequest(), docRequest({ id: REQUEST_2, kind: 'foreclosure_quote' })]),
     }),
-    <DocumentRequestsPage key="r" page={page([docRequest(), docRequest({ id: REQUEST_2, status: 'fulfilled', fulfilledDocumentId: DOC })])} query={{ status: 'requested' }} ctx={full()} />,
+    <DocumentRequestsPage
+      key="r"
+      page={page([
+        docRequest(),
+        docRequest({ id: REQUEST_2, status: 'fulfilled', fulfilledDocumentId: DOC }),
+      ])}
+      query={{ status: 'requested' }}
+      ctx={full()}
+    />,
     <ClosuresPage key="c" page={page([closure()], 'next_2')} query={{}} ctx={full()} />,
-    <SyncPage key="s" status={ok({ items: [syncItem(), syncItem({ lenderId: LENDER_B, connection: null })] })} imports={page([batch(), batch({ status: 'invalid' })], 'next_3')} corrections={[batch({ status: 'invalid' })]} query={{}} ctx={full('/imports')} stageAction={stageAction} />,
-    <ImportDetailPage key="p" detail={ok({ batch: batch(), errors: [], errorsTruncated: false })} ctx={full()} />,
-    <ImportDetailPage key="i" detail={ok({ batch: batch({ status: 'invalid' }), errors: [{ rowNo: 4, outcome: 'error', errorCodes: ['invalid_date'], fieldNames: ['next_due_date'] }], errorsTruncated: false })} ctx={full()} />,
-    <ConflictsPage key="k" page={page([conflict(), conflict({ id: '0190a000-0000-7000-8000-000000000512', status: 'acknowledged' })])} query={{}} ctx={full()} />,
+    <SyncPage
+      key="s"
+      status={ok({ items: [syncItem(), syncItem({ lenderId: LENDER_B, connection: null })] })}
+      imports={page([batch(), batch({ status: 'invalid' })], 'next_3')}
+      corrections={[batch({ status: 'invalid' })]}
+      query={{}}
+      ctx={full('/imports')}
+      stageAction={stageAction}
+    />,
+    <ImportDetailPage
+      key="p"
+      detail={ok({ batch: batch(), errors: [], errorsTruncated: false })}
+      ctx={full()}
+    />,
+    <ImportDetailPage
+      key="i"
+      detail={ok({
+        batch: batch({ status: 'invalid' }),
+        errors: [
+          {
+            rowNo: 4,
+            outcome: 'error',
+            errorCodes: ['invalid_date'],
+            fieldNames: ['next_due_date'],
+          },
+        ],
+        errorsTruncated: false,
+      })}
+      ctx={full()}
+    />,
+    <ConflictsPage
+      key="k"
+      page={page([
+        conflict(),
+        conflict({ id: '0190a000-0000-7000-8000-000000000512', status: 'acknowledged' }),
+      ])}
+      query={{}}
+      ctx={full()}
+    />,
     <AnomaliesPage key="a" page={page([anomaly()])} query={{}} />,
   ];
 
@@ -1151,7 +1676,9 @@ describe('Across every screen', () => {
       cleanup();
     }
     // The upload form is drawn by the client component and names the staging operation.
-    const { container } = render(<ImportStageForm action={vi.fn()} lenders={[{ id: LENDER_A, name: 'x' }]} corrections={[]} />);
+    const { container } = render(
+      <ImportStageForm action={vi.fn()} lenders={[{ id: LENDER_A, name: 'x' }]} corrections={[]} />,
+    );
     for (const op of ops(container)) seen.add(op);
     expect([...seen].sort()).toEqual(Object.keys(SERVICING_OPERATIONS).sort());
   });
@@ -1159,18 +1686,54 @@ describe('Across every screen', () => {
   it('draws no write form at all for a person who can only read', () => {
     const read = readOnly();
     const pages: ReactElement[] = [
-      detailPage({ ctx: read, detail: ok(loanDetail({ loan: loanRow({ status: 'closed' }) })), conflicts: page([conflict(), conflict({ id: '0190a000-0000-7000-8000-000000000513', status: 'acknowledged' })]), requests: page([docRequest(), docRequest({ id: REQUEST_2, kind: 'foreclosure_quote' })]), quotes: page([quote()]), documents: ok({ items: [document()] }) }),
-      <DocumentRequestsPage key="r" page={page([docRequest()])} query={{ status: 'requested' }} ctx={read} />,
+      detailPage({
+        ctx: read,
+        detail: ok(loanDetail({ loan: loanRow({ status: 'closed' }) })),
+        conflicts: page([
+          conflict(),
+          conflict({ id: '0190a000-0000-7000-8000-000000000513', status: 'acknowledged' }),
+        ]),
+        requests: page([docRequest(), docRequest({ id: REQUEST_2, kind: 'foreclosure_quote' })]),
+        quotes: page([quote()]),
+        documents: ok({ items: [document()] }),
+      }),
+      <DocumentRequestsPage
+        key="r"
+        page={page([docRequest()])}
+        query={{ status: 'requested' }}
+        ctx={read}
+      />,
       <ClosuresPage key="c" page={page([closure()])} query={{}} ctx={read} />,
-      <SyncPage key="s" status={ok({ items: [syncItem()] })} imports={page([batch()])} corrections={[batch({ status: 'invalid' })]} query={{}} ctx={read} stageAction={stageAction} />,
-      <ImportDetailPage key="p" detail={ok({ batch: batch(), errors: [], errorsTruncated: false })} ctx={read} />,
-      <ConflictsPage key="k" page={page([conflict(), conflict({ id: '0190a000-0000-7000-8000-000000000514', status: 'acknowledged' })])} query={{}} ctx={read} />,
+      <SyncPage
+        key="s"
+        status={ok({ items: [syncItem()] })}
+        imports={page([batch()])}
+        corrections={[batch({ status: 'invalid' })]}
+        query={{}}
+        ctx={read}
+        stageAction={stageAction}
+      />,
+      <ImportDetailPage
+        key="p"
+        detail={ok({ batch: batch(), errors: [], errorsTruncated: false })}
+        ctx={read}
+      />,
+      <ConflictsPage
+        key="k"
+        page={page([
+          conflict(),
+          conflict({ id: '0190a000-0000-7000-8000-000000000514', status: 'acknowledged' }),
+        ])}
+        query={{}}
+        ctx={read}
+      />,
     ];
     for (const element of pages) {
       const { container } = render(element);
       expect(ops(container), 'a write form was drawn for a read-only role').toEqual([]);
       // The only forms left are the plain GET filters.
-      for (const form of container.querySelectorAll('form')) expect(form.getAttribute('method')).toBe('get');
+      for (const form of container.querySelectorAll('form'))
+        expect(form.getAttribute('method')).toBe('get');
       cleanup();
     }
   });
@@ -1178,8 +1741,17 @@ describe('Across every screen', () => {
   it('draws forms whose controls all have a label', () => {
     for (const element of everyPage()) {
       const { container } = render(element);
-      const controls = [...container.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('input, select, textarea')].filter((c) => !(c instanceof HTMLInputElement && c.type === 'hidden'));
-      const unlabelled = controls.filter((c) => (c.labels?.length ?? 0) === 0 && !c.getAttribute('aria-label') && !c.getAttribute('aria-labelledby'));
+      const controls = [
+        ...container.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
+          'input, select, textarea',
+        ),
+      ].filter((c) => !(c instanceof HTMLInputElement && c.type === 'hidden'));
+      const unlabelled = controls.filter(
+        (c) =>
+          (c.labels?.length ?? 0) === 0 &&
+          !c.getAttribute('aria-label') &&
+          !c.getAttribute('aria-labelledby'),
+      );
       expect(unlabelled.map((c) => c.name)).toEqual([]);
       cleanup();
     }
@@ -1190,7 +1762,8 @@ describe('Across every screen', () => {
       const { container } = render(element);
       for (const table of container.querySelectorAll('table')) {
         expect(table.querySelector('caption'), 'table without a caption').not.toBeNull();
-        for (const th of table.querySelectorAll('th')) expect(th.getAttribute('scope'), text(th)).toMatch(/^(col|row)$/);
+        for (const th of table.querySelectorAll('th'))
+          expect(th.getAttribute('scope'), text(th)).toMatch(/^(col|row)$/);
       }
       cleanup();
     }
@@ -1200,13 +1773,16 @@ describe('Across every screen', () => {
     for (const element of everyPage()) {
       const { container } = render(element);
       expect(container.querySelectorAll('h1')).toHaveLength(1);
-      expect(container.querySelectorAll('nav[aria-label="Servicing pages"] a[aria-current="page"]')).toHaveLength(1);
+      expect(
+        container.querySelectorAll('nav[aria-label="Servicing pages"] a[aria-current="page"]'),
+      ).toHaveLength(1);
       cleanup();
     }
   });
 
   it('uses calm, factual words: no claim of payment, approval, verification or safety, and no urgency', () => {
-    const banned = /(?<!not be )\b(paid|approved|approval|verified|successful|successfully|safe|safely|secure|compliant|compliance|certified|guaranteed|urgent|urgently|hurry|immediately|last chance|act now|limited time|countdown|expires in|time left|only \d+ left|offer|bonus|reward)\b/i;
+    const banned =
+      /(?<!not be )\b(paid|approved|approval|verified|successful|successfully|safe|safely|secure|compliant|compliance|certified|guaranteed|urgent|urgently|hurry|immediately|last chance|act now|limited time|countdown|expires in|time left|only \d+ left|offer|bonus|reward)\b/i;
     for (const element of everyPage()) {
       const { container } = render(element);
       expect(text(container).match(banned)?.[0], 'wording').toBeUndefined();
@@ -1219,24 +1795,37 @@ describe('Across every screen', () => {
     const drifted = {
       ...odd,
       loan: { ...odd.loan, status: 'suspended_by_court' },
-      report: odd.report && { ...odd.report, status: 'suspended_by_court', sourceSystem: 'quantum_feed' },
+      report: odd.report && {
+        ...odd.report,
+        status: 'suspended_by_court',
+        sourceSystem: 'quantum_feed',
+      },
     } as never;
     const { container } = render(
       detailPage({
         detail: ok(drifted),
-        documents: ok({ items: [{ ...document(), kind: 'mystery_letter', source: 'carrier_pigeon' } as never] }),
+        documents: ok({
+          items: [{ ...document(), kind: 'mystery_letter', source: 'carrier_pigeon' } as never],
+        }),
         quotes: page([{ ...quote(), source: 'carrier_pigeon' } as never]),
         requests: page([{ ...docRequest(), kind: 'mystery_letter', status: 'in_limbo' } as never]),
-        conflicts: page([{ ...conflict(), conflictReason: 'cosmic_rays', status: 'frozen' } as never]),
+        conflicts: page([
+          { ...conflict(), conflictReason: 'cosmic_rays', status: 'frozen' } as never,
+        ]),
         anomalies: page([{ ...anomaly(), kind: 'cosmic_rays', severity: 'doom' } as never]),
         error: 'SQLSTATE 40P01 deadlock detected',
       }),
     );
-    expect(text(container)).not.toMatch(/suspended_by_court|quantum_feed|mystery_letter|carrier_pigeon|in_limbo|cosmic_rays|frozen|doom|SQLSTATE|40P01|deadlock/);
+    expect(text(container)).not.toMatch(
+      /suspended_by_court|quantum_feed|mystery_letter|carrier_pigeon|in_limbo|cosmic_rays|frozen|doom|SQLSTATE|40P01|deadlock/,
+    );
   });
 
   it('shows no long run of digits that could be a phone, account or identity number', () => {
-    const strip = (s: string) => s.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, '').replace(/[0-9a-f]{16,}/g, '');
+    const strip = (s: string) =>
+      s
+        .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, '')
+        .replace(/[0-9a-f]{16,}/g, '');
     for (const element of everyPage()) {
       const { container } = render(element);
       const body = strip(container.innerHTML);
@@ -1249,7 +1838,9 @@ describe('Across every screen', () => {
     for (const element of everyPage()) {
       const { container } = render(element);
       for (const a of container.querySelectorAll('a[href]')) {
-        expect(a.getAttribute('href')).toMatch(/^(#[a-z]+|\/(loans|imports)([/?#][A-Za-z0-9_=&%.#/?-]*)?)$/);
+        expect(a.getAttribute('href')).toMatch(
+          /^(#[a-z]+|\/(loans|imports)([/?#][A-Za-z0-9_=&%.#/?-]*)?)$/,
+        );
       }
       cleanup();
     }
@@ -1276,7 +1867,8 @@ describe('The package exports', () => {
       'loadServicingLoans',
       'loadServicingDocumentContent',
     ];
-    for (const name of names) expect(typeof (kit as Record<string, unknown>)[name], name).toBe('function');
+    for (const name of names)
+      expect(typeof (kit as Record<string, unknown>)[name], name).toBe('function');
   });
 
   it('adds no generic name to the package index: everything leaving the servicing folder says Servicing', async () => {
