@@ -1197,13 +1197,65 @@ describe.skipIf(!enabled)('borrower servicing over HTTP', () => {
 
   afterAll(async () => {
     await Promise.all([app?.close(), appNoStore?.close(), appMock?.close()]);
-    // Retire this file's due-date rules again (an approved rule can only be retired, never removed).
-    if (admin)
-      await admin.query(
-        `update documents.applicability_rules set approval_status = 'retired'
-          where version = $1 and rule_key in ('servicing.statement_sla_days_default', 'servicing.noc_sla_days_default', 'servicing.security_release_sla_days')`,
-        [ruleVersion],
-      );
+    // Leave nothing behind for another file to trip over. The integration files share one database and some assert on
+    // database-wide facts: that every rule is still a draft (documents), that no payment adjustment exists (scheduled jobs),
+    // which lenders are activated (routing), what is pending in the outbox (workers). Triggers and foreign keys are off for this
+    // one transaction (append-only triggers would refuse a delete), and every statement is scoped to this file's five lenders.
+    // The organisations, the people and their memberships stay, like in the other files.
+    if (admin) {
+      const mine = [ids.lenderA, ids.lenderB, ids.lenderC, ids.lenderD, ids.lenderE];
+      const c = await admin.connect();
+      try {
+        await c.query('begin');
+        await c.query('set local session_replication_role = replica');
+        await c.query(
+          `update ops.outbox_events set status = 'completed', completed_at = now(), locked_by = null, locked_until = null
+            where status in ('pending', 'processing') and payload ->> 'lender_org_id' = any($1::text[])`,
+          [mine],
+        );
+        for (const table of [
+          'payments.payment_adjustments',
+          'payments.provider_payments',
+          'payments.payment_intents',
+          'servicing.reminder_deliveries',
+          'servicing.reminders',
+          'servicing.reminder_templates',
+          'servicing.sync_anomalies',
+          'servicing.sync_conflicts',
+          'servicing.schedule_installments',
+          'servicing.schedule_snapshots',
+          'servicing.balance_snapshots',
+          'servicing.lms_receipts',
+          'servicing.foreclosure_quotes',
+          'servicing.loan_document_access',
+          'servicing.loan_documents',
+          'servicing.document_requests',
+          'servicing.security_release_tasks',
+          'servicing.closure_records',
+          'servicing.loan_account_events',
+          'servicing.loan_accounts',
+          'servicing.lender_features',
+          'servicing.feature_change_requests',
+          'lending.applications',
+          'onboarding.verification_history',
+          'onboarding.lender_profiles',
+          'onboarding.lender_gates',
+        ])
+          await c.query(`delete from ${table} where lender_org_id = any($1::uuid[])`, [mine]);
+        // This file's approved due-date rules (version above) go last: the three tables that pointed at them are gone.
+        await c.query(
+          `delete from documents.applicability_rules
+            where version = $1 and rule_key in ('servicing.statement_sla_days_default', 'servicing.noc_sla_days_default', 'servicing.security_release_sla_days')`,
+          [ruleVersion],
+        );
+        await c.query('commit');
+      } catch (error) {
+        await c.query('rollback');
+        throw error;
+      } finally {
+        c.release();
+      }
+    }
     await Promise.all([admin?.end(), apiPool?.end(), mockPool?.end()]);
     if (storeRoot) fs.rmSync(storeRoot, { recursive: true, force: true });
   });
