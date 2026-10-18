@@ -12,7 +12,7 @@ import {
 } from '@udofin/adapters';
 import Fastify, { type FastifyInstance } from 'fastify';
 import pg from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, type TestContext } from 'vitest';
 import { buildApp } from '../../src/app.js';
 import { TokenError, type TokenVerifier } from '../../src/auth/token-verifier.js';
 import { loadConfig } from '../../src/config.js';
@@ -127,6 +127,16 @@ describe.skipIf(!enabled)(
       ]);
     /** What the database looked like when this file started: empty, or only key version 1 active (the fixtures of other files). */
     let pristineKeys = false;
+    /**
+     * The fail-closed tests need a database nobody has registered a key in. They skip on a reused local database, but in CI
+     * (a freshly migrated database and a fixed file order, test/support/sequencer.ts) a skip would hide a guard, so it fails.
+     */
+    const requirePristine = (ctx: TestContext) => {
+      if (pristineKeys) return;
+      if (process.env.CI)
+        throw new Error('the database was not pristine: these tests must run in CI');
+      ctx.skip();
+    };
 
     async function member(org: string, user: string, kind: 'lender' | 'platform', roles: string[]) {
       const m = await admin.query<{ id: string }>(
@@ -637,7 +647,7 @@ describe.skipIf(!enabled)(
     // ----------------------------------------------------------------------------------------------------------------------
     describe('the registry fails closed until a key version and a format rule are approved by two different people', () => {
       it('refuses to register an account while no fingerprint key version is active', async (ctx) => {
-        if (!pristineKeys) ctx.skip();
+        requirePristine(ctx);
         const sample = newSample();
         const res = await post('/v1/platform/accounts', ids.p1, registerBody(sample));
         expect(res.statusCode, res.body).toBe(409);
@@ -646,7 +656,7 @@ describe.skipIf(!enabled)(
       });
 
       it('proposes key version 1 by one person and activates it by a different one', async (ctx) => {
-        if (!pristineKeys) ctx.skip();
+        requirePristine(ctx);
         const wrongNext = await post('/v1/platform/fingerprint-key-versions', ids.p1, {
           version: 3,
         });
@@ -2693,7 +2703,7 @@ describe.skipIf(!enabled)(
       });
 
       it('needs the fingerprint under every live key version, so a process missing a key answers 503', async (ctx) => {
-        if (!pristineKeys) ctx.skip();
+        requirePristine(ctx);
         ok(
           await post('/v1/platform/fingerprint-key-versions', ids.p1, {
             version: 2,
@@ -2739,7 +2749,7 @@ describe.skipIf(!enabled)(
       });
 
       it('refuses to approve version 2 until every unverified or verified entry has a successor, then activates it', async (ctx) => {
-        if (!pristineKeys) ctx.skip();
+        requirePristine(ctx);
         expect(
           code(await post('/v1/platform/fingerprint-key-versions/2/approve', ids.p2, {})),
         ).toBe('rotation_incomplete');
