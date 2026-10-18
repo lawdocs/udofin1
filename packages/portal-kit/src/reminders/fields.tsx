@@ -20,6 +20,7 @@ export function TextInput({
   hint,
   maxLength,
   inputMode,
+  pattern,
 }: {
   name: string;
   label: string;
@@ -29,6 +30,8 @@ export function TextInput({
   hint?: string;
   maxLength?: number;
   inputMode?: 'numeric' | 'decimal' | 'text';
+  /** A browser-side shape check. The hint is the explanation the browser shows with it. */
+  pattern?: string;
 }) {
   const id = useId();
   return (
@@ -44,6 +47,8 @@ export function TextInput({
         spellCheck={false}
         maxLength={maxLength}
         inputMode={inputMode}
+        pattern={pattern}
+        title={pattern ? hint : undefined}
         aria-describedby={hint ? `${id}-hint` : undefined}
       />
       <Hint id={id} hint={hint} />

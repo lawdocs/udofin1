@@ -1,6 +1,6 @@
 'use client';
 
-import { type ReactNode, useActionState } from 'react';
+import { type ReactNode, useActionState, useState } from 'react';
 
 /** What a form action answers: done (with anything the screen must show once), or a stable error code. */
 export type FormOutcome<R extends object = Record<string, never>> =
@@ -17,10 +17,10 @@ export const typedFirst = (typed: Typed, name: string): string | undefined => ty
 export const typedHas = (typed: Typed, name: string, value = 'on'): boolean =>
   typed[name]?.includes(value) === true;
 
-type State<R extends object> =
+type State =
   | { status: 'idle'; typed: Typed }
   | { status: 'error'; code: string; typed: Typed }
-  | { status: 'done'; result: R | undefined; typed: Typed };
+  | { status: 'done'; typed: Typed };
 
 const SKIPPED_FIELDS = new Set(['op', 'key', 'returnTo']);
 const NONE: Typed = {};
@@ -40,8 +40,9 @@ function typedFrom(form: FormData): Typed {
  * it again is a new request, while a double click is stopped by the disabled button. Nothing the server said is shown: an error
  * code is mapped to a sentence by `errorMessage`.
  *
- * When the outcome carries a result (for example something shown only once), `renderResult` draws it from the form's own state:
- * it is not put in a URL, a cookie or storage.
+ * When the outcome carries a result (for example something shown only once), `renderResult` draws it and is given a function
+ * that clears it. The result lives only in this component's memory: it is not put in a URL, a cookie or storage, and it is gone
+ * when the person clears it or leaves the page.
  */
 export function StatefulForm<R extends object = Record<string, never>>({
   op,
@@ -65,16 +66,18 @@ export function StatefulForm<R extends object = Record<string, never>>({
   errorMessage: (code: string) => string;
   /** The controls, drawn with the text typed in the last refused attempt. */
   fields: (typed: Typed) => ReactNode;
-  renderResult?: (result: R) => ReactNode;
+  renderResult?: (result: R, clear: () => void) => ReactNode;
 }) {
-  const [state, run, pending] = useActionState<State<R>, FormData>(
+  const [result, setResult] = useState<R | undefined>(undefined);
+  const [state, run, pending] = useActionState<State, FormData>(
     async (_previous, form) => {
       form.set('key', `ui-${crypto.randomUUID()}`);
       const typed = typedFrom(form);
+      setResult(undefined);
       const outcome = await action(form);
-      return outcome.ok
-        ? { status: 'done', result: outcome.result, typed: NONE }
-        : { status: 'error', code: outcome.code, typed };
+      if (!outcome.ok) return { status: 'error', code: outcome.code, typed };
+      setResult(outcome.result);
+      return { status: 'done', typed: NONE };
     },
     { status: 'idle', typed: NONE },
   );
@@ -99,10 +102,12 @@ export function StatefulForm<R extends object = Record<string, never>>({
           </p>
         ) : null}
         {state.status === 'done' ? <p role="status">{doneMessage}</p> : null}
-        {state.status === 'done' && state.result !== undefined && renderResult
-          ? renderResult(state.result)
-          : null}
       </div>
+      {result !== undefined && renderResult
+        ? renderResult(result, () => {
+            setResult(undefined);
+          })
+        : null}
     </div>
   );
 }

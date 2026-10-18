@@ -68,8 +68,7 @@ const SUPPRESS_REASON: Readonly<Record<string, string>> = {
   paid: 'The instalment is reported paid.',
   recent_payment: 'A payment was recorded recently.',
   hold: 'A communication hold is on the loan.',
-  penal_text_missing:
-    'No approved penal-charge text exists, so an overdue reminder is not sent.',
+  penal_text_missing: 'No approved penal-charge text exists, so an overdue reminder is not sent.',
   template_missing: 'No approved wording exists for this kind of reminder and language.',
   nothing_due: 'The lender reports nothing due.',
   nothing_overdue: 'The lender reports nothing overdue.',
@@ -125,7 +124,9 @@ const ERROR_CLASS: Readonly<Record<string, string>> = {
   unknown: 'The problem is not known',
 };
 export const deliveryErrorWords = (errorClass: string | null): string =>
-  errorClass === null ? '—' : lookup(ERROR_CLASS, errorClass, 'A problem this screen has no wording for');
+  errorClass === null
+    ? '—'
+    : lookup(ERROR_CLASS, errorClass, 'A problem this screen has no wording for');
 
 const CHARGE_KIND: Readonly<Record<string, string>> = {
   flat: 'A flat amount',
@@ -156,7 +157,8 @@ const ERROR: Readonly<Record<string, string>> = {
   offsets_invalid:
     'The offsets were not accepted. Check the numbers and how many there are, then try again.',
   channels_invalid: 'The channels were not accepted. Choose each channel at most once.',
-  window_invalid: 'The daily window was not accepted. It can only be inside what the platform allows.',
+  window_invalid:
+    'The daily window was not accepted. It can only be inside what the platform allows.',
   policy_invalid: 'The policy was not accepted. Check every value and try again.',
   template_invalid: 'The kind or language was not accepted.',
   wording_invalid:
@@ -187,9 +189,9 @@ const ERROR: Readonly<Record<string, string>> = {
   body_required: 'Write the wording first.',
   amount_invalid:
     'Amounts are rupees with digits only and at most two decimals, for example 1250.50.',
-  percent_invalid:
-    'A percentage uses digits only and at most two decimals, for example 2.5.',
-  charge_choice: 'Give a flat amount for a flat charge, or a percentage for a percentage charge, not both.',
+  percent_invalid: 'A percentage uses digits only and at most two decimals, for example 2.5.',
+  charge_choice:
+    'Give a flat amount for a flat charge, or a percentage for a percentage charge, not both.',
   text_required: 'Fill in every required text.',
   note_invalid: 'The note is too long.',
   review_required: 'Tick the box to confirm that you read it in full.',

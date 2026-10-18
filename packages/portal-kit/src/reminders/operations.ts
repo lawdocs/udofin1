@@ -117,10 +117,7 @@ export const REMINDERS_OPERATIONS: Readonly<Record<string, RemindersOperation>> 
       );
     },
   },
-  'reminders.policy.approve': idAction(
-    (id) => `/v1/lender/reminder-policies/${id}/approve`,
-    true,
-  ),
+  'reminders.policy.approve': idAction((id) => `/v1/lender/reminder-policies/${id}/approve`, true),
   'reminders.policy.retire': idAction((id) => `/v1/lender/reminder-policies/${id}/retire`),
 
   // ---- Wording -----------------------------------------------------------------------------------------------------
@@ -140,9 +137,7 @@ export const REMINDERS_OPERATIONS: Readonly<Record<string, RemindersOperation>> 
     (id) => `/v1/lender/reminder-templates/${id}/approve`,
     true,
   ),
-  'reminders.template.retire': idAction(
-    (id) => `/v1/lender/reminder-templates/${id}/retire`,
-  ),
+  'reminders.template.retire': idAction((id) => `/v1/lender/reminder-templates/${id}/retire`),
 
   // ---- The lender's penal-charge text -------------------------------------------------------------------------------
   'reminders.penal.draft': {
@@ -192,10 +187,7 @@ export const REMINDERS_OPERATIONS: Readonly<Record<string, RemindersOperation>> 
       );
     },
   },
-  'reminders.penal.approve': idAction(
-    (id) => `/v1/lender/penal-charge-texts/${id}/approve`,
-    true,
-  ),
+  'reminders.penal.approve': idAction((id) => `/v1/lender/penal-charge-texts/${id}/approve`, true),
   'reminders.penal.retire': idAction((id) => `/v1/lender/penal-charge-texts/${id}/retire`),
 
   // ---- Holds -------------------------------------------------------------------------------------------------------
@@ -259,9 +251,7 @@ export async function runRemindersOperation(
 export function safeRemindersReturnPath(value: unknown): string {
   const QUERY = String.raw`(?:\?[A-Za-z0-9=&_.%-]{1,700})?`;
   const ID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
-  const allowed = new RegExp(
-    `^/reminders(?:/policy|/wording|/penal-text|/holds|/${ID})?${QUERY}$`,
-  );
+  const allowed = new RegExp(`^/reminders(?:/policy|/wording|/penal-text|/holds|/${ID})?${QUERY}$`);
   return typeof value === 'string' && allowed.test(value) ? value : '/reminders';
 }
 

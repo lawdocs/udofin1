@@ -128,8 +128,8 @@ export function OverdueNotice({ overdue }: { overdue: LrOverdueReminders | null 
     );
   return (
     <p className="muted">
-      An approved penal-charge text exists. Overdue reminders also need approved overdue wording
-      and an approved policy.
+      An approved penal-charge text exists. Overdue reminders also need approved overdue wording and
+      an approved policy.
     </p>
   );
 }

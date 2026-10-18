@@ -1,15 +1,11 @@
 import {
   LR_ARTEFACT_STATUSES,
   LR_CHANNELS,
-  LR_CHARGE_KINDS,
-  LR_HOLD_REASONS,
   LR_HOLD_STATUSES,
-  LR_PENAL_TEXT_VARIABLE,
   LR_REMINDER_KINDS,
   LR_REMINDER_STATUSES,
   LR_SUPPRESS_REASONS,
   LR_TEMPLATE_LANGUAGES,
-  LR_TEMPLATE_VARIABLES,
   type LrOverdueReminders,
   type LrPenalText,
   type LrPolicy,
@@ -45,8 +41,13 @@ import {
   type Loaded,
   type RemindersContext,
 } from './common.js';
-import { CheckInput, Group, SelectInput, TextArea, TextInput } from './fields.js';
-import { StatefulForm, typedFirst, typedHas } from './stateful-form.js';
+import {
+  HoldPlaceFields,
+  PenalDraftFields,
+  PolicyDraftFields,
+  TemplateDraftFields,
+} from './draft-forms.js';
+import { CheckInput, SelectInput, TextInput } from './fields.js';
 import {
   artefactStatusShort,
   artefactStatusWords,
@@ -63,7 +64,6 @@ import {
   percentFromBps,
   reminderKindWords,
   reminderStatusShort,
-  remindersErrorMessage,
   suppressReasonWords,
 } from './wording.js';
 import {
@@ -207,8 +207,7 @@ const idOf = (prefix: string, id: string) => `${prefix}-${id}`;
 // Reminder log and summary
 // ---------------------------------------------------------------------------------------------------------------
 function SummaryTable({ summary }: { summary: LrReminderSummary }) {
-  if (summary.items.length === 0)
-    return <p>No reminder is counted for this period yet.</p>;
+  if (summary.items.length === 0) return <p>No reminder is counted for this period yet.</p>;
   return (
     <>
       <p className="muted">
@@ -366,7 +365,9 @@ export function RemindersLogPage({
                           {r.suppressReason === null ? '—' : suppressReasonWords(r.suppressReason)}
                         </td>
                         <td>
-                          {r.amountMinor === null ? 'No amount recorded' : formatRupees(r.amountMinor)}
+                          {r.amountMinor === null
+                            ? 'No amount recorded'
+                            : formatRupees(r.amountMinor)}
                         </td>
                         <td>
                           {r.languageUsed === null
@@ -508,83 +509,15 @@ function PolicyDraftForm({ lenderId, ctx }: { lenderId: string; ctx: RemindersCo
       <p>
         A policy says when reminders are planned for each due date, on which channels, in which
         daily window and how many per loan per day. Your organisation decides every value; none is
-        suggested. Another person must approve the draft before it is used, and approving it
-        retires the previous version.
+        suggested. Another person must approve the draft before it is used, and approving it retires
+        the previous version.
       </p>
-      <StatefulForm
-        op="reminders.policy.draft"
-        action={ctx.draft}
-        returnTo={ctx.returnTo}
-        hidden={{ lenderId }}
-        submit="Save as a draft"
-        errorMessage={remindersErrorMessage}
-        fields={(typed) => (
-          <>
-            <TextInput
-              name="offsets"
-              label="Days from each due date"
-              defaultValue={typedFirst(typed, 'offsets')}
-              required
-              hint="Whole numbers separated by commas. A negative number is days before the due date, 0 is the due date and a positive number is days after."
-            />
-            <Group legend="Channels">
-              <CheckInput
-                name="channels"
-                value="in_app"
-                label={channelWords('in_app')}
-                checked={typedHas(typed, 'channels', 'in_app')}
-              />
-              <CheckInput
-                name="channels"
-                value="push"
-                label={channelWords('push')}
-                checked={typedHas(typed, 'channels', 'push')}
-              />
-              <p className="muted">{channelWords('sms')}.</p>
-            </Group>
-            <CheckInput
-              name="overdueWeekly"
-              label="Also send weekly overdue reminders"
-              checked={typedHas(typed, 'overdueWeekly')}
-            />
-            <TextInput
-              name="windowFrom"
-              label="Daily window starts (India time)"
-              type="time"
-              defaultValue={typedFirst(typed, 'windowFrom')}
-              required
-            />
-            <TextInput
-              name="windowTo"
-              label="Daily window ends (India time)"
-              type="time"
-              defaultValue={typedFirst(typed, 'windowTo')}
-              required
-              hint="The platform can only narrow the window. If a value is not accepted, the form says so and keeps what you typed."
-            />
-            <TextInput
-              name="maxPerDay"
-              label="Most messages per loan per day"
-              type="number"
-              inputMode="numeric"
-              defaultValue={typedFirst(typed, 'maxPerDay')}
-              required
-              hint="The platform can only lower the cap."
-            />
-          </>
-        )}
-      />
+      <PolicyDraftFields lenderId={lenderId} action={ctx.draft} returnTo={ctx.returnTo} />
     </Section>
   );
 }
 
-function PolicyCard({
-  policy,
-  ctx,
-}: {
-  policy: LrPolicy;
-  ctx: RemindersContext;
-}) {
+function PolicyCard({ policy, ctx }: { policy: LrPolicy; ctx: RemindersContext }) {
   const titleId = idOf('policy', policy.id);
   return (
     <article className="card" aria-labelledby={titleId}>
@@ -724,58 +657,7 @@ export function PolicyPage({
 function TemplateDraftForm({ lenderId, ctx }: { lenderId: string; ctx: RemindersContext }) {
   return (
     <Section title="Draft new wording">
-      <p>
-        The wording is yours: write it yourself. Udofin does not suggest, generate or translate
-        wording and sends it exactly as approved. It must be a plain service message. You may use
-        only these placeholders:{' '}
-        {LR_TEMPLATE_VARIABLES.map((name, index) => (
-          <span key={name}>
-            {index > 0 ? ', ' : ''}
-            <code>{`{{${name}}}`}</code>
-          </span>
-        ))}
-        . Wording for an overdue reminder must contain <code>{LR_PENAL_TEXT_VARIABLE}</code>; the
-        approved penal-charge sentence is placed there exactly as approved. Hindi wording is
-        checked only for its shape, not its meaning, so the person who approves it should read
-        Hindi.
-      </p>
-      <StatefulForm
-        op="reminders.template.draft"
-        action={ctx.draft}
-        returnTo={ctx.returnTo}
-        hidden={{ lenderId }}
-        submit="Save as a draft"
-        errorMessage={remindersErrorMessage}
-        fields={(typed) => (
-          <>
-            <SelectInput
-              name="kind"
-              label="Kind of reminder"
-              blank="Choose a kind"
-              required
-              options={options(LR_REMINDER_KINDS, reminderKindWords)}
-              defaultValue={typedFirst(typed, 'kind')}
-            />
-            <SelectInput
-              name="language"
-              label="Language"
-              blank="Choose a language"
-              required
-              options={options(LR_TEMPLATE_LANGUAGES, languageWords)}
-              defaultValue={typedFirst(typed, 'language')}
-            />
-            <TextArea
-              name="body"
-              label="Wording"
-              required
-              maxLength={4000}
-              rows={6}
-              defaultValue={typedFirst(typed, 'body')}
-              hint="At most 4,000 characters. No link, address, phone number, long run of digits or promotional words."
-            />
-          </>
-        )}
-      />
+      <TemplateDraftFields lenderId={lenderId} action={ctx.draft} returnTo={ctx.returnTo} />
     </Section>
   );
 }
@@ -914,82 +796,12 @@ function PenalDraftForm({ lenderId, ctx }: { lenderId: string; ctx: RemindersCon
     <Section title="Draft a penal-charge text">
       <p>
         This is your organisation’s own statement of the penal charge that applies when an
-        instalment is overdue. Udofin does not suggest, translate or calculate any charge and
-        shows the sentence in an overdue reminder exactly as approved. It is not a legal opinion,
-        and this page does not say that it meets any rule. Another person must approve the draft
-        before it is used.
+        instalment is overdue. Udofin does not suggest, translate or calculate any charge and shows
+        the sentence in an overdue reminder exactly as approved. It is not a legal opinion, and this
+        page does not say that it meets any rule. Another person must approve the draft before it is
+        used.
       </p>
-      <StatefulForm
-        op="reminders.penal.draft"
-        action={ctx.draft}
-        returnTo={ctx.returnTo}
-        hidden={{ lenderId }}
-        submit="Save as a draft"
-        errorMessage={remindersErrorMessage}
-        fields={(typed) => (
-          <>
-            <SelectInput
-              name="chargeKind"
-              label="Kind of charge"
-              blank="Choose a kind"
-              required
-              options={options(LR_CHARGE_KINDS, chargeKindWords)}
-              defaultValue={typedFirst(typed, 'chargeKind')}
-              hint="The charge is on the overdue amount only."
-            />
-            <TextInput
-              name="flatAmount"
-              label="Flat amount in rupees (for a flat charge)"
-              inputMode="decimal"
-              defaultValue={typedFirst(typed, 'flatAmount')}
-              hint="Digits only, with at most two decimals, for example 250 or 250.50."
-            />
-            <TextInput
-              name="percent"
-              label="Percentage of the overdue amount (for a percentage charge)"
-              inputMode="decimal"
-              defaultValue={typedFirst(typed, 'percent')}
-              hint="Digits only, with at most two decimals, for example 2 or 2.5. Give either the amount or the percentage, not both."
-            />
-            <TextArea
-              name="reason"
-              label="Reason for the charge"
-              required
-              maxLength={2000}
-              rows={3}
-              defaultValue={typedFirst(typed, 'reason')}
-            />
-            <TextArea
-              name="sentenceEn"
-              label="Sentence shown to the borrower, in English"
-              required
-              maxLength={4000}
-              rows={4}
-              defaultValue={typedFirst(typed, 'sentenceEn')}
-            />
-            <TextArea
-              name="sentenceHi"
-              label="Sentence shown to the borrower, in Hindi (optional)"
-              maxLength={4000}
-              rows={4}
-              defaultValue={typedFirst(typed, 'sentenceHi')}
-              hint="Hindi is checked only for its shape, not its meaning, so the person who approves it should read Hindi."
-            />
-            <Group legend="Statements by your organisation (both are required)">
-              <CheckInput
-                name="separateFromInterest"
-                label="Our organisation states that this charge is charged separately from interest."
-                required
-              />
-              <CheckInput
-                name="notCompounded"
-                label="Our organisation states that this charge is not compounded."
-                required
-              />
-            </Group>
-          </>
-        )}
-      />
+      <PenalDraftFields lenderId={lenderId} action={ctx.draft} returnTo={ctx.returnTo} />
     </Section>
   );
 }
@@ -1154,46 +966,11 @@ export function HoldsPage({
     <div>
       <h1>Communication holds</h1>
       <RemindersNav current="/reminders/holds" />
-      <p>
-        A hold pauses reminders for one loan. A hold never stops the borrower from paying.
-      </p>
+      <p>A hold pauses reminders for one loan. A hold never stops the borrower from paying.</p>
       <RemindersNotice done={done} error={error} />
       {mayPlace ? (
         <Section title="Place a hold">
-          <StatefulForm
-            op="reminders.hold.place"
-            action={ctx.draft}
-            returnTo={ctx.returnTo}
-            submit="Place the hold"
-            errorMessage={remindersErrorMessage}
-            fields={(typed) => (
-              <>
-                <TextInput
-                  name="loanAccountId"
-                  label="Loan ID"
-                  required
-                  defaultValue={typedFirst(typed, 'loanAccountId')}
-                  hint="The ID in the address of the loan’s page under Loans."
-                />
-                <SelectInput
-                  name="reason"
-                  label="Reason"
-                  blank="Choose a reason"
-                  required
-                  options={options(LR_HOLD_REASONS, holdReasonWords)}
-                  defaultValue={typedFirst(typed, 'reason')}
-                />
-                <TextArea
-                  name="note"
-                  label="Note (optional)"
-                  rows={3}
-                  maxLength={1000}
-                  defaultValue={typedFirst(typed, 'note')}
-                  hint="Do not write names, phone numbers, account numbers or other personal details."
-                />
-              </>
-            )}
-          />
+          <HoldPlaceFields action={ctx.draft} returnTo={ctx.returnTo} />
         </Section>
       ) : null}
       <Section title="Holds">
@@ -1226,10 +1003,7 @@ export function HoldsPage({
         {!holds.ok ? (
           <LoadFailure what="the holds" status={holds.status} />
         ) : holds.data.items.length === 0 ? (
-          <EmptyList
-            title="No holds"
-            detail="No communication hold has been placed on a loan."
-          />
+          <EmptyList title="No holds" detail="No communication hold has been placed on a loan." />
         ) : (
           <>
             <table>
@@ -1252,7 +1026,8 @@ export function HoldsPage({
                     </th>
                     <td>{holdReasonWords(hold.reason)}</td>
                     <td>
-                      {formatIst(hold.placedAt)} by <Person id={hold.placedBy} userId={ctx.userId} />
+                      {formatIst(hold.placedAt)} by{' '}
+                      <Person id={hold.placedBy} userId={ctx.userId} />
                     </td>
                     <td>{hold.note ?? '—'}</td>
                     <td>
