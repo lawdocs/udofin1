@@ -1048,7 +1048,7 @@ begin
     end if;
     if old.noc_document_id is not null then
       select * into d_old from servicing.loan_documents d where d.id = old.noc_document_id;
-      if not (d_new.supersedes_id = old.noc_document_id or (d_new.kind = 'noc' and d_old.kind = 'closure_letter')) then
+      if not (coalesce(d_new.supersedes_id = old.noc_document_id, false) or (d_new.kind = 'noc' and d_old.kind = 'closure_letter')) then
         raise exception 'the NOC reference only moves to a document that corrects the current one' using errcode = 'P0001', hint = 'closure_immutable';
       end if;
     end if;

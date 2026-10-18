@@ -4,7 +4,7 @@
 -- Synthetic data only (SAMPLE). Error codes are reported as SQLSTATE|hint.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(155);
+select plan(280);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -573,6 +573,482 @@ select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
 select is((select count(*) from servicing.sync_quarantine), 0::bigint, 'lender X reads none of it');
 select pg_temp.as_owner();
 select set_config('udofin.allow_mock_providers', '', true);
+
+-- ============================================================================================================================
+-- 6. Conflicts confirmed as 'incoming' (M8): the figures the lender disowned do not come back by a status change
+-- ============================================================================================================================
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select pg_temp.keep('lx1_ts', (select to_char(reported_as_of at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') from servicing.balance_snapshots where loan_account_id = pg_temp.lid('LX1') and version = 1));
+-- The lender re-sends the SAME record at the SAME time with other figures (next due 2500.00 instead of 4500.00): a conflict.
+select pg_temp.keep('m8_c', pg_temp.imp('ecb00000-0000-4000-8000-000000000001', 'loan', 'm8-conflict', jsonb_build_array(
+  pg_temp.loan('LX1', 'SAMPLE-APP-1', 'SRC-LX1-1', 6, jsonb_build_object('sequence', '1', 'next_due_amount', '2500.00', 'reported_as_of', pg_temp.got('lx1_ts')))))::text);
+select pg_temp.keep('c_m8', (select id::text from servicing.sync_conflicts where loan_account_id = pg_temp.lid('LX1') and record_type = 'loan'));
+select is((select status from servicing.sync_conflicts where id = pg_temp.got('c_m8')::uuid), 'open', 'the loan record is in conflict');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000005');
+select is((select (figures_available, next_due_minor)::text from servicing.my_loan(pg_temp.lid('LX1'))), '(f,)', 'the borrower is shown no figures while the loan record is in conflict');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000002');
+select is(pg_temp.err(format($$select servicing.acknowledge_sync_conflict(%L)$$, pg_temp.got('c_m8'))), 'ok', 'a lender user acknowledges the conflict');
+select is(pg_temp.err(format($$select servicing.resolve_sync_conflict(%L, 'incoming', 'The lender says the lower figure is the right one', '{"lender_ticket":"SAMPLE-T-M8"}')$$, pg_temp.got('c_m8'))), '55000|incoming_not_stored',
+  'M8: the same user cannot confirm the incoming version while it was never stored as a newer report');
+select is((select status from servicing.sync_conflicts where id = pg_temp.got('c_m8')::uuid), 'acknowledged', 'the conflict stays acknowledged, not resolved');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000005');
+select is((select figures_available from servicing.my_loan(pg_temp.lid('LX1'))), false, 'and the borrower is still shown no figures (the stored 4500.00 is not brought back)');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select is(pg_temp.imp('ecb00000-0000-4000-8000-000000000001', 'loan', 'm8-newer', jsonb_build_array(
+  pg_temp.loan('LX1', 'SAMPLE-APP-1', 'SRC-LX1-2', 1, '{"sequence":"2","next_due_amount":"2500.00","outstanding_principal":"39000.00"}'))) ->> 'status', 'committed', 'the lender sends the corrected figures as a NEWER report');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000005');
+select is((select figures_available from servicing.my_loan(pg_temp.lid('LX1'))), false, 'the open conflict still withholds the figures');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000002');
+select is(pg_temp.err(format($$select servicing.resolve_sync_conflict(%L, 'incoming', 'The lender says the lower figure is the right one', '{"lender_ticket":"SAMPLE-T-M8"}')$$, pg_temp.got('c_m8'))), 'ok',
+  'with the incoming version stored as a newer report the lender can confirm it');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000005');
+select is((select (figures_available, next_due_minor, outstanding_principal_minor)::text from servicing.my_loan(pg_temp.lid('LX1'))), '(t,250000,3900000)',
+  'and the borrower sees the corrected figures (never the disowned 4500.00)');
+
+-- The existing version needs no newer report (the lender stands by what is stored): the figures return as they were.
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select pg_temp.keep('lx3_ts', (select to_char(reported_as_of at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') from servicing.balance_snapshots where loan_account_id = pg_temp.lid('LX3') and version = 1));
+select pg_temp.imp('ecb00000-0000-4000-8000-000000000001', 'loan', 'm8-ctrl', jsonb_build_array(
+  pg_temp.loan('LX3', 'SAMPLE-APP-3', 'SRC-LX3-1', 6, jsonb_build_object('sequence', '1', 'next_due_amount', '2500.00', 'reported_as_of', pg_temp.got('lx3_ts')))));
+select pg_temp.keep('c_m8b', (select id::text from servicing.sync_conflicts where loan_account_id = pg_temp.lid('LX3') and record_type = 'loan'));
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000002');
+select servicing.acknowledge_sync_conflict(pg_temp.got('c_m8b')::uuid);
+select is(pg_temp.err(format($$select servicing.resolve_sync_conflict(%L, 'existing', 'The lender confirmed the stored figure by ticket', '{"lender_ticket":"SAMPLE-T-M8B"}')$$, pg_temp.got('c_m8b'))), 'ok', 'confirming the existing version needs no newer report');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000005');
+select is((select (figures_available, next_due_minor)::text from servicing.my_loan(pg_temp.lid('LX3'))), '(t,450000)', 'and the borrower sees the stored figures again');
+
+-- A schedule conflict behaves the same way.
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select is(pg_temp.imp('ecb00000-0000-4000-8000-000000000001', 'schedule', 'm8-sched-1', jsonb_build_array(pg_temp.sched('LX1', 'SRC-SCH-1', 3))) ->> 'status', 'committed', 'a schedule is reported for LX1');
+select pg_temp.keep('sch_ts', pg_temp.q(format($$select to_char(reported_as_of at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') from servicing.schedule_snapshots where loan_account_id = %L and version = 1$$, pg_temp.lid('LX1'))));
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000005');
+select is((select count(*) from servicing.my_loan_schedule(pg_temp.lid('LX1'))), 2::bigint, 'the borrower sees its two installments');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select pg_temp.imp('ecb00000-0000-4000-8000-000000000001', 'schedule', 'm8-sched-2', jsonb_build_array(
+  pg_temp.sched('LX1', 'SRC-SCH-1', 3, jsonb_build_object('reported_as_of', pg_temp.got('sch_ts'), 'installments', jsonb_build_array(
+    jsonb_build_object('installment_seq', '1', 'due_date', to_char(current_date + 10, 'YYYY-MM-DD'), 'principal', '9999.99', 'interest', '333.33'))))));
+select pg_temp.keep('c_sch', (select id::text from servicing.sync_conflicts where loan_account_id = pg_temp.lid('LX1') and record_type = 'schedule'));
+select is((select status from servicing.sync_conflicts where id = pg_temp.got('c_sch')::uuid), 'open', 'a different schedule for the same record and time is a conflict');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000005');
+select is((select count(*) from servicing.my_loan_schedule(pg_temp.lid('LX1'))), 0::bigint, 'the borrower is shown no schedule while it is in conflict');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000002');
+select servicing.acknowledge_sync_conflict(pg_temp.got('c_sch')::uuid);
+select is(pg_temp.err(format($$select servicing.resolve_sync_conflict(%L, 'incoming', 'The lender says the other schedule is the right one', '{"lender_ticket":"SAMPLE-T-SCH"}')$$, pg_temp.got('c_sch'))), '55000|incoming_not_stored',
+  'M8: confirming the incoming schedule needs it stored as a newer report as well');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select pg_temp.imp('ecb00000-0000-4000-8000-000000000001', 'schedule', 'm8-sched-3', jsonb_build_array(
+  pg_temp.sched('LX1', 'SRC-SCH-2', 1, jsonb_build_object('installments', jsonb_build_array(
+    jsonb_build_object('installment_seq', '1', 'due_date', to_char(current_date + 10, 'YYYY-MM-DD'), 'principal', '9999.99', 'interest', '333.33'))))));
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000002');
+select is(pg_temp.err(format($$select servicing.resolve_sync_conflict(%L, 'incoming', 'The lender says the other schedule is the right one', '{"lender_ticket":"SAMPLE-T-SCH"}')$$, pg_temp.got('c_sch'))), 'ok', 'once the newer schedule is stored it can be confirmed');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000005');
+select is((select string_agg(schedule_version::text || ':' || principal_minor::text, ',' order by seq) from servicing.my_loan_schedule(pg_temp.lid('LX1'))), '2:999999', 'and the borrower sees the newer schedule (version 2), not the disowned one');
+
+-- A receipt conflict is a record the lender already posted: nothing is withheld, so confirming either version needs no newer report (documented).
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select pg_temp.imp('ecb00000-0000-4000-8000-000000000001', 'receipt', 'm8-rc-1', jsonb_build_array(pg_temp.receipt('LX1', 'RC-M8', '100.00', 2)));
+select pg_temp.imp('ecb00000-0000-4000-8000-000000000001', 'receipt', 'm8-rc-2', jsonb_build_array(pg_temp.receipt('LX1', 'RC-M8', '200.00', 1)));
+select pg_temp.keep('c_rc', (select id::text from servicing.sync_conflicts where loan_account_id = pg_temp.lid('LX1') and record_type = 'receipt'));
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000002');
+select servicing.acknowledge_sync_conflict(pg_temp.got('c_rc')::uuid);
+select is(pg_temp.err(format($$select servicing.resolve_sync_conflict(%L, 'incoming', 'The lender says the larger receipt is the right one', '{"lender_ticket":"SAMPLE-T-RC"}')$$, pg_temp.got('c_rc'))), 'ok',
+  'a receipt conflict can be confirmed either way (the gate applies to the figures and the schedule only)');
+
+-- ============================================================================================================================
+-- 7. Receipts net of reversals (M9)
+-- ============================================================================================================================
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select pg_temp.imp('ecb00000-0000-4000-8000-000000000001', 'receipt', 'm9-rc', jsonb_build_array(pg_temp.receipt('LX2', 'RC-9', '4500.00', 5)));
+select pg_temp.imp('ecb00000-0000-4000-8000-000000000001', 'receipt', 'm9-rv1', jsonb_build_array(
+  pg_temp.receipt('LX2', 'RV-9A', '0.01', 4, '{"receipt_kind":"reversal","reverses_receipt_ref":"RC-9","source_record_id":"SRC-RV-9A"}')));
+select is((select (amount_minor, reversed_minor, net_minor, fully_reversed, over_reversed)::text from servicing.lms_receipts_net where lms_receipt_ref = 'RC-9'), '(450000,1,449999,f,f)',
+  'M9: a reversal of 0.01 leaves a net amount of 4499.99 and the receipt is NOT fully reversed');
+select pg_temp.as_owner();
+select is(private.servicing_receipt_is_reversed((select id from servicing.lms_receipts where lms_receipt_ref = 'RC-9')), false, 'the helper agrees: a partial reversal does not reverse the receipt');
+select is((select count(*) > 0 from servicing.lms_receipts rv where rv.reverses_receipt_id = (select id from servicing.lms_receipts where lms_receipt_ref = 'RC-9')), true,
+  'whereas the predicate "a reversal row exists" (what other consumers used) says it is reversed: that is the defect they must stop using');
+select is(private.servicing_receipt_reversed_minor((select id from servicing.lms_receipts where lms_receipt_ref = 'RC-9')), 1::bigint, 'the reversed amount is 1 paisa');
+select is(private.servicing_receipt_is_reversed((select id from servicing.lms_receipts where lms_receipt_ref = 'RV-9A')), null, 'the helper answers null for a reversal row (it is not a receipt)');
+select is((select count(*) from servicing.sync_anomalies where kind = 'reversal_exceeds_receipt' and loan_account_id = pg_temp.lid('LX2')), 0::bigint, 'nothing exceeds the receipt yet');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select pg_temp.imp('ecb00000-0000-4000-8000-000000000001', 'receipt', 'm9-rv2', jsonb_build_array(
+  pg_temp.receipt('LX2', 'RV-9B', '4499.99', 3, '{"receipt_kind":"reversal","reverses_receipt_ref":"RC-9","source_record_id":"SRC-RV-9B"}')));
+select is((select (reversed_minor, net_minor, fully_reversed, over_reversed)::text from servicing.lms_receipts_net where lms_receipt_ref = 'RC-9'), '(450000,0,t,f)', 'the second reversal completes it: net zero, fully reversed');
+select pg_temp.as_owner();
+select is(private.servicing_receipt_is_reversed((select id from servicing.lms_receipts where lms_receipt_ref = 'RC-9')), true, 'the helper agrees');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select pg_temp.imp('ecb00000-0000-4000-8000-000000000001', 'receipt', 'm9-rv3', jsonb_build_array(
+  pg_temp.receipt('LX2', 'RV-9C', '0.01', 2, '{"receipt_kind":"reversal","reverses_receipt_ref":"RC-9","source_record_id":"SRC-RV-9C"}')));
+select is((select (reversed_minor, net_minor, fully_reversed, over_reversed)::text from servicing.lms_receipts_net where lms_receipt_ref = 'RC-9'), '(450001,0,t,t)', 'a reversal beyond the receipt keeps the net at zero and says so');
+select is((select count(*) from servicing.sync_anomalies where kind = 'reversal_exceeds_receipt' and loan_account_id = pg_temp.lid('LX2')), 1::bigint, 'and is flagged for the lender, as before');
+select is((select count(*) from servicing.lms_receipts_net where lms_receipt_ref in ('RV-9A', 'RV-9B', 'RV-9C')), 0::bigint, 'the view lists receipts only');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000003');
+select is((select count(*) from servicing.lms_receipts_net where lms_receipt_ref = 'RC-9'), 1::bigint, 'a viewer of lender X (loan.read) reads it');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000004');
+select is((select count(*) from servicing.lms_receipts_net), 0::bigint, 'the other lender reads none of it (row level security through the invoker view)');
+
+-- ============================================================================================================================
+-- 8. Guards that no test exercised (M20 d, e, f): anomalies that withhold figures, the sanctioned-amount floor, a receipt reference reused on another loan
+-- ============================================================================================================================
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+-- d1. A terminal status that changes to another terminal status (LX4: closed, then written off).
+select is(pg_temp.imp('ecb00000-0000-4000-8000-000000000001', 'loan', 'm20-term', jsonb_build_array(
+  pg_temp.loan('LX4', 'SAMPLE-APP-4', 'SRC-LX4-2', 3, '{"sequence":"2","status":"closed"}'),
+  pg_temp.loan('LX4', 'SAMPLE-APP-4', 'SRC-LX4-3', 2, '{"sequence":"3","status":"written_off"}'))) ->> 'status', 'committed', 'LX4 is reported closed, then written off');
+select is((select (kind, severity, previous_status, reported_status)::text from servicing.sync_anomalies where loan_account_id = pg_temp.lid('LX4') and kind = 'terminal_status_changed'),
+  '(terminal_status_changed,warning,closed,written_off)', 'a terminal status changing to another one is flagged');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000006');
+select is((select figures_available from servicing.my_loan(pg_temp.lid('LX4'))), false, 'and the borrower is shown no figures for the loan');
+-- d2 and e. The sanctioned amount (LX5): a change is applied only while it covers the disbursement, and is flagged either way.
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select is(pg_temp.imp('ecb00000-0000-4000-8000-000000000001', 'loan', 'm20-sanct-up', jsonb_build_array(
+  pg_temp.loan('LX5', 'SAMPLE-APP-5', 'SRC-LX5-2', 2, '{"sequence":"2","sanctioned_amount":"60000.00"}'))) ->> 'status', 'committed', 'LX5 is reported with a higher sanctioned amount');
+select is((select sanctioned_amount_minor from servicing.loan_accounts where id = pg_temp.lid('LX5')), 6000000::bigint, 'the loan account follows (the new amount covers the disbursement)');
+select is((select count(*) from servicing.sync_anomalies where loan_account_id = pg_temp.lid('LX5') and kind = 'sanctioned_amount_changed'), 1::bigint, 'and the change is flagged');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000005');
+select is((select figures_available from servicing.my_loan(pg_temp.lid('LX5'))), false, 'the borrower is shown no figures while the report carries that warning');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select is(pg_temp.imp('ecb00000-0000-4000-8000-000000000001', 'loan', 'm20-sanct-down', jsonb_build_array(
+  pg_temp.loan('LX5', 'SAMPLE-APP-5', 'SRC-LX5-3', 1, '{"sequence":"3","sanctioned_amount":"40000.00","disbursed_amount":null,"disbursement_ref":null,"disbursement_date":null}'))) ->> 'status', 'committed',
+  'LX5 is then reported with a sanctioned amount BELOW what was disbursed (50000.00)');
+select is((select sanctioned_amount_minor from servicing.loan_accounts where id = pg_temp.lid('LX5')), 6000000::bigint, 'M20 e: the loan account keeps the amount that covers the disbursement');
+select is((select count(*) from servicing.sync_anomalies where loan_account_id = pg_temp.lid('LX5') and kind = 'sanctioned_amount_changed'), 2::bigint, 'and the change is flagged as well');
+-- d3. Disbursement evidence that differs from what the loan account holds (LX6).
+select is(pg_temp.imp('ecb00000-0000-4000-8000-000000000001', 'loan', 'm20-disb', jsonb_build_array(
+  pg_temp.loan('LX6', 'SAMPLE-APP-6', 'SRC-LX6-2', 2, '{"sequence":"2","disbursement_ref":"SAMPLE-DISB-OTHER"}'))) ->> 'status', 'committed', 'LX6 is reported with another disbursement reference');
+select is((select count(*) from servicing.sync_anomalies where loan_account_id = pg_temp.lid('LX6') and kind = 'disbursement_evidence_differs'), 1::bigint, 'the difference is flagged');
+select is((select disbursement_reference from servicing.loan_accounts where id = pg_temp.lid('LX6')), 'SAMPLE-DISB-LX6', 'and the evidence on the loan account is never rewritten');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000006');
+select is((select figures_available from servicing.my_loan(pg_temp.lid('LX6'))), false, 'the borrower is shown no figures for it');
+-- f. The same lender receipt reference sent for ANOTHER loan is a conflict, not "unchanged".
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select pg_temp.imp('ecb00000-0000-4000-8000-000000000001', 'receipt', 'm20-rcf-1', jsonb_build_array(pg_temp.receipt('LX1', 'RC-F', '10.00', 1)));
+select pg_temp.keep('rcf', pg_temp.stage('ecb00000-0000-4000-8000-000000000001', 'receipt', 'm20-rcf-2', jsonb_build_array(pg_temp.receipt('LX6', 'RC-F', '10.00', 1)))::text);
+select is((pg_temp.got('rcf')::jsonb) -> 'counts' ->> 'conflict', '1', 'M20 f: the preview counts the receipt reference reused on another loan as a conflict');
+select is((pg_temp.got('rcf')::jsonb) -> 'counts' ->> 'unchanged', '0', 'not as an unchanged repeat');
+select is(servicing.commit_import(((pg_temp.got('rcf')::jsonb) ->> 'batch_id')::uuid) -> 'applied_counts', '{"conflict":1}'::jsonb, 'committing queues the conflict');
+select is((select (conflict_reason, loan_account_id = pg_temp.lid('LX6'))::text from servicing.sync_conflicts where record_type = 'receipt' and source_record_id = 'SRC-RC-F'), '(receipt_differs,t)', 'as receipt_differs on the loan that sent it');
+select is((select count(*) from servicing.lms_receipts where lms_receipt_ref = 'RC-F' and loan_account_id = pg_temp.lid('LX1')), 1::bigint, 'while the stored receipt stays on its own loan');
+
+-- ============================================================================================================================
+-- 9. Rule filters and due dates (M21 a, M14)
+-- ============================================================================================================================
+select pg_temp.as_owner();
+-- Three more APPROVED versions of the statement rule that must NOT apply to a personal loan of lender X today: one not yet effective (v2, 55 days), one for another
+-- product category (v3, 66 days) and one that has expired (v4, 77 days). The draft v1 (7 days) is still unapproved.
+insert into documents.applicability_rules (rule_key, version, lender_category_keys, regulator, direction_ref, paragraph_refs, product_category_keys, exclusions, document_type,
+  required_template_key, required_fields_version, validity_rule, effective_from, effective_to, approval_status, evidence_status, reviewer_ref, proposed_by, approved_by, approved_at)
+select 'servicing.statement_sla_days_default', v.ver, array['nbfc_icc'], 'Udofin platform setting (not a regulator)', 'SAMPLE rule version for a filter test', '{}', v.prods, 'SAMPLE', 'statement_of_account',
+  'none.lender_issued', 'none', jsonb_build_object('kind', 'calendar_days', 'days', v.days, 'basis', 'request_received'), v.eff_from, v.eff_to, 'approved', 'unverified', 'SAMPLE reviewer',
+  'ec000000-0000-4000-8000-000000000009', 'ec000000-0000-4000-8000-000000000010', now()
+from (values (2, array['personal'], 55, current_date + 10, null::date), (3, array['vehicle'], 66, current_date - 5, null::date), (4, array['personal'], 77, current_date - 40, current_date - 1)) v (ver, prods, days, eff_from, eff_to);
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000006');
+select pg_temp.keep('rq14', servicing.request_document(pg_temp.lid('DL-14'), 'statement', 'ec-req-key-0014')::text);
+select is(pg_temp.q(format($$select (due_by is null and due_rule_id is null)::text from servicing.document_requests where id = %L$$, pg_temp.got('rq14'))), 'true',
+  'M21: a rule that is not yet effective, one for another product category and one that has expired resolve nothing (the rule is unresolved: no due date)');
+select pg_temp.as_owner();
+update documents.applicability_rules set approval_status = 'approved', reviewer_ref = 'SAMPLE compliance reviewer', approved_by = 'ec000000-0000-4000-8000-000000000010', approved_at = now(),
+  proposed_by = 'ec000000-0000-4000-8000-000000000009'
+ where rule_key in ('servicing.statement_sla_days_default', 'servicing.noc_sla_days_default', 'servicing.security_release_sla_days') and version = 1;
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000006');
+select pg_temp.keep('rq16', servicing.request_document(pg_temp.lid('DL-16'), 'statement', 'ec-req-key-0016')::text);
+select is(pg_temp.q(format($$select (due_by - requested_at)::text || ':' || (select version::text from documents.applicability_rules where id = due_rule_id) from servicing.document_requests where id = %L$$, pg_temp.got('rq16'))), '7 days:1',
+  'M21: with version 1 approved the request is due after ITS 7 days, never after the 55, 66 or 77 days of the three versions that do not apply');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000005');
+select pg_temp.keep('rq33', servicing.request_document(pg_temp.lid('DL-33'), 'statement', 'ec-req-key-0033')::text);
+select is(pg_temp.q(format($$select (due_by is null and due_rule_id is null)::text from servicing.document_requests where id = %L$$, pg_temp.got('rq33'))), 'true',
+  'M21: a lender of another category (nbfc_mfi) gets no due date from rules written for nbfc_icc and nbfc_d');
+
+-- M14: the NOC clock starts at the recorded closure (the rule''s basis), a statement''s at the request.
+select pg_temp.as_owner();
+set local session_replication_role = replica;
+update servicing.loan_accounts set status = 'closed' where lms_loan_ref = 'DL-17';
+insert into servicing.closure_records (lender_org_id, loan_account_id, closure_kind, closed_at, noc_due_by, noc_due_rule_id)
+select 'ecb00000-0000-4000-8000-000000000001', pg_temp.lid('DL-17'), 'closed', now() - interval '40 days', now() - interval '10 days', r.id
+from documents.applicability_rules r where r.rule_key = 'servicing.noc_sla_days_default' and r.version = 1;
+set local session_replication_role = origin;
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000005');
+select pg_temp.keep('rq17', servicing.request_document(pg_temp.lid('DL-17'), 'noc', 'ec-req-key-0017')::text);
+select is(pg_temp.q(format($$select (r.due_by - c.closed_at)::text from servicing.document_requests r join servicing.closure_records c on c.loan_account_id = r.loan_account_id where r.id = %L$$, pg_temp.got('rq17'))), '30 days',
+  'M14: a NOC requested 40 days after the closure is due 30 days after the CLOSURE');
+select is(pg_temp.q(format($$select (r.due_by = c.noc_due_by and r.due_by < r.requested_at)::text from servicing.document_requests r join servicing.closure_records c on c.loan_account_id = r.loan_account_id where r.id = %L$$, pg_temp.got('rq17'))),
+  'true', 'which is the date the closure record already shows, and already past (not 30 days from today)');
+
+-- M21 (c): no statement exists for a cancelled loan.
+select pg_temp.as_owner();
+update servicing.loan_accounts set status = 'cancelled' where lms_loan_ref = 'DL-18';
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000006');
+select is(pg_temp.err(format($$select servicing.request_document(%L, 'statement', 'ec-req-key-0018')$$, pg_temp.lid('DL-18'))), '55000|loan_status_not_eligible', 'M21: a statement cannot be requested for a cancelled loan');
+
+-- ============================================================================================================================
+-- 10. Replaying a document or a quotation still answers the request (A6, M11)
+-- ============================================================================================================================
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select pg_temp.keep('s19', pg_temp.reg(pg_temp.lid('DL-19'), 'statement', 's-19', current_date - 90, current_date - 30)::text);
+select pg_temp.keep('s19old', pg_temp.reg(pg_temp.lid('DL-19'), 'statement', 's-19-old', current_date - 180, current_date - 91)::text);
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000005');
+select pg_temp.keep('rq19', servicing.request_document(pg_temp.lid('DL-19'), 'statement', 'ec-req-key-0019', current_date - 60, current_date - 40)::text);
+select pg_temp.keep('rq19b', servicing.request_document(pg_temp.lid('DL-19'), 'foreclosure_quote', 'ec-req-key-0020')::text);
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select is(pg_temp.err(format($$select pg_temp.reg(%L, 'statement', 's-19', current_date - 90, current_date - 30, %L::uuid, null)$$, pg_temp.lid('DL-19'), pg_temp.got('s19old'))), '23505|lender_reference_reused',
+  'M11: the same reference and bytes naming another document to supersede is not a replay');
+select is(pg_temp.err(format($$select pg_temp.reg(%L, 'statement', 's-19', current_date - 91, current_date - 30)$$, pg_temp.lid('DL-19'))), '23505|lender_reference_reused', 'nor with another period');
+select is(pg_temp.err(format($$select pg_temp.reg(%L, 'statement', 's-19', current_date - 90, current_date - 30, null, %L::uuid)$$, pg_temp.lid('DL-19'), pg_temp.got('rq_chk'))), '55000|request_not_open',
+  'a request of ANOTHER loan is not open for this one');
+select is(pg_temp.err(format($$select pg_temp.reg(%L, 'statement', 's-19', current_date - 90, current_date - 30, null, %L::uuid)$$, pg_temp.lid('DL-19'), pg_temp.got('rq19b'))), '55000|request_kind_mismatch',
+  'a request for a quotation is not answered by a statement');
+select is(pg_temp.err(format($$select pg_temp.reg(%L, 'statement', 's-19', current_date - 90, current_date - 30, null, %L::uuid)$$, pg_temp.lid('DL-19'), pg_temp.got('rq19'))), 'ok',
+  'A6: the same document sent again WITH the open request answers it');
+select is(pg_temp.err(format($$select pg_temp.reg(%L, 'statement', 's-19', current_date - 90, current_date - 30, null, %L::uuid)$$, pg_temp.lid('DL-19'), pg_temp.got('rq19'))), 'ok', 'and sending it once more is still a replay, not an error');
+select is(pg_temp.q(format($$select status || ':' || (fulfilled_document_id = %L)::text from servicing.document_requests where id = %L$$, pg_temp.got('s19'), pg_temp.got('rq19'))), 'fulfilled:true',
+  'the request is fulfilled with the document that already existed (no second document)');
+select is((select count(*) from servicing.loan_documents where lender_reference = 'SAMPLE-REF-s-19'), 1::bigint, 'one document under that reference');
+select is(pg_temp.q(format($$select count(*)::text from audit.events where action = 'servicing.loan_document.replay_fulfilled_request' and entity_id = %L$$, pg_temp.got('s19'))), '1', 'the replay that fulfilled the request is audited once');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000005');
+select pg_temp.keep('rq19c', servicing.request_document(pg_temp.lid('DL-19'), 'statement', 'ec-req-key-0021', current_date - 400, current_date - 300)::text);
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select is(pg_temp.err(format($$select pg_temp.reg(%L, 'statement', 's-19', current_date - 90, current_date - 30, null, %L::uuid)$$, pg_temp.lid('DL-19'), pg_temp.got('rq19c'))), '55000|period_does_not_cover_request',
+  'a replay that does not cover the period the borrower asked for does not fulfil that request');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000005');
+select servicing.cancel_document_request(pg_temp.got('rq19c')::uuid);
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select is(pg_temp.err(format($$select pg_temp.reg(%L, 'statement', 's-19', current_date - 90, current_date - 30, null, %L::uuid)$$, pg_temp.lid('DL-19'), pg_temp.got('rq19c'))), '55000|request_not_open', 'nor a request the borrower cancelled');
+
+-- Quotations: the same quotation sent again with an open quotation request.
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select pg_temp.keep('q20_as_of', to_char(clock_timestamp() - interval '1 hour', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'));
+select pg_temp.keep('q20_until', to_char(clock_timestamp() + interval '1 day', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'));
+select pg_temp.keep('q20', servicing.record_foreclosure_quote(pg_temp.lid('DL-20'), 'q-20', pg_temp.got('q20_as_of')::timestamptz, pg_temp.got('q20_until')::timestamptz,
+  '10000.00', '500.00', '100.00', '200.00', '10800.00', 'lender_portal', null, null)::text);
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000006');
+select pg_temp.keep('rq20', servicing.request_document(pg_temp.lid('DL-20'), 'foreclosure_quote', 'ec-req-key-0030')::text);
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000005');
+select pg_temp.keep('rq21', servicing.request_document(pg_temp.lid('DL-21'), 'foreclosure_quote', 'ec-req-key-0031')::text);
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select is(pg_temp.err(format($$select servicing.record_foreclosure_quote(%L, 'q-20', %L, %L, '10000.00', '500.00', '100.00', '200.00', '10801.00', 'lender_portal', %L, null)$$,
+  pg_temp.lid('DL-20'), pg_temp.got('q20_as_of')::timestamptz, pg_temp.got('q20_until')::timestamptz, pg_temp.got('rq20'))), '23505|quote_ref_reused', 'M11: other figures under the same reference are a conflict');
+select pg_temp.keep('ld20', pg_temp.reg(pg_temp.lid('DL-20'), 'foreclosure_quote', 'ld-20')::text);
+select is(pg_temp.err(format($$select servicing.record_foreclosure_quote(%L, 'q-20', %L, %L, '10000.00', '500.00', '100.00', '200.00', '10800.00', 'lender_portal', %L, %L)$$,
+  pg_temp.lid('DL-20'), pg_temp.got('q20_as_of')::timestamptz, pg_temp.got('q20_until')::timestamptz, pg_temp.got('rq20'), pg_temp.got('ld20'))), '23505|quote_ref_reused', 'and so is the same quotation naming a letter it did not have');
+select is(pg_temp.err(format($$select servicing.record_foreclosure_quote(%L, 'q-20', %L, %L, '10000.00', '500.00', '100.00', '200.00', '10800.00', 'lender_portal', %L, null)$$,
+  pg_temp.lid('DL-20'), pg_temp.got('q20_as_of')::timestamptz, pg_temp.got('q20_until')::timestamptz, pg_temp.got('rq21'))), '55000|request_not_open',
+  'M21: the request of ANOTHER loan is not open for this one (the scope guard)');
+select is(pg_temp.err(format($$select servicing.record_foreclosure_quote(%L, 'q-20', %L, %L, '10000.00', '500.00', '100.00', '200.00', '10800.00', 'lender_portal', %L, null)$$,
+  pg_temp.lid('DL-20'), pg_temp.got('q20_as_of')::timestamptz, pg_temp.got('q20_until')::timestamptz, pg_temp.got('rq20'))), 'ok', 'A6: the same quotation sent again WITH the open request answers it');
+select is(pg_temp.q(format($$select status || ':' || (fulfilled_quote_id = %L)::text from servicing.document_requests where id = %L$$, pg_temp.got('q20'), pg_temp.got('rq20'))), 'fulfilled:true', 'the request is fulfilled with the quotation that already existed');
+select is(pg_temp.err(format($$select servicing.record_foreclosure_quote(%L, 'q-20', %L, %L, '10000.00', '500.00', '100.00', '200.00', '10800.00', 'lender_portal', %L, null)$$,
+  pg_temp.lid('DL-20'), pg_temp.got('q20_as_of')::timestamptz, pg_temp.got('q20_until')::timestamptz, pg_temp.got('rq20'))), 'ok', 'and once more is still a replay');
+-- An expired quotation cannot fulfil a request, replay or not.
+select pg_temp.keep('q22', servicing.record_foreclosure_quote(pg_temp.lid('DL-22'), 'q-22', clock_timestamp() - interval '3 hours', clock_timestamp() - interval '1 hour',
+  '10000.00', '500.00', '100.00', '200.00', '10800.00', 'lender_portal', null, null)::text);
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000006');
+select pg_temp.keep('rq22', servicing.request_document(pg_temp.lid('DL-22'), 'foreclosure_quote', 'ec-req-key-0032')::text);
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select is(pg_temp.err(format($$select servicing.record_foreclosure_quote(%L, 'q-22', (select as_of from servicing.foreclosure_quotes where id = %L), (select valid_until from servicing.foreclosure_quotes where id = %L), '10000.00', '500.00', '100.00', '200.00', '10800.00', 'lender_portal', %L, null)$$,
+  pg_temp.lid('DL-22'), pg_temp.got('q22'), pg_temp.got('q22'), pg_temp.got('rq22'))), '55000|quote_already_expired', 'M11: a replay of an expired quotation cannot fulfil the request either');
+select is(pg_temp.q(format($$select status from servicing.document_requests where id = %L$$, pg_temp.got('rq22'))), 'requested', 'and the request stays open');
+
+-- ============================================================================================================================
+-- 11. The closure's NOC pointer follows corrections (A2, M12)
+-- ============================================================================================================================
+select pg_temp.as_owner();
+update servicing.loan_accounts set status = 'closed' where lms_loan_ref in ('DL-23', 'DL-24');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select pg_temp.keep('noc_a', pg_temp.reg(pg_temp.lid('DL-23'), 'noc', 'noc-23-a', p_issued => interval '3 hours')::text);
+select is((select noc_document_id::text from servicing.closure_records where loan_account_id = pg_temp.lid('DL-23')), pg_temp.got('noc_a'), 'the first NOC becomes the closure''s NOC');
+select pg_temp.keep('noc_b', pg_temp.reg(pg_temp.lid('DL-23'), 'noc', 'noc-23-b', null, null, pg_temp.got('noc_a')::uuid, null, 'lender_upload', interval '2 hours')::text);
+select is((select (noc_document_id = pg_temp.got('noc_b')::uuid and noc_issued_at = (select issued_at from servicing.loan_documents where id = pg_temp.got('noc_b')::uuid))::text from servicing.closure_records where loan_account_id = pg_temp.lid('DL-23')),
+  'true', 'A2: a NOC that supersedes it replaces the pointer, and the issue time moves with it');
+select pg_temp.keep('noc_c', pg_temp.reg(pg_temp.lid('DL-23'), 'noc', 'noc-23-c', null, null, pg_temp.got('noc_b')::uuid, null, 'lender_upload', interval '1 hour')::text);
+select is((select noc_document_id::text from servicing.closure_records where loan_account_id = pg_temp.lid('DL-23')), pg_temp.got('noc_c'), 'and a correction of the correction does too');
+select pg_temp.keep('noc_d', pg_temp.reg(pg_temp.lid('DL-23'), 'noc', 'noc-23-d', p_issued => interval '30 minutes')::text);
+select is((select noc_document_id::text from servicing.closure_records where loan_account_id = pg_temp.lid('DL-23')), pg_temp.got('noc_c'), 'a further NOC that corrects nothing does not take the pointer');
+select pg_temp.keep('cl_x', pg_temp.reg(pg_temp.lid('DL-23'), 'closure_letter', 'cl-23', p_issued => interval '20 minutes')::text);
+select is((select noc_document_id::text from servicing.closure_records where loan_account_id = pg_temp.lid('DL-23')), pg_temp.got('noc_c'), 'nor does a closure letter');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000005');
+select is((servicing.my_closure(pg_temp.lid('DL-23')) ->> 'noc_document_id'), pg_temp.got('noc_c'), 'the borrower''s closure screen offers the corrected NOC, not the superseded ones');
+select is((select superseded_by_id::text from servicing.my_loan_documents(pg_temp.lid('DL-23')) where document_id = pg_temp.got('noc_a')::uuid), pg_temp.got('noc_b'), 'while the superseded one is still listed as superseded');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000003');
+select is((select noc_document_id::text from servicing.closure_records where loan_account_id = pg_temp.lid('DL-23')), pg_temp.got('noc_c'), 'the lender''s closure list (a table read) shows the corrected NOC as well');
+-- A closure letter first, then the NOC proper.
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select pg_temp.keep('cl_24', pg_temp.reg(pg_temp.lid('DL-24'), 'closure_letter', 'cl-24', p_issued => interval '3 hours')::text);
+select is((select noc_document_id::text from servicing.closure_records where loan_account_id = pg_temp.lid('DL-24')), pg_temp.got('cl_24'), 'a closure letter registered first is the pointer');
+select pg_temp.keep('noc_24', pg_temp.reg(pg_temp.lid('DL-24'), 'noc', 'noc-24', p_issued => interval '2 hours')::text);
+select is((select noc_document_id::text from servicing.closure_records where loan_account_id = pg_temp.lid('DL-24')), pg_temp.got('noc_24'), 'A2: the NOC proper replaces a closure letter');
+select pg_temp.keep('cl_24b', pg_temp.reg(pg_temp.lid('DL-24'), 'closure_letter', 'cl-24b', p_issued => interval '1 hour')::text);
+select is((select noc_document_id::text from servicing.closure_records where loan_account_id = pg_temp.lid('DL-24')), pg_temp.got('noc_24'), 'while a later closure letter does not replace the NOC');
+-- The table itself: only a document that corrects the current one, with its own issue time.
+select pg_temp.as_owner();
+select is(pg_temp.err(format($$update servicing.closure_records set noc_document_id = %L, noc_issued_at = (select issued_at from servicing.loan_documents where id = %L) where loan_account_id = %L$$,
+  pg_temp.got('noc_d'), pg_temp.got('noc_d'), pg_temp.lid('DL-23'))), 'P0001|closure_immutable', 'the pointer cannot be moved to a document that does not correct the current one, even by the owner');
+select is(pg_temp.err(format($$update servicing.closure_records set noc_issued_at = now() where loan_account_id = %L$$, pg_temp.lid('DL-23'))), 'P0001|closure_immutable', 'nor the issue time changed on its own');
+select is(pg_temp.err(format($$update servicing.closure_records set noc_document_id = null, noc_issued_at = null where loan_account_id = %L$$, pg_temp.lid('DL-23'))), 'P0001|closure_immutable', 'nor the pointer removed');
+select is(pg_temp.err(format($$update servicing.closure_records set noc_document_id = %L where loan_account_id = %L$$, pg_temp.got('cl_24b'), pg_temp.lid('DL-24'))), 'P0001|closure_immutable', 'nor moved without its issue time, nor to a closure letter that corrects nothing');
+select is(pg_temp.err(format($$update servicing.closure_records set noc_document_id = %L, noc_issued_at = (select issued_at from servicing.loan_documents where id = %L) where loan_account_id = %L$$,
+  pg_temp.got('noc_a'), pg_temp.got('noc_a'), pg_temp.lid('DL-24'))), 'P0001|closure_immutable', 'nor to a document of another loan');
+
+-- ============================================================================================================================
+-- 12. Quotations: bounded validity, no payable quotation after a later receipt or report, and no lender user id for the borrower (M15, M18)
+-- ============================================================================================================================
+create function pg_temp.snap(loan_ref text, ver integer, st text, principal bigint, hours_ago numeric) returns void language sql as $fn$
+  insert into servicing.balance_snapshots (lender_org_id, loan_account_id, version, status, outstanding_principal_minor, source_system, source_record_id, reported_as_of, content_sha256)
+  select l.lender_org_id, l.id, ver, st::servicing.loan_status, principal, 'lender_lms', 'SNAP-' || loan_ref || '-' || ver,
+         clock_timestamp() - make_interval(secs => (hours_ago * 3600)::integer), encode(sha256(convert_to(loan_ref || ':' || ver::text, 'UTF8')), 'hex')
+  from servicing.loan_accounts l where l.lms_loan_ref = loan_ref
+$fn$;
+create function pg_temp.rcpt(loan_ref text, ref text, hours_ago numeric) returns void language sql as $fn$
+  insert into servicing.lms_receipts (lender_org_id, loan_account_id, kind, lms_receipt_ref, amount_minor, value_date, source_system, source_record_id, reported_as_of, content_sha256)
+  select l.lender_org_id, l.id, 'receipt', ref, 10000, current_date, 'lender_lms', 'SRC-' || ref, clock_timestamp() - make_interval(secs => (hours_ago * 3600)::integer),
+         encode(sha256(convert_to(ref, 'UTF8')), 'hex')
+  from servicing.loan_accounts l where l.lms_loan_ref = loan_ref
+$fn$;
+grant execute on function pg_temp.snap(text, integer, text, bigint, numeric), pg_temp.rcpt(text, text, numeric) to public;
+
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select is(pg_temp.err(format($$select pg_temp.quote(%L, 'q-long', 800)$$, pg_temp.lid('DL-25'))), '22023|validity_too_long', 'M15: a quotation valid for more than 31 days after its as-of time is refused');
+select is(pg_temp.err(format($$select pg_temp.quote(%L, 'q-ok-long', 696)$$, pg_temp.lid('DL-30'))), 'ok', 'while one valid for 29 days is accepted');
+select pg_temp.as_owner();
+select is(pg_temp.st($$insert into servicing.foreclosure_quotes (lender_org_id, loan_account_id, lender_quote_ref, as_of, valid_until, principal_minor, interest_minor, charges_minor, prepayment_charge_minor, total_minor, source, reported_by)
+  values ('ecb00000-0000-4000-8000-000000000001', (select id from servicing.loan_accounts where lms_loan_ref = 'DL-30'), 'q-table-long', now() - interval '1 hour', now() + interval '40 days', 1, 0, 0, 0, 1, 'lender_portal', 'ec000000-0000-4000-8000-000000000001')$$),
+  '23514', 'the table refuses a 40-day validity as well (the new check governs every writer, even the owner)');
+select is(pg_temp.st($$insert into servicing.foreclosure_quotes (lender_org_id, loan_account_id, lender_quote_ref, as_of, valid_until, principal_minor, interest_minor, charges_minor, prepayment_charge_minor, total_minor, source, reported_by)
+  values ('ecb00000-0000-4000-8000-000000000001', (select id from servicing.loan_accounts where lms_loan_ref = 'DL-30'), 'q-table-ok', now() - interval '1 hour', now() + interval '20 days', 1, 0, 0, 0, 1, 'lender_portal', 'ec000000-0000-4000-8000-000000000001')$$),
+  'ok', 'and accepts 20 days');
+
+-- Staleness. DL-25: a report older than the quotation changes nothing; a later one with the same principal changes nothing; one with LESS principal does.
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select pg_temp.keep('q25', pg_temp.quote(pg_temp.lid('DL-25'), 'q-25', 48, '10000.00', '500.00', '100.00', '200.00', '10800.00', null, 'lender_portal', null, 2)::text);
+select pg_temp.as_system();
+select is((select lender_quote_ref from servicing.latest_valid_quote(pg_temp.lid('DL-25'))), 'q-25', 'a fresh quotation is offered');
+select pg_temp.as_owner();
+select pg_temp.snap('DL-25', 1, 'active', 900000, 3);
+select pg_temp.snap('DL-25', 2, 'active', 1000000, 1);
+select pg_temp.as_system();
+select is((select lender_quote_ref from servicing.latest_valid_quote(pg_temp.lid('DL-25'))), 'q-25', 'a report from before its as-of time, and a later one with the same principal, leave it payable');
+select pg_temp.as_owner();
+select pg_temp.snap('DL-25', 3, 'active', 900000, 0.5);
+select pg_temp.as_system();
+select is((select count(*) from servicing.latest_valid_quote(pg_temp.lid('DL-25'))), 0::bigint, 'M15: a later report showing LESS principal outstanding makes it stale: nothing is offered');
+-- DL-26: a receipt reported after the as-of time.
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select pg_temp.quote(pg_temp.lid('DL-26'), 'q-26', 48, '10000.00', '500.00', '100.00', '200.00', '10800.00', null, 'lender_portal', null, 2);
+select pg_temp.as_owner();
+select pg_temp.rcpt('DL-26', 'RC-26-OLD', 3);
+select pg_temp.as_system();
+select is((select lender_quote_ref from servicing.latest_valid_quote(pg_temp.lid('DL-26'))), 'q-26', 'a receipt reported BEFORE the as-of time leaves the quotation payable');
+select pg_temp.as_owner();
+select pg_temp.rcpt('DL-26', 'RC-26-NEW', 1);
+select pg_temp.as_system();
+select is((select count(*) from servicing.latest_valid_quote(pg_temp.lid('DL-26'))), 0::bigint, 'M15: a receipt reported AFTER it makes it stale (the borrower would pay the instalment twice)');
+-- DL-27: the loan is no longer active.
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select pg_temp.quote(pg_temp.lid('DL-27'), 'q-27', 48, '10000.00', '500.00', '100.00', '200.00', '10800.00', null, 'lender_portal', null, 2);
+select pg_temp.as_owner();
+select pg_temp.snap('DL-27', 1, 'closed', 0, 1);
+select pg_temp.as_system();
+select is((select count(*) from servicing.latest_valid_quote(pg_temp.lid('DL-27'))), 0::bigint, 'M15: a later report that the loan is closed makes it stale');
+-- DL-28: the NEWEST quotation decides; an older one never takes its place when the newer one goes stale.
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select pg_temp.quote(pg_temp.lid('DL-28'), 'q-28-old', 48, '9000.00', '500.00', '100.00', '200.00', '9800.00', null, 'lender_portal', null, 3);
+select pg_temp.quote(pg_temp.lid('DL-28'), 'q-28-new', 48, '10000.00', '500.00', '100.00', '200.00', '10800.00', null, 'lender_portal', null, 2);
+select pg_temp.as_system();
+select is((select lender_quote_ref from servicing.latest_valid_quote(pg_temp.lid('DL-28'))), 'q-28-new', 'the newer quotation is the one offered');
+select pg_temp.as_owner();
+select pg_temp.snap('DL-28', 1, 'active', 950000, 1);
+select pg_temp.as_system();
+select is((select count(*) from servicing.latest_valid_quote(pg_temp.lid('DL-28'))), 0::bigint, 'M15: when the newer quotation goes stale the older one (still consistent with the report) is NOT offered in its place');
+
+-- M18: the lender user who reported a quotation is not handed to the borrower or the system.
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select pg_temp.quote(pg_temp.lid('DL-29'), 'q-29', 48);
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000005');
+select is((select (lender_quote_ref, reported_by is null)::text from servicing.latest_valid_quote(pg_temp.lid('DL-29'))), '(q-29,t)', 'M18: the borrower gets the quotation without the id of the lender user who reported it');
+select pg_temp.as_system();
+select is((select (lender_quote_ref, reported_by is null)::text from servicing.latest_valid_quote(pg_temp.lid('DL-29'))), '(q-29,t)', 'nor does the system');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000003');
+select is((select reported_by::text from servicing.latest_valid_quote(pg_temp.lid('DL-29'))), 'ec000000-0000-4000-8000-000000000001', 'the lender''s own readers (loan.read) still see who reported it');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000004');
+select is((select count(*) from servicing.latest_valid_quote(pg_temp.lid('DL-29'))), 0::bigint, 'another lender sees nothing');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000006');
+select is((select count(*) from servicing.latest_valid_quote(pg_temp.lid('DL-29'))), 0::bigint, 'nor another borrower');
+
+-- ============================================================================================================================
+-- 13. The machine-feed gate at use time (M16) and the system role without a feed (M21 b)
+-- ============================================================================================================================
+-- Lender Y has an ACTIVE mock connection (section 5) declaring the closure-documents capability, and a loan the lender reported closed.
+select pg_temp.as_owner();
+select set_config('udofin.allow_mock_providers', 'on', true);
+update servicing.lms_connections set capabilities = '{"closure_documents":true}' where lender_org_id = 'ecb00000-0000-4000-8000-000000000002';
+update servicing.loan_accounts set status = 'closed' where lms_loan_ref = 'LY1';
+select set_config('udofin.allow_mock_providers', '', true);
+select pg_temp.as_system();
+select is(pg_temp.err(format($$select servicing.open_security_release_tasks(%L, array['other'])$$, pg_temp.lid('LY1'))), '42501|mock_provider_blocked',
+  'M16: a mock feed left active in a session that does not allow mock providers opens no release task');
+select is(pg_temp.err(format($$select pg_temp.reg(%L, 'noc', 'mock-ly1', null, null, null, null, 'mock')$$, pg_temp.lid('LY1'))), '42501|mock_provider_blocked', 'and registers no document');
+select pg_temp.as_owner();
+select set_config('udofin.allow_mock_providers', 'on', true);
+select pg_temp.as_system();
+select is(pg_temp.err(format($$select servicing.open_security_release_tasks(%L, array['other'])$$, pg_temp.lid('LY1'))), 'ok', 'the same call in a session that allows mock providers works (the control)');
+select pg_temp.as_owner();
+select set_config('udofin.allow_mock_providers', '', true);
+select pg_temp.as_system();
+select is(pg_temp.err(format($$select servicing.open_security_release_tasks(%L, array['mutual_fund_lien'])$$, pg_temp.lid('DL-12'))), '55000|feed_not_active',
+  'M21: for a lender without a machine feed (file connection) the system role cannot open release tasks');
+select is(pg_temp.err(format($$select pg_temp.reg(%L, 'noc', 'mock-dl12', null, null, null, null, 'mock')$$, pg_temp.lid('DL-12'))), '55000|feed_not_active', 'nor register a mock document');
+
+-- ============================================================================================================================
+-- 14. Concurrency: the row is locked before its status is read (A7)
+-- ============================================================================================================================
+select pg_temp.as_owner();
+select ok((select bool_and(pg_get_functiondef(f::regprocedure) like '%for update%')
+           from unnest(array['servicing.confirm_security_release(uuid, text)', 'servicing.set_security_release_delay_reason(uuid, text)', 'servicing.decline_document_request(uuid, text)']) f),
+  'A7: confirm, delay reason and decline lock the task or request row before they read its status (a concurrent loser reaches the already_confirmed / request_not_open branch)');
+select pg_temp.as_user('ec000000-0000-4000-8000-000000000001');
+select is(pg_temp.err(format($$select servicing.confirm_security_release(%L, 'SAMPLE-CONF-A7')$$, pg_temp.got('task1'))), 'ok', 'the lender confirms the release task');
+select is(pg_temp.err(format($$select servicing.confirm_security_release(%L, 'SAMPLE-CONF-A7')$$, pg_temp.got('task1'))), '55000|already_confirmed', 'a second confirmation gets already_confirmed');
+select is(pg_temp.err(format($$select servicing.set_security_release_delay_reason(%L, 'Waiting for the depository to act')$$, pg_temp.got('task1'))), '55000|already_confirmed', 'and so does a delay reason after the confirmation');
+select is(pg_temp.err(format($$select servicing.decline_document_request(%L, 'The period requested is not yet closed')$$, pg_temp.got('rq_decl'))), '55000|request_not_open', 'a second decision on a request gets request_not_open');
+
+-- ============================================================================================================================
+-- 15. The security-release evidence label (U44)
+-- ============================================================================================================================
+select pg_temp.as_owner();
+select is((select evidence_status from documents.applicability_rules where rule_key = 'servicing.security_release_sla_days' and version = 1), 'likely',
+  'U44: the security-release rule is labelled likely, not confirmed (its application to the product categories rests on a cross-reference that was not read)');
+select ok((select exclusions like '%Evidence label: likely%' and exclusions like '%para 6(11)%' and exclusions like '%NOT confirmed%' and exclusions not like '%confirmed in text%'
+           from documents.applicability_rules where rule_key = 'servicing.security_release_sla_days' and version = 1), 'and its text says so');
+select is((select array_agg(rule_key || '=' || evidence_status order by rule_key) from documents.applicability_rules where rule_key in ('servicing.noc_sla_days_default', 'servicing.statement_sla_days_default') and version = 1),
+  array['servicing.noc_sla_days_default=unverified', 'servicing.statement_sla_days_default=unverified'], 'the two platform defaults stay unverified');
+
+-- ============================================================================================================================
+-- 16. Unsafe-text triggers across the phase (U42): one refusal per guarded column, and a control that an ordinary text is not what stops the insert
+-- ============================================================================================================================
+select pg_temp.as_owner();
+select is((select array_agg(p) from unnest(array[
+    'servicing.feature_change_requests|reason', 'servicing.feature_change_requests|decision_note',
+    'payments.account_format_rules|source_note', 'payments.account_format_rules|approval_note', 'payments.account_format_rules|retired_reason',
+    'payments.provider_register|display_name', 'payments.provider_register|authorisation_evidence_ref', 'payments.provider_register|status_reason',
+    'payments.fingerprint_key_versions|note',
+    'payments.account_registry|legal_owner_name', 'payments.account_registry|evidence_ref', 'payments.account_registry|verification_note',
+    'payments.account_registry|rejection_reason', 'payments.account_registry|revoked_reason',
+    'payments.merchant_registry|revoked_reason',
+    'payments.lender_payment_configs|evidence_ref', 'payments.lender_payment_configs|contract_section_ref', 'payments.lender_payment_configs|status_reason',
+    'payments.lender_payment_configs|rail_limits_source',
+    'payments.reconciliation_exception_events|note',
+    'servicing.reminder_templates|body',
+    'servicing.penal_charge_texts|reason', 'servicing.penal_charge_texts|sentence_en', 'servicing.penal_charge_texts|sentence_hi',
+    'servicing.communication_holds|note', 'servicing.communication_holds|release_note',
+    'servicing.import_batches|reject_reason', 'servicing.sync_conflicts|resolution_note']) p
+  where pg_temp.err(format('insert into %s (' || case when split_part(p, '|', 1) = 'payments.lender_payment_configs' then 'provider_mode, ' else '' end || '%I) values (' ||
+           case when split_part(p, '|', 1) = 'payments.lender_payment_configs' then '''production'', ' else '' end || '%L)', split_part(p, '|', 1), split_part(p, '|', 2), 'Call 98765 43210 or use ABCDE1234F')) <> '22023|unsafe_free_text'), null,
+  'U42: every guarded free-text column of the phase refuses a text with a mobile number and a PAN with the hint unsafe_free_text, even from the table owner (28 columns)');
+select is((select array_agg(p) from unnest(array[
+    'servicing.feature_change_requests|reason', 'payments.account_registry|evidence_ref', 'payments.provider_register|status_reason', 'payments.lender_payment_configs|rail_limits_source',
+    'servicing.communication_holds|note', 'servicing.penal_charge_texts|sentence_en', 'servicing.import_batches|reject_reason', 'servicing.sync_conflicts|resolution_note']) p
+  where pg_temp.err(format('insert into %s (' || case when split_part(p, '|', 1) = 'payments.lender_payment_configs' then 'provider_mode, ' else '' end || '%I) values (' ||
+           case when split_part(p, '|', 1) = 'payments.lender_payment_configs' then '''production'', ' else '' end || '%L)', split_part(p, '|', 1), split_part(p, '|', 2), 'An ordinary text without identifiers')) = '22023|unsafe_free_text'), null,
+  'and an ordinary text is not refused by the guard (the control: the refusal above comes from the trigger, not from another constraint)');
 
 select * from finish();
 rollback;
