@@ -279,21 +279,21 @@ select is(pg_temp.err($$select pg_temp.report(jsonb_build_array(pg_temp.batch('B
   '22023|bad_request', 'a malformed item reference is refused');
 select is((select count(*) from payments.settlement_batches), 0::bigint, 'and nothing was recorded by any refused report (all or nothing)');
 select is(pg_temp.report(jsonb_build_array(
-    pg_temp.batch('B-1', 'UTR-0001', 4, 475000, jsonb_build_array(pg_temp.item('PAY-1', 475000))),
-    pg_temp.batch('B-2', 'UTR-0002', 4, 470000, jsonb_build_array(pg_temp.item('PAY-2', 470000))),
-    pg_temp.batch('B-4', 'UTR-0004', 9, 475000, jsonb_build_array(pg_temp.item('PAY-4', 475000))),
-    pg_temp.batch('B-5', 'UTR-0005', 9, 475000, jsonb_build_array(pg_temp.item('PAY-5', 475000))),
-    pg_temp.batch('B-6', 'UTR-0006', 9, 300000, '[]'::jsonb),
-    pg_temp.batch('B-8', 'UTR-0008', 9, 200000, '[]'::jsonb),
-    pg_temp.batch('B-G', 'UTR-0007', 4, 100000, jsonb_build_array(pg_temp.item('PAY-GHOST', 100000))))),
+    pg_temp.batch('B-1', 'SAMP000000000001', 4, 475000, jsonb_build_array(pg_temp.item('PAY-1', 475000))),
+    pg_temp.batch('B-2', 'SAMP000000000002', 4, 470000, jsonb_build_array(pg_temp.item('PAY-2', 470000))),
+    pg_temp.batch('B-4', 'SAMP000000000004', 9, 475000, jsonb_build_array(pg_temp.item('PAY-4', 475000))),
+    pg_temp.batch('B-5', 'SAMP000000000005', 9, 475000, jsonb_build_array(pg_temp.item('PAY-5', 475000))),
+    pg_temp.batch('B-6', 'SAMP000000000006', 9, 300000, '[]'::jsonb),
+    pg_temp.batch('B-8', 'SAMP000000000008', 9, 200000, '[]'::jsonb),
+    pg_temp.batch('B-G', 'SAMP000000000007', 4, 100000, jsonb_build_array(pg_temp.item('PAY-GHOST', 100000))))),
   jsonb_build_object('recorded', 7, 'duplicates', 0, 'conflicts', 0), 'a provider report is recorded');
-select is(pg_temp.report(jsonb_build_array(pg_temp.batch('B-1', 'UTR-0001', 4, 475000, jsonb_build_array(pg_temp.item('PAY-1', 475000))))),
+select is(pg_temp.report(jsonb_build_array(pg_temp.batch('B-1', 'SAMP000000000001', 4, 475000, jsonb_build_array(pg_temp.item('PAY-1', 475000))))),
   jsonb_build_object('recorded', 0, 'duplicates', 1, 'conflicts', 0), 'the same batch again is a duplicate and writes nothing');
-select is(pg_temp.report(jsonb_build_array(pg_temp.batch('B-1', 'UTR-0001', 4, 475001, jsonb_build_array(pg_temp.item('PAY-1', 475001))))),
+select is(pg_temp.report(jsonb_build_array(pg_temp.batch('B-1', 'SAMP000000000001', 4, 475001, jsonb_build_array(pg_temp.item('PAY-1', 475001))))),
   jsonb_build_object('recorded', 0, 'duplicates', 0, 'conflicts', 1), 'the same batch with different content is a conflict and changes nothing');
 select pg_temp.as_owner();
 select is((select net_minor from payments.settlement_batches where batch_ref = 'B-1'), 475000::bigint, 'the original batch is untouched');
-select is(pg_temp.exc('event_payload_conflict'), 1::bigint, 'and the platform is told');
+select is(pg_temp.exc('event_payload_conflict'), 3::bigint, 'and the platform is told: the conflicting batch, and the two item-less batches 6 and 8 whose stated totals no item supports (fix SR: items are tied to the batch totals)');
 select is((select (destination_ok, parts_mismatch, item_count)::text from payments.settlement_batches where batch_ref = 'B-1'), '(t,f,1)', 'the reported destination is the lender''s verified account');
 select is(pg_temp.err($$update payments.settlement_batches set net_minor = 1$$), 'P0001|Record a compensating entry instead.', 'a recorded batch is append-only');
 select is(pg_temp.err($$delete from payments.settlement_items$$), 'P0001|Record a compensating entry instead.', 'and so are its items');
@@ -308,27 +308,27 @@ select pg_temp.as_user(pg_temp.u(3), 'aal1');
 select is(pg_temp.err(format($$select payments.import_bank_credits(%L, %L, '[]'::jsonb)$$, pg_temp.lx(), 'fde10000-0000-4000-8000-000000000001')), '42501|mfa_required', 'nor without the second factor');
 select pg_temp.as_user(pg_temp.u(3));
 select is(pg_temp.err(format($$select payments.import_bank_credits(%L, %L, '[]'::jsonb)$$, pg_temp.lx(), 'fde10000-0000-4000-8000-000000000001')), '22023|bad_request', 'an empty upload is refused');
-select is(pg_temp.err(format($$select payments.import_bank_credits(%L, %L, '[{"valueDate":"%s","amountMinor":"100","utr":"UTR-X001"}]'::jsonb)$$, pg_temp.lx(), 'fde10000-0000-4000-8000-000000000002', pg_temp.d())), 'P0002|', 'an account that is not the lender''s own is refused');
-select is(pg_temp.err(format($$select payments.import_bank_credits(%L, %L, '[{"valueDate":"%s","amountMinor":"100","utr":"UTR-X001","narration":"Ramesh Kumar EMI"}]'::jsonb)$$, pg_temp.lx(), 'fde10000-0000-4000-8000-000000000001', pg_temp.d())), '22023|unexpected_field',
+select is(pg_temp.err(format($$select payments.import_bank_credits(%L, %L, '[{"valueDate":"%s","amountMinor":"100","utr":"SAMPX00000000001"}]'::jsonb)$$, pg_temp.lx(), 'fde10000-0000-4000-8000-000000000002', pg_temp.d())), 'P0002|', 'an account that is not the lender''s own is refused');
+select is(pg_temp.err(format($$select payments.import_bank_credits(%L, %L, '[{"valueDate":"%s","amountMinor":"100","utr":"SAMPX00000000001","narration":"Ramesh Kumar EMI"}]'::jsonb)$$, pg_temp.lx(), 'fde10000-0000-4000-8000-000000000001', pg_temp.d())), '22023|unexpected_field',
   'a narration (it can carry a name) refuses the whole upload');
-select is(pg_temp.err(format($$select payments.import_bank_credits(%L, %L, '[{"valueDate":"%s","amountMinor":"12.50","utr":"UTR-X001"}]'::jsonb)$$, pg_temp.lx(), 'fde10000-0000-4000-8000-000000000001', pg_temp.d())), '22023|row_invalid', 'a decimal amount is refused');
-select is(pg_temp.err(format($$select payments.import_bank_credits(%L, %L, '[{"valueDate":"%s","amountMinor":"100","utr":"UTR-X001"}]'::jsonb)$$, pg_temp.lx(), 'fde10000-0000-4000-8000-000000000001', pg_temp.d() + 30)), '22023|row_invalid', 'a value date in the future is refused');
-select is(pg_temp.err(format($$select payments.import_bank_credits(%L, %L, '[{"valueDate":"%s","amountMinor":"100","utr":"UTR-X001"},{"valueDate":"%s","amountMinor":"200","utr":"UTR-X001"}]'::jsonb)$$, pg_temp.lx(), 'fde10000-0000-4000-8000-000000000001', pg_temp.d(), pg_temp.d())),
+select is(pg_temp.err(format($$select payments.import_bank_credits(%L, %L, '[{"valueDate":"%s","amountMinor":"12.50","utr":"SAMPX00000000001"}]'::jsonb)$$, pg_temp.lx(), 'fde10000-0000-4000-8000-000000000001', pg_temp.d())), '22023|row_invalid', 'a decimal amount is refused');
+select is(pg_temp.err(format($$select payments.import_bank_credits(%L, %L, '[{"valueDate":"%s","amountMinor":"100","utr":"SAMPX00000000001"}]'::jsonb)$$, pg_temp.lx(), 'fde10000-0000-4000-8000-000000000001', pg_temp.d() + 30)), '22023|row_invalid', 'a value date in the future is refused');
+select is(pg_temp.err(format($$select payments.import_bank_credits(%L, %L, '[{"valueDate":"%s","amountMinor":"100","utr":"SAMPX00000000001"},{"valueDate":"%s","amountMinor":"200","utr":"SAMPX00000000001"}]'::jsonb)$$, pg_temp.lx(), 'fde10000-0000-4000-8000-000000000001', pg_temp.d(), pg_temp.d())),
   '22023|utr_conflict', 'one bank reference twice with different amounts refuses the upload');
 select pg_temp.as_owner();
 select is((select count(*) from payments.bank_credits), 0::bigint, 'and nothing was written by any refused upload');
 select pg_temp.as_user(pg_temp.u(3));
 select is(payments.import_bank_credits(pg_temp.lx(), 'fde10000-0000-4000-8000-000000000001'::uuid, format('[
-  {"valueDate":"%1$s","amountMinor":"475000","utr":"UTR-0001"},
-  {"valueDate":"%1$s","amountMinor":"475000","utr":"UTR-0005"},
-  {"valueDate":"%1$s","amountMinor":"299999","utr":"UTR-0006"},
-  {"valueDate":"%1$s","amountMinor":"100000","utr":"UTR-0007"}]', pg_temp.d() - 3)::jsonb),
+  {"valueDate":"%1$s","amountMinor":"475000","utr":"SAMP000000000001"},
+  {"valueDate":"%1$s","amountMinor":"475000","utr":"SAMP000000000005"},
+  {"valueDate":"%1$s","amountMinor":"299999","utr":"SAMP000000000006"},
+  {"valueDate":"%1$s","amountMinor":"100000","utr":"SAMP000000000007"}]', pg_temp.d() - 3)::jsonb),
   jsonb_build_object('inserted', 4, 'duplicates', 0), 'the lender uploads its credits in the configured account');
-select is(payments.import_bank_credits(pg_temp.lx(), 'fde10000-0000-4000-8000-000000000009'::uuid, format('[{"valueDate":"%s","amountMinor":"200000","utr":"UTR-0008"}]', pg_temp.d() - 3)::jsonb),
+select is(payments.import_bank_credits(pg_temp.lx(), 'fde10000-0000-4000-8000-000000000009'::uuid, format('[{"valueDate":"%s","amountMinor":"200000","utr":"SAMP000000000008"}]', pg_temp.d() - 3)::jsonb),
   jsonb_build_object('inserted', 1, 'duplicates', 0), 'and one in its other account');
-select is(payments.import_bank_credits(pg_temp.lx(), 'fde10000-0000-4000-8000-000000000001'::uuid, format('[{"valueDate":"%s","amountMinor":"475000","utr":"UTR-0001"}]', pg_temp.d() - 3)::jsonb),
+select is(payments.import_bank_credits(pg_temp.lx(), 'fde10000-0000-4000-8000-000000000001'::uuid, format('[{"valueDate":"%s","amountMinor":"475000","utr":"SAMP000000000001"}]', pg_temp.d() - 3)::jsonb),
   jsonb_build_object('inserted', 0, 'duplicates', 1), 'the same credit again is a duplicate');
-select is(pg_temp.err(format($$select payments.import_bank_credits(%L, %L, '[{"valueDate":"%s","amountMinor":"475001","utr":"UTR-0001"}]'::jsonb)$$, pg_temp.lx(), 'fde10000-0000-4000-8000-000000000001', pg_temp.d() - 3)), '22023|utr_conflict',
+select is(pg_temp.err(format($$select payments.import_bank_credits(%L, %L, '[{"valueDate":"%s","amountMinor":"475001","utr":"SAMP000000000001"}]'::jsonb)$$, pg_temp.lx(), 'fde10000-0000-4000-8000-000000000001', pg_temp.d() - 3)), '22023|utr_conflict',
   'the same bank reference with another amount is refused');
 select pg_temp.as_owner();
 -- The lender's receipts: payment 1 is posted; one receipt names an intent that does not exist.
@@ -397,7 +397,7 @@ update payments.reconciliation_exceptions set status = 'resolved', resolved_at =
 select pg_temp.as_system();
 -- New input: a bank credit for batch 4 arrives late. The next run is a NEW run of the same date.
 select pg_temp.as_user(pg_temp.u(3));
-select payments.import_bank_credits(pg_temp.lx(), 'fde10000-0000-4000-8000-000000000001'::uuid, format('[{"valueDate":"%s","amountMinor":"475000","utr":"UTR-0004"}]', pg_temp.d())::jsonb);
+select payments.import_bank_credits(pg_temp.lx(), 'fde10000-0000-4000-8000-000000000001'::uuid, format('[{"valueDate":"%s","amountMinor":"475000","utr":"SAMP000000000004"}]', pg_temp.d())::jsonb);
 select pg_temp.as_system();
 select is(pg_temp.run() ->> 'run_no', '2', 'changed inputs make a new run number for the same date');
 select pg_temp.as_owner();
@@ -434,7 +434,7 @@ select is((select count(*) from pg_proc p join pg_namespace n on n.oid = p.prona
 -- 7. Settled somewhere else
 -- ============================================================================================================================
 select pg_temp.as_system();
-select is(pg_temp.report(jsonb_build_array(pg_temp.batch('B-9', 'UTR-0009', 1, 475000, jsonb_build_array(pg_temp.item('PAY-6', 475000)), 'XXXXXX9999'))), jsonb_build_object('recorded', 1, 'duplicates', 0, 'conflicts', 0),
+select is(pg_temp.report(jsonb_build_array(pg_temp.batch('B-9', 'SAMP000000000009', 1, 475000, jsonb_build_array(pg_temp.item('PAY-6', 475000)), 'XXXXXX9999'))), jsonb_build_object('recorded', 1, 'duplicates', 0, 'conflicts', 0),
   'the provider reports a batch whose destination is not the lender''s verified account');
 select pg_temp.as_owner();
 select is((select destination_ok from payments.settlement_batches where batch_ref = 'B-9'), false, 'it is marked as not the lender''s account');
@@ -442,7 +442,7 @@ select is((select status from payments.lender_payment_configs where id = pg_temp
 select is((select (severity, owner)::text from payments.reconciliation_exceptions where class = 'settlement_account_mismatch' and subject ->> 'settlement_batch_id' = (select id::text from payments.settlement_batches where batch_ref = 'B-9')), '(critical,platform)',
   'with a critical exception for the platform');
 select pg_temp.as_user(pg_temp.u(3));
-select payments.import_bank_credits(pg_temp.lx(), 'fde10000-0000-4000-8000-000000000001'::uuid, format('[{"valueDate":"%s","amountMinor":"475000","utr":"UTR-0009"}]', pg_temp.d())::jsonb);
+select payments.import_bank_credits(pg_temp.lx(), 'fde10000-0000-4000-8000-000000000001'::uuid, format('[{"valueDate":"%s","amountMinor":"475000","utr":"SAMP000000000009"}]', pg_temp.d())::jsonb);
 select pg_temp.as_system();
 select is(pg_temp.run() ->> 'run_no', '3', 'the next run is a new run');
 select pg_temp.as_owner();
