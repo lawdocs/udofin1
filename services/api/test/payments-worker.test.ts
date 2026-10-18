@@ -29,6 +29,7 @@ import {
 } from '../src/workers/outbox-worker.js';
 import {
   createPaymentsHandlers,
+  orderExpiry,
   OrderOutcomeUnresolvedError,
 } from '../src/workers/payments-handlers.js';
 import {
@@ -949,7 +950,7 @@ describe('payment.create_order', () => {
       expect(logs.text()).not.toContain('9100000000');
     });
 
-    it('the provider expiry is kept, but never longer than 30 days; with none the intent expiry, then one hour', async () => {
+    it('the provider may only shorten the payment period: the earlier of its expiry and the intent expiry is recorded and kept (A25, A55)', async () => {
       const withExpiry = (expiresAt: string | null): PaymentProviderPort => {
         const base = paymentPort();
         return {
@@ -965,12 +966,41 @@ describe('payment.create_order', () => {
       const stored = (p: FakeProcessor) =>
         (p.calls.find((c) => c[0] === 'storeHandoffLink')?.[1] as { expiresAt: string }).expiresAt;
 
+      const recorded = (p: FakeProcessor) =>
+        p.calls.find((c) => c[0] === 'recordOrderCreated')?.[3];
+
+      // A provider that ignores the requested expiry and answers with its own default (here 90 days) for an intent that lives one
+      // hour (a foreclosure quotation, say): the intent's own expiry is recorded and kept, never the provider's.
       const far = setup({}, { payment: withExpiry(plus(90 * DAY)) });
       await far.run('payment.create_order', { intent_id: INTENT });
-      expect(stored(far.processor)).toBe(plus(30 * DAY));
-      expect(far.processor.calls.find((c) => c[0] === 'recordOrderCreated')?.[3]).toBe(
-        plus(30 * DAY),
+      expect(recorded(far.processor)).toBe(plus(HOUR));
+      expect(stored(far.processor)).toBe(plus(HOUR));
+      expect(
+        far.logs.lines.some((l) => l.fields.why === 'provider_expiry_later_than_requested'),
+      ).toBe(true);
+
+      // A provider expiry between now and the intent expiry shortens the window, in the database and in the vault.
+      const shorter = setup({}, { payment: withExpiry(plus(HOUR / 2)) });
+      await shorter.run('payment.create_order', { intent_id: INTENT });
+      expect(recorded(shorter.processor)).toBe(plus(HOUR / 2));
+      expect(stored(shorter.processor)).toBe(plus(HOUR / 2));
+      expect(
+        shorter.logs.lines.some((l) => l.fields.why === 'provider_expiry_later_than_requested'),
+      ).toBe(false);
+
+      // The same expiry as the intent's is kept as it is.
+      const same = setup({}, { payment: withExpiry(plus(HOUR)) });
+      await same.run('payment.create_order', { intent_id: INTENT });
+      expect(recorded(same.processor)).toBe(plus(HOUR));
+
+      // With no expiry on the intent at all, the provider's is used but never beyond 30 days.
+      const unbounded = setup(
+        { intent: intentRecord({ linkExpiresAt: null }) },
+        { payment: withExpiry(plus(90 * DAY)) },
       );
+      await unbounded.run('payment.create_order', { intent_id: INTENT });
+      expect(recorded(unbounded.processor)).toBe(plus(30 * DAY));
+      expect(stored(unbounded.processor)).toBe(plus(30 * DAY));
 
       const fromIntent = setup(
         { intent: intentRecord({ linkExpiresAt: plus(2 * HOUR) }) },
@@ -1002,6 +1032,42 @@ describe('payment.create_order', () => {
       await run('payment.create_order', { intent_id: INTENT });
       expect(names(processor)).toEqual(['loadIntent', 'recordOrderCreated']);
     });
+  });
+});
+
+describe('orderExpiry: the provider may only shorten the payment period (A25, A55)', () => {
+  it('takes the earlier of the provider expiry and the intent expiry, and says when the provider was later', () => {
+    expect(orderExpiry(NOW, plus(90 * DAY), plus(2 * HOUR))).toEqual({
+      record: plus(2 * HOUR),
+      keep: plus(2 * HOUR),
+      providerLater: true,
+    });
+    expect(orderExpiry(NOW, plus(HOUR), plus(2 * HOUR))).toEqual({
+      record: plus(HOUR),
+      keep: plus(HOUR),
+      providerLater: false,
+    });
+    expect(orderExpiry(NOW, plus(2 * HOUR), plus(2 * HOUR)).providerLater).toBe(false);
+  });
+
+  it('records nothing of its own when the provider named no expiry, and keeps the intent one', () => {
+    expect(orderExpiry(NOW, null, plus(HOUR))).toEqual({
+      record: null,
+      keep: plus(HOUR),
+      providerLater: false,
+    });
+    expect(orderExpiry(NOW, 'not a time', plus(HOUR)).record).toBeNull();
+    expect(orderExpiry(NOW, null, null)).toEqual({
+      record: null,
+      keep: null,
+      providerLater: false,
+    });
+  });
+
+  it('caps a provider expiry at 30 days only where the intent has none, and passes a past time on', () => {
+    expect(orderExpiry(NOW, plus(90 * DAY), null).record).toBe(plus(30 * DAY));
+    expect(orderExpiry(NOW, plus(10 * DAY), null).record).toBe(plus(10 * DAY));
+    expect(orderExpiry(NOW, plus(-1000), plus(HOUR)).record).toBe(plus(-1000));
   });
 });
 

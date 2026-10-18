@@ -104,12 +104,34 @@ function isoOrNull(value: string | null): string | null {
   return Number.isNaN(time) ? null : new Date(time).toISOString();
 }
 
-/** The expiry recorded for an order: the provider's, never later than the longest a link may live. A past time is passed on and refused by the database. */
-function orderExpiry(now: Date, provider: string | null): string | null {
-  const iso = isoOrNull(provider);
-  if (iso === null) return null;
+/**
+ * The expiry recorded for an order and the one a stored link keeps. The payment period belongs to the intent (the lender's link
+ * validity, or a foreclosure quotation's remaining validity, whichever is sooner) and was sent to the provider as the wanted
+ * expiry. The provider may only SHORTEN it: a provider that ignores the request and answers with its own default (days) must not
+ * leave a checkout payable after the lender's period or the quotation ended. When the provider names none, the database keeps the
+ * intent's (`record` null). Without an intent expiry the provider's is used, never beyond the longest a link may live. A past
+ * time is passed on and refused by the database.
+ */
+export function orderExpiry(
+  now: Date,
+  providerExpiresAt: string | null,
+  intentExpiresAt: string | null,
+): {
+  readonly record: string | null;
+  readonly keep: string | null;
+  readonly providerLater: boolean;
+} {
+  const provider = isoOrNull(providerExpiresAt);
+  const intent = isoOrNull(intentExpiresAt);
+  if (provider === null) return { record: null, keep: intent, providerLater: false };
+  if (intent !== null) {
+    return Date.parse(provider) > Date.parse(intent)
+      ? { record: intent, keep: intent, providerLater: true }
+      : { record: provider, keep: provider, providerLater: false };
+  }
   const limit = now.getTime() + MAX_LINK_LIFE_MS;
-  return Date.parse(iso) > limit ? new Date(limit).toISOString() : iso;
+  const capped = Date.parse(provider) > limit ? new Date(limit).toISOString() : provider;
+  return { record: capped, keep: capped, providerLater: false };
 }
 
 /** When a stored link stops being served: the provider's expiry, else the fallback; undefined when that is already (almost) over. */
@@ -261,8 +283,15 @@ export function createPaymentsHandlers(
           reportedMerchant === null ? 'merchant_not_reported' : 'merchant_differs',
         );
       }
+      const expiry = orderExpiry(now(), expiresAt, intent.linkExpiresAt);
+      if (expiry.providerLater) {
+        log.info(
+          { ...fields, why: 'provider_expiry_later_than_requested' },
+          'the provider order expires later than the payment period; the payment period is kept',
+        );
+      }
       try {
-        await processor.recordOrderCreated(intent.id, orderRef, orderExpiry(now(), expiresAt));
+        await processor.recordOrderCreated(intent.id, orderRef, expiry.record);
       } catch (error) {
         const failure = databaseFailureOf(error);
         if (failure.code === 'P0002') throw new PermanentError('intent_not_found');
@@ -289,7 +318,7 @@ export function createPaymentsHandlers(
         'payment_intent',
         { id: intent.id, lenderOrgId: intent.lenderOrgId },
         created.checkoutLink,
-        created.expiresAt ?? intent.linkExpiresAt,
+        expiry.keep,
         PAYMENT_LINK_FALLBACK_MS,
         fields,
       );
