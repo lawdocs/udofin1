@@ -88,7 +88,7 @@ import {
 } from '../src/setup/wording.js';
 
 // These tests type into real forms; on a busy machine that can take longer than the defaults.
-configure({ asyncUtilTimeout: 8000 });
+configure({ asyncUtilTimeout: 20000 });
 vi.setConfig({ testTimeout: 30_000 });
 
 afterEach(() => {
@@ -2218,7 +2218,8 @@ describe('the callback token is shown once', () => {
     );
     expect(text(section)).toMatch(/The address of the callback service is not shown on this page/);
     expect(within(section).getByRole('button', { name: 'Copy the callback path' })).toBeTruthy();
-    expect(text(container)).toContain('The draft was saved.');
+    // The token section and the saved message are separate renders: wait for the message instead of assuming it came with the heading.
+    await waitFor(() => expect(text(container)).toContain('The draft was saved.'));
     const sent = (action.mock.calls[0] as unknown as [FormData])[0];
     expect(sent.get('op')).toBe('setup.config.draft');
     expect(sent.get('lenderId')).toBe(LENDER_A);
@@ -2303,7 +2304,11 @@ describe('the callback token is shown once', () => {
     await fillDraft(u);
     await u.click(screen.getByRole('button', { name: 'Save as a draft' }));
     await screen.findByText(CALLBACK_PATH);
-    // The form is empty again after a success, so it is filled in again.
+    // The form is empty again after a success, so it is filled in again. The token appears before the form is cleared: wait for the
+    // clearing, or the refill can be wiped by it and the second submission never happens.
+    await waitFor(() =>
+      expect(screen.getByLabelText<HTMLInputElement>('Name of the provider secret').value).toBe(''),
+    );
     await fillDraft(u);
     await u.click(screen.getByRole('button', { name: 'Save as a draft' }));
     expect((await screen.findByRole('alert')).textContent).toMatch(/NAME of a secret/);

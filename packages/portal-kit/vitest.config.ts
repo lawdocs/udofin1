@@ -5,7 +5,7 @@ export default defineConfig({
     include: ['test/**/*.test.tsx', 'test/**/*.test.ts'],
     environment: 'jsdom',
     globals: false,
-    // The form tests type into long forms with simulated keystrokes; a busy machine must not turn that into a failure.
-    testTimeout: 20_000,
+    // The form tests type into long forms with simulated keystrokes and render long lists; a starved CI runner must not fail them on time.
+    testTimeout: 30_000,
   },
 });

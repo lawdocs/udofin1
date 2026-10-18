@@ -99,7 +99,7 @@ import {
 } from '../src/reminders/wording.js';
 
 // These tests type into real forms; on a busy machine that can take longer than the defaults.
-configure({ asyncUtilTimeout: 8000 });
+configure({ asyncUtilTimeout: 20000 });
 vi.setConfig({ testTimeout: 30_000 });
 
 afterEach(cleanup);
