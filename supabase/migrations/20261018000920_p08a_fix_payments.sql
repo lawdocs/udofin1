@@ -708,10 +708,11 @@ begin
                           and c.existing_ref_id = r.id and c.status <> 'resolved')
      order by r.value_date limit 1;
   end if;
-  -- An open exception about the intent (but not the platform-side note about an order made for an intent the borrower cancelled: it names
-  -- the configuration as well), an amount that differs, money on an intent that is no longer open, or a refund or chargeback of the payment.
+  -- An open exception about the intent (but not the platform-side note about an order made for an intent the borrower cancelled: a
+  -- payment_status_conflict that names the configuration as well), an amount that differs, money on an intent that is no longer open, or a refund or chargeback of the payment.
   v_attention := exists (select 1 from payments.reconciliation_exceptions e
-                          where e.lender_org_id = i.lender_org_id and e.status <> 'resolved' and e.subject ->> 'intent_id' = i.id::text and not (e.subject ? 'config_id'))
+                          where e.lender_org_id = i.lender_org_id and e.status <> 'resolved' and e.subject ->> 'intent_id' = i.id::text
+                            and not (e.class = 'payment_status_conflict' and e.subject ? 'config_id'))
                  or (v_pp.id is not null and v_pp.amount_minor is distinct from i.amount_minor)
                  or (i.status in ('failed', 'expired', 'cancelled')
                      and exists (select 1 from payments.provider_payments pp
