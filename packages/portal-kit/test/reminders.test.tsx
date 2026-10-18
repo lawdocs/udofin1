@@ -304,14 +304,14 @@ function recorder(answer: unknown = {}) {
   return { api, calls, reads };
 }
 
-const KEY = 'ui-0190a000-0000-7000-8000-0000000009ff';
+const REQUEST_ID = 'ui-0190a000-0000-7000-8000-0000000009ff';
 function formOf(fields: Record<string, string | string[]>, withKey = true): FormData {
   const form = new FormData();
   for (const [name, value] of Object.entries(fields)) {
     if (Array.isArray(value)) for (const v of value) form.append(name, v);
     else form.append(name, value);
   }
-  if (withKey) form.set('key', KEY);
+  if (withKey) form.set('key', REQUEST_ID);
   return form;
 }
 
@@ -698,7 +698,7 @@ describe('the allow-listed operations', () => {
       expect(calls).toEqual([
         {
           path: '/v1/lender/reminder-policies',
-          key: KEY,
+          key: REQUEST_ID,
           body: {
             lenderId: LENDER_A,
             offsetsDays: [-3, -1, 0, 1],
@@ -787,7 +787,7 @@ describe('the allow-listed operations', () => {
       expect(calls).toEqual([
         {
           path: '/v1/lender/reminder-templates',
-          key: KEY,
+          key: REQUEST_ID,
           body: { lenderId: LENDER_A, kind: 'overdue', language: 'hi', body: base.body },
         },
       ]);
@@ -841,7 +841,7 @@ describe('the allow-listed operations', () => {
       expect(calls).toEqual([
         {
           path: '/v1/lender/penal-charge-texts',
-          key: KEY,
+          key: REQUEST_ID,
           body: {
             lenderId: LENDER_A,
             chargeKind: 'flat',
@@ -961,7 +961,7 @@ describe('the allow-listed operations', () => {
         expect(
           await runRemindersOperation(api, formOf({ op, id: POLICY, reviewed: 'on' })),
         ).toEqual({ ok: true });
-        expect(calls).toEqual([{ path, body: {}, key: KEY }]);
+        expect(calls).toEqual([{ path, body: {}, key: REQUEST_ID }]);
       },
     );
 
@@ -972,7 +972,7 @@ describe('the allow-listed operations', () => {
     ])('%s posts to its own route', async (op, path) => {
       const { api, calls } = recorder();
       expect(await runRemindersOperation(api, formOf({ op, id: POLICY }))).toEqual({ ok: true });
-      expect(calls).toEqual([{ path, body: {}, key: KEY }]);
+      expect(calls).toEqual([{ path, body: {}, key: REQUEST_ID }]);
     });
 
     it('refuses an id that is not an id, so nothing odd can be put in a path', async () => {
@@ -1007,7 +1007,7 @@ describe('the allow-listed operations', () => {
       expect(calls).toEqual([
         {
           path: `/v1/lender/loans/${LOAN}/communication-hold`,
-          key: KEY,
+          key: REQUEST_ID,
           body: { reason: 'dispute', note: 'paused' },
         },
       ]);
@@ -1052,11 +1052,11 @@ describe('the allow-listed operations', () => {
         formOf({ op: 'reminders.hold.release', id: HOLD, note: ' done ' }),
       );
       expect(calls).toEqual([
-        { path: `/v1/lender/communication-holds/${HOLD}/release`, body: {}, key: KEY },
+        { path: `/v1/lender/communication-holds/${HOLD}/release`, body: {}, key: REQUEST_ID },
         {
           path: `/v1/lender/communication-holds/${HOLD}/release`,
           body: { note: 'done' },
-          key: KEY,
+          key: REQUEST_ID,
         },
       ]);
     });

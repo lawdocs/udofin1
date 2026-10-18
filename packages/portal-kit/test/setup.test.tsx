@@ -1792,12 +1792,12 @@ describe('One configuration', () => {
       );
       expect(ops(container)).toEqual(['setup.config.decide']);
       const form = container.querySelector('input[name="op"]')?.closest('form') as HTMLFormElement;
-      const approve = within(form).getByRole('button', {
+      const approve = within(form).getByRole<HTMLButtonElement>('button', {
         name: 'Approve this configuration',
-      }) as HTMLButtonElement;
-      const reject = within(form).getByRole('button', {
+      });
+      const reject = within(form).getByRole<HTMLButtonElement>('button', {
         name: 'Reject this configuration',
-      }) as HTMLButtonElement;
+      });
       expect([approve.name, approve.value]).toEqual(['decision', 'approve']);
       expect([reject.name, reject.value]).toEqual(['decision', 'reject']);
       expect(within(form).getByLabelText<HTMLTextAreaElement>('Note').value).toBe('');

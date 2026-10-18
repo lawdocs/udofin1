@@ -38,12 +38,12 @@ const MODE_CHOICES: readonly Choice[] = [
 export function OneTimeToken({ drafted, clear }: { drafted: DraftedConfig; clear: () => void }) {
   const [copy, setCopy] = useState<'idle' | 'copied' | 'failed'>('idle');
   const copyPath = () => {
-    const write = globalThis.navigator?.clipboard?.writeText(drafted.callbackPath);
-    if (!write) {
+    const clipboard = globalThis.navigator?.clipboard;
+    if (typeof clipboard?.writeText !== 'function') {
       setCopy('failed');
       return;
     }
-    write.then(
+    clipboard.writeText(drafted.callbackPath).then(
       () => {
         setCopy('copied');
       },
