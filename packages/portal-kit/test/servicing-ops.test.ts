@@ -268,6 +268,7 @@ describe('wording', () => {
       'reversal_reference_invalid',
       'invalid_items',
       'inconsistent_report_head',
+      'invalid_validity',
       'duplicate_row',
       'conflicting_duplicate',
       'content_hash_mismatch',

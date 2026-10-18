@@ -135,6 +135,7 @@ const IMPORT_ERROR: Readonly<Record<string, string>> = {
     'A reversal must name the receipt it reverses, and a receipt must not.',
   invalid_items: 'The instalments of a schedule are not valid.',
   inconsistent_report_head: 'Rows of one schedule disagree about the loan or the report.',
+  invalid_validity: 'A validity time is not valid.',
   duplicate_row: 'The same record is repeated.',
   conflicting_duplicate: 'The same record appears more than once with different content.',
   content_hash_mismatch: 'A record did not pass the integrity check. Upload the file again.',
