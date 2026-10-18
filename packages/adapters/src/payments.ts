@@ -131,6 +131,12 @@ export interface NormalisedProviderEvent {
   readonly settlementRef?: string;
   /** The merchant the provider says this belongs to. Compared upstream with the lender's configuration. */
   readonly merchantRef?: string;
+  /**
+   * Refund and chargeback only: the provider's reference of the PAYMENT being refunded or disputed (not the refund's own
+   * `objectRef`). Without it the database books the compensating entry only when the intent has exactly one provider
+   * payment; with it, against the payment named.
+   */
+  readonly parentPaymentRef?: string;
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -472,6 +478,8 @@ export interface MockWebhookBodyFields {
   occurredAt: string;
   settlementRef?: string;
   merchantRef?: string;
+  /** Refund and chargeback: the provider's reference of the payment concerned. */
+  parentPaymentRef?: string;
 }
 
 /** Builds a mock-scheme body. Money is written as a decimal string through formatMoneyMinor. */
@@ -490,6 +498,7 @@ export function buildMockWebhookBody(fields: MockWebhookBodyFields): Uint8Array 
   if (fields.currency !== undefined && fields.currency !== null) body.currency = fields.currency;
   if (fields.settlementRef !== undefined) body.settlement_ref = fields.settlementRef;
   if (fields.merchantRef !== undefined) body.merchant_ref = fields.merchantRef;
+  if (fields.parentPaymentRef !== undefined) body.parent_payment_ref = fields.parentPaymentRef;
   return new Uint8Array(Buffer.from(JSON.stringify(body), 'utf8'));
 }
 
@@ -565,6 +574,7 @@ function verifyMockWebhook(
   const orderRef = optionalString(body, 'order_ref');
   const settlementRef = optionalString(body, 'settlement_ref');
   const merchantRef = optionalString(body, 'merchant_ref');
+  const parentPaymentRef = optionalString(body, 'parent_payment_ref');
   const objectKind = optionalString(body, 'object_kind');
   const statusText = optionalString(body, 'status');
   const amountText = optionalString(body, 'amount');
@@ -580,7 +590,9 @@ function verifyMockWebhook(
     settlementRef === undefined ||
     (settlementRef !== null && !IDENTIFIER.test(settlementRef)) ||
     merchantRef === undefined ||
-    (merchantRef !== null && !IDENTIFIER.test(merchantRef))
+    (merchantRef !== null && !IDENTIFIER.test(merchantRef)) ||
+    parentPaymentRef === undefined ||
+    (parentPaymentRef !== null && !IDENTIFIER.test(parentPaymentRef))
   ) {
     return invalid('invalid_identifier');
   }
@@ -646,6 +658,10 @@ function verifyMockWebhook(
       occurredAt,
       ...(settlementRef !== null ? { settlementRef } : {}),
       ...(merchantRef !== null ? { merchantRef } : {}),
+      // Only a refund or a chargeback concerns another object: no other kind carries a parent.
+      ...(parentPaymentRef !== null && (kind === 'refund' || kind === 'chargeback')
+        ? { parentPaymentRef }
+        : {}),
     },
   };
 }
@@ -739,9 +755,11 @@ export function buildMockDeliveries(
     currency: 'INR',
     ...extra,
   });
+  // A refund or a chargeback names the payment it concerns (parentPaymentRef): the provider's reference of that payment.
   const refund = (): DeliveryFields => ({
     objectKind: 'refund',
     objectRef: `${params.paymentRef}-REFUND`,
+    parentPaymentRef: params.paymentRef,
     status: 'refunded',
     amountMinor: params.amountMinor,
     currency: 'INR',
@@ -798,6 +816,7 @@ export function buildMockDeliveries(
         make('disputed', {
           objectKind: 'chargeback',
           objectRef: `${params.paymentRef}-DISPUTE`,
+          parentPaymentRef: params.paymentRef,
           status: 'disputed',
           amountMinor: params.amountMinor,
           currency: 'INR',

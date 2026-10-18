@@ -545,6 +545,239 @@ describe('LMS import file v1: receipts', () => {
   });
 });
 
+// The importer must be stricter than or equal to the database (private.servicing_ref_looks_personal and servicing_validate in
+// migration 20261018000925): what the database refuses, the importer refuses first, with the same class and field.
+describe('LMS import file v1: references that look personal (parity with the database)', () => {
+  const loanErrors = (change: Record<string, string>) =>
+    codes(parseLoans([{ ...LOAN_ROW, ...change }]).errors);
+  const RECEIPT_ROW: Record<string, string> = {
+    lms_loan_ref: 'SAMPLE-LOAN-0001',
+    lms_receipt_ref: 'SAMPLE-RCPT-0001',
+    receipt_kind: 'receipt',
+    reverses_receipt_ref: '',
+    amount: '4500.00',
+    value_date: '2026-10-05',
+    payment_mode: 'upi',
+    bank_reference: 'SAMPLE-BANKREF-0001',
+    source_record_id: 'SAMPLE-RCPT-0001',
+    reported_as_of: '2026-10-13T06:00:00Z',
+    sequence: '',
+  };
+  const receiptErrors = (change: Record<string, string>) =>
+    codes(
+      parseLmsImportFile(toCsv([{ ...RECEIPT_ROW, ...change }]), {
+        format: 'csv',
+        kind: 'receipt',
+        sourceSystem: 'file_import',
+        now: NOW,
+      }).errors,
+    );
+
+  // A small seeded generator: the same 3,000 identifiers on every run.
+  const seeded = (seed: number) => {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  };
+  const hex = (rand: () => number, n: number) =>
+    Array.from({ length: n }, () => '0123456789abcdef'[Math.floor(rand() * 16)]).join('');
+  const uuidLike = (rand: () => number) =>
+    `${hex(rand, 8)}-${hex(rand, 4)}-7${hex(rand, 3)}-${'89ab'[Math.floor(rand() * 4)] ?? '8'}${hex(rand, 3)}-${hex(rand, 12)}`;
+
+  it('the borrower reference is tested as a whole: a PAN-like run inside a longer reference is not a PAN', () => {
+    expect(loanErrors({ borrower_ref: 'abcde123-4f00-4000-8000-000000000001' })).toEqual([]);
+    expect(loanErrors({ borrower_ref: 'ABCDE123-4F00-4000-8000-000000000001' })).toEqual([]);
+    expect(loanErrors({ borrower_ref: 'LOANX2026B7' })).toEqual([]);
+    expect(loanErrors({ borrower_ref: 'SAMPLE-APP-1234' })).toEqual([]);
+  });
+
+  it('refuses a PAN as the whole borrower reference or as one part of it, in any case, and a number-shaped one', () => {
+    for (const ref of [
+      'ABCDE1234F',
+      'abcde1234f',
+      'PAN-ABCDE1234F',
+      'ABCDE-1234-F',
+      'x.abcde1234f',
+      '9876543210',
+      '98765-43210',
+      '123456789012',
+      '1234567890123456',
+    ]) {
+      expect(loanErrors({ borrower_ref: ref }), ref).toEqual([
+        '1:borrower_ref:borrower_ref_looks_personal',
+      ]);
+    }
+  });
+
+  it('none of 3,000 generated UUID-like references is refused, in any reference field of the loan', () => {
+    const rand = seeded(20261018);
+    const ids = Array.from({ length: 3000 }, () => uuidLike(rand));
+    // The set must exercise what the old unanchored test got wrong: some ids read like a PAN once their hyphens go.
+    const oldUnanchored = /[A-Za-z]{5}[0-9]{4}[A-Za-z]/;
+    expect(ids.filter((id) => oldUnanchored.test(id.replace(/-/g, ''))).length).toBeGreaterThan(0);
+    const rows = ids.map((id, n) => ({
+      ...LOAN_ROW,
+      lms_loan_ref: id,
+      borrower_ref: id,
+      disbursement_ref: id,
+      source_record_id: `SAMPLE-REC-${String(n + 1).padStart(5, '0')}`,
+    }));
+    const result = parseLoans(rows);
+    expect(result.errors).toEqual([]);
+    expect(result.importable).toBe(true);
+    expect(result.rows).toHaveLength(3000);
+    // and as the source record id (the other place an application id is written)
+    const asSource = parseLoans(
+      ids.map((id, n) => ({ ...LOAN_ROW, lms_loan_ref: `L-${String(n)}`, source_record_id: id })),
+    );
+    expect(asSource.errors).toEqual([]);
+  });
+
+  it('every other reference field refuses a PAN-shaped whole or part with ref_looks_personal, naming the field only', () => {
+    expect(loanErrors({ lms_loan_ref: 'ABCDE1234F' })).toEqual([
+      '1:lms_loan_ref:ref_looks_personal',
+    ]);
+    expect(loanErrors({ source_record_id: 'abcde1234f' })).toEqual([
+      '1:source_record_id:ref_looks_personal',
+    ]);
+    expect(loanErrors({ disbursement_ref: 'ABCDE1234F' })).toEqual([
+      '1:disbursement_ref:ref_looks_personal',
+    ]);
+    expect(loanErrors({ disbursement_ref: 'DISB:ABCDE1234F' })).toEqual([
+      '1:disbursement_ref:ref_looks_personal',
+    ]);
+    expect(receiptErrors({ lms_receipt_ref: 'ABCDE1234F' })).toEqual([
+      '1:lms_receipt_ref:ref_looks_personal',
+    ]);
+    expect(receiptErrors({ receipt_kind: 'reversal', reverses_receipt_ref: 'ABCDE1234F' })).toEqual(
+      ['1:reverses_receipt_ref:ref_looks_personal'],
+    );
+    expect(receiptErrors({ bank_reference: 'ABCDE1234F' })).toEqual([
+      '1:bank_reference:ref_looks_personal',
+    ]);
+    expect(receiptErrors({ payment_mode: 'abcde1234f' })).toEqual([
+      '1:payment_mode:ref_looks_personal',
+    ]);
+    // a numeric loan number is a valid loan reference (lenders number loans that way)
+    expect(loanErrors({ lms_loan_ref: '9876543210' })).toEqual([]);
+    // the offending value is never echoed
+    const echoed = JSON.stringify(parseLoans([{ ...LOAN_ROW, lms_loan_ref: 'ABCDE1234F' }]).errors);
+    expect(echoed).not.toContain('ABCDE1234F');
+  });
+
+  it('the schedule head follows the same rule', () => {
+    const result = parseLmsImportFile(
+      JSON.stringify([
+        {
+          lms_loan_ref: 'ABCDE1234F',
+          source_record_id: 'SAMPLE-SCH-1',
+          reported_as_of: '2026-10-13T06:00:00Z',
+          installments: [
+            { installment_seq: '1', due_date: '2026-11-05', principal: '10.00', interest: '1.00' },
+          ],
+        },
+      ]),
+      { format: 'json', kind: 'schedule', sourceSystem: 'file_import', now: NOW },
+    );
+    expect(codes(result.errors)).toEqual(['1:lms_loan_ref:ref_looks_personal']);
+  });
+
+  it('a payment mode is a short label: a run of 9 or more digits is refused, a name or a short number is not', () => {
+    for (const mode of ['9876543210', 'UPI/9876543210', 'UPI-98765-43210', '123456789']) {
+      expect(receiptErrors({ payment_mode: mode }), mode).toEqual([
+        '1:payment_mode:ref_looks_personal',
+      ]);
+    }
+    for (const mode of ['12345678', 'NEFT', 'cheque-2026']) {
+      expect(receiptErrors({ payment_mode: mode }), mode).toEqual([]);
+    }
+  });
+
+  it('a bank reference shaped like a mobile number or a 13 to 18 digit number is refused; a UPI RRN or an alphanumeric UTR is not', () => {
+    for (const ref of [
+      '9876543210',
+      '98765-43210',
+      '6123456789',
+      '1234567890123',
+      '12345678901234',
+      '123456789012345678',
+    ]) {
+      expect(receiptErrors({ bank_reference: ref }), ref).toEqual([
+        '1:bank_reference:ref_looks_personal',
+      ]);
+    }
+    for (const ref of [
+      '512345678901', // a 12-digit UPI RRN
+      '123456789', // 9 digits
+      '5234567890', // 10 digits, not a mobile start
+      '1234567890123456789', // 19 digits
+      'SBIN425012345678',
+      'SAMPLE-BANKREF-0001',
+    ]) {
+      expect(receiptErrors({ bank_reference: ref }), ref).toEqual([]);
+    }
+  });
+
+  it('refuses a receipt dated after the India-time day of its own report, with the field value_date', () => {
+    // 06:00 UTC on 13 October is 11:30 in India on the 13th
+    expect(receiptErrors({ value_date: '2026-10-13' })).toEqual([]);
+    expect(receiptErrors({ value_date: '2026-10-05' })).toEqual([]);
+    expect(receiptErrors({ value_date: '2026-10-14' })).toEqual([
+      '1:value_date:receipt_date_in_future',
+    ]);
+    expect(receiptErrors({ value_date: '2099-01-01' })).toEqual([
+      '1:value_date:receipt_date_in_future',
+    ]);
+  });
+
+  it('judges the day in India time at the edge of the day, whatever offset the report is written in', () => {
+    const at = (reported_as_of: string, value_date: string) =>
+      receiptErrors({ reported_as_of, value_date });
+    // 18:29:59 UTC is 23:59:59 in India on the 13th: the 14th is still ahead
+    expect(at('2026-10-13T18:29:59Z', '2026-10-14')).toEqual([
+      '1:value_date:receipt_date_in_future',
+    ]);
+    // 18:30:00 UTC is midnight in India, the 14th has begun
+    expect(at('2026-10-13T18:30:00Z', '2026-10-14')).toEqual([]);
+    expect(at('2026-10-13T18:30:00Z', '2026-10-15')).toEqual([
+      '1:value_date:receipt_date_in_future',
+    ]);
+    // the same instants written with an offset
+    expect(at('2026-10-14T00:00:00+05:30', '2026-10-14')).toEqual([]);
+    expect(at('2026-10-13T23:59:59+05:30', '2026-10-14')).toEqual([
+      '1:value_date:receipt_date_in_future',
+    ]);
+    expect(at('2026-10-13T20:00:00-01:00', '2026-10-14')).toEqual([]);
+  });
+
+  it('keeps the new classes in the value-free audit summary', () => {
+    const rejected = parseLmsImportFile(
+      toCsv([
+        { ...RECEIPT_ROW, lms_receipt_ref: 'ABCDE1234F', value_date: '2099-01-01' },
+        {
+          ...RECEIPT_ROW,
+          lms_receipt_ref: 'SAMPLE-RCPT-0002',
+          source_record_id: 'S2',
+          value_date: '2099-01-01',
+        },
+      ]),
+      { format: 'csv', kind: 'receipt', sourceSystem: 'file_import', now: NOW },
+    );
+    const summary = summariseImportFailure(rejected);
+    expect(summary.errors).toEqual([
+      // like the database, the date rule is judged only for a record whose fields are otherwise valid
+      { row: 1, codes: ['ref_looks_personal'], fields: ['lms_receipt_ref'] },
+      { row: 2, codes: ['receipt_date_in_future'], fields: ['value_date'] },
+    ]);
+    expect(JSON.stringify(summary)).not.toContain('ABCDE1234F');
+  });
+});
+
 describe('LMS import file v1: schedules', () => {
   const head = {
     lms_loan_ref: 'SAMPLE-LOAN-0001',

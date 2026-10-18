@@ -1,4 +1,8 @@
-import { LP_BANK_CREDIT_MAX_ROWS } from '@udofin/contracts';
+import {
+  LP_BANK_CREDIT_MAX_ROWS,
+  LP_RECEIPT_LAG_HOURS,
+  LP_SETTLEMENT_LAG_DAYS,
+} from '@udofin/contracts';
 import { OpForm, SelectField, TextField } from '../onboarding/forms.js';
 import { LenderPicker } from '../reminders/common.js';
 import { EmptyState } from '../states.js';
@@ -111,9 +115,26 @@ export function LpReconciliationRunsView({
 // ---------------------------------------------------------------------------------------------------------------
 // Report of one run
 // ---------------------------------------------------------------------------------------------------------------
+/** Batches whose destination the provider did not state: neither safe nor wrong, and they stop a zero from being evidence. */
+function UnstatedDestinationLine({ report }: { report: ReconSummary['report'] }) {
+  const { destinationUnstatedBatches: batches, destinationUnstatedMinor: gross } =
+    report.settlementEvidence;
+  const net = report.settlementEvidence.destinationUnstatedNetMinor;
+  if (batches === null || batches === 0) return null;
+  return (
+    <p>
+      Destination not stated: <strong>{lpCount(batches)} settlement batch(es)</strong>
+      {gross === null ? '' : `, ${lpRupees(gross)} gross`}
+      {net === null ? '' : ` (${lpRupees(net)} net)`}. The provider did not say which account the
+      money went to. These batches are not counted as settled to your account and are not counted as
+      settled elsewhere.
+    </p>
+  );
+}
+
 function NonLenderLine({ report }: { report: ReconSummary['report'] }) {
   const { items, minor } = report.settledToNonLender;
-  const noReport = report.notReconcilable.includes('settlement_reports');
+  const evidence = report.settlementEvidence;
   if (items === null || minor === null) {
     return (
       <p>
@@ -123,33 +144,65 @@ function NonLenderLine({ report }: { report: ReconSummary['report'] }) {
     );
   }
   if (items === 0 && minor === 0) {
+    // A zero is evidence only when the run says so: a settlement report existed and none of its batches lacked a verified
+    // destination. Anything else (including a report that does not record this) is a zero that proves nothing.
+    if (evidence.zeroIsEvidence === true) {
+      return (
+        <>
+          <p>
+            Nothing settled to another account: <strong>0 items, {lpRupees(0)}</strong>
+          </p>
+          <p className="muted">
+            Every settlement batch this run could check names your verified settlement account. That
+            is evidence for the settlement reports the provider gave, and only for those.
+          </p>
+        </>
+      );
+    }
+    const noReport =
+      report.notReconcilable.includes('settlement_reports') ||
+      evidence.settlementReportExists === false;
+    const unstated = (evidence.destinationUnstatedBatches ?? 0) > 0;
     return (
       <>
         <p>
-          Settled to a non-lender account: <strong>0 items, {lpRupees(0)}</strong>
+          Settled to another account: <strong>0 items, {lpRupees(0)}</strong> found. This is{' '}
+          <strong>not evidence</strong> that nothing was.
         </p>
         <p className="muted">
           {noReport
-            ? 'No provider settlement report was available to this run, so this line shows nothing yet. Zero here is not evidence.'
-            : 'Zero is the expected figure. It means none of the settlement reports this run could check names an account other than your verified settlement account. It covers only the inputs this run had.'}
+            ? 'No provider settlement report was available to this run, so there was nothing to check.'
+            : unstated
+              ? 'Some settlement batches did not state where the money went, so the run could not show that every batch went to your account.'
+              : evidence.zeroIsEvidence === null
+                ? 'This report does not record whether a settlement report existed or whether every batch stated its destination.'
+                : 'This run could not show that every settlement batch named your verified settlement account.'}
         </p>
+        <UnstatedDestinationLine report={report} />
       </>
     );
   }
   return (
-    <CriticalBanner title="Settled to a non-lender account">
-      <p>
-        <strong>
-          {lpCount(items)} item(s), {lpRupees(minor)}
-        </strong>{' '}
-        in provider settlements were reported to an account that is not your verified settlement
-        account. This is a critical finding. Look at the settlements and the exception queue now.
-      </p>
-      <p>
-        <a href="/reconciliation/settlements">Settlements</a> ·{' '}
-        <a href="/reconciliation/exceptions?severity=critical">Critical exceptions</a>
-      </p>
-    </CriticalBanner>
+    <>
+      <CriticalBanner title="Settled to a non-lender account">
+        <p>
+          <strong>
+            {lpCount(items)} item(s), {lpRupees(minor)}
+          </strong>{' '}
+          in provider settlements were reported to an account that is not your verified settlement
+          account
+          {evidence.offAccountNetMinor === null
+            ? ''
+            : ` (${lpRupees(evidence.offAccountNetMinor)} net was paid out)`}
+          . This is a critical finding. Look at the settlements and the exception queue now.
+        </p>
+        <p>
+          <a href="/reconciliation/settlements">Settlements</a> ·{' '}
+          <a href="/reconciliation/exceptions?severity=critical">Critical exceptions</a>
+        </p>
+      </CriticalBanner>
+      <UnstatedDestinationLine report={report} />
+    </>
   );
 }
 
@@ -215,6 +268,12 @@ export function LpReconciliationReportView({
                   ],
                 ]}
               />
+              {report.settings.abovePlatformDefault === true ? (
+                <p>
+                  At least one of these waiting times is longer than the platform’s default (3 days,
+                  72 hours). A longer wait delays the exception that tells you something is missing.
+                </p>
+              ) : null}
               <p className="muted">
                 Waiting times are unverified defaults until your organisation sets them from its
                 agreements with the provider and the bank.{' '}
@@ -253,7 +312,7 @@ function DestinationWords({ batch }: { batch: BatchRow }) {
       <>{`Your verified settlement account${batch.destinationMaskedRef ? ` (${batch.destinationMaskedRef})` : ''}`}</>
     );
   }
-  return <>Destination not reported</>;
+  return <>Destination not stated</>;
 }
 
 export function LpSettlementBatchesView({
@@ -594,7 +653,8 @@ export function LpReconciliationSettingsView({
                       your bank credit, and how many hours it waits for your loan system to post a
                       receipt, before it raises an exception. It applies to runs made after you save
                       it and changes no payment. The server checks the values and refuses what it
-                      does not accept.
+                      does not accept: the platform allows 1 to 7 days and 1 to 168 hours, and those
+                      limits are its own, not taken from any agreement.
                     </p>
                   </WhatItChanges>
                   <OpForm
@@ -608,14 +668,14 @@ export function LpReconciliationSettingsView({
                       name="settlementLagDays"
                       type="number"
                       required
-                      label="Days to wait for the provider’s settlement and your bank credit"
+                      label={`Days to wait for the provider’s settlement and your bank credit (${String(LP_SETTLEMENT_LAG_DAYS.min)} to ${String(LP_SETTLEMENT_LAG_DAYS.max)})`}
                       defaultValue={current ? String(current.settlementLagDays) : ''}
                     />
                     <TextField
                       name="receiptLagHours"
                       type="number"
                       required
-                      label="Hours to wait for your loan system to post a receipt"
+                      label={`Hours to wait for your loan system to post a receipt (${String(LP_RECEIPT_LAG_HOURS.min)} to ${String(LP_RECEIPT_LAG_HOURS.max)})`}
                       defaultValue={current ? String(current.receiptLagHours) : ''}
                     />
                     <ConfirmField label="I confirm that I want to change the waiting times of my organisation." />

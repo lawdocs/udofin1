@@ -31,3 +31,47 @@ describe('mapDatabaseError: the losing side of a concurrent change (A7)', () => 
     expect(mapDatabaseError(dbError('23514'))?.code).toBe('conflict');
   });
 });
+
+describe('mapDatabaseError: hints added by the servicing sync fixes (migration 925)', () => {
+  it('maps incoming_not_stored (55000) to a 409 with its own code and no message', () => {
+    const mapped = mapDatabaseError({
+      code: '55000',
+      hint: 'incoming_not_stored',
+      message: 'the incoming version must be stored first: LOAN-123',
+    });
+    expect([mapped?.status, mapped?.code, mapped?.detail]).toEqual([
+      409,
+      'incoming_not_stored',
+      undefined,
+    ]);
+  });
+
+  it('maps validity_too_long (22023) to a 422 with its own code and no message', () => {
+    const mapped = mapDatabaseError({
+      code: '22023',
+      hint: 'validity_too_long',
+      message: 'valid until 2027-12-31 is more than 31 days after the as-of date',
+    });
+    expect([mapped?.status, mapped?.code, mapped?.detail]).toEqual([
+      422,
+      'validity_too_long',
+      undefined,
+    ]);
+  });
+
+  it('does not map either hint under an unrelated SQLSTATE (the hint alone does not decide)', () => {
+    expect(mapDatabaseError(dbError('P0001', 'incoming_not_stored'))).toBeUndefined();
+    expect(mapDatabaseError(dbError('P0001', 'validity_too_long'))).toBeUndefined();
+  });
+});
+
+describe('mapDatabaseError: hints the reminders fixes rely on (migration 923)', () => {
+  it('maps a stale send report (55000 not_claimed), a note over the limit (22023 hold_invalid) and the wording refusal (22023 wording_invalid)', () => {
+    const stale = mapDatabaseError(dbError('55000', 'not_claimed'));
+    expect([stale?.status, stale?.code]).toEqual([409, 'not_claimed']);
+    const hold = mapDatabaseError(dbError('22023', 'hold_invalid'));
+    expect([hold?.status, hold?.code]).toEqual([422, 'hold_invalid']);
+    const wording = mapDatabaseError(dbError('22023', 'wording_invalid'));
+    expect([wording?.status, wording?.code]).toEqual([422, 'wording_invalid']);
+  });
+});

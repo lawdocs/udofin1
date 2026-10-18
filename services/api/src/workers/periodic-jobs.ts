@@ -8,6 +8,7 @@ import {
 } from '@udofin/adapters';
 import {
   createJobsStore,
+  NOT_CLAIMED,
   type ClaimedReminder,
   type ExpiryCandidate,
   type JobsStore,
@@ -230,7 +231,14 @@ export function createPeriodicJobs(
     await step('reminders', 'plan', async () => {
       planned = await store.planReminders();
     });
-    const tally = { claimed: 0, accepted: 0, not_configured: 0, failed: 0, unrecorded: 0 };
+    const tally = {
+      claimed: 0,
+      accepted: 0,
+      not_configured: 0,
+      failed: 0,
+      unrecorded: 0,
+      claim_lost: 0,
+    };
     await step('reminders', 'claim_and_send', async () => {
       for (let batch = 0; batch < CLAIM_BATCHES_PER_RUN && !stopping; batch += 1) {
         const claimed = await store.claimDueReminders(REMINDER_CLAIM_BATCH);
@@ -256,19 +264,31 @@ export function createPeriodicJobs(
       log.info({ job: 'reminders', planned, ...tally }, 'reminders processed');
   };
 
-  const deliverReminder = async (reminder: ClaimedReminder): Promise<ReminderSendState> => {
+  const deliverReminder = async (
+    reminder: ClaimedReminder,
+  ): Promise<ReminderSendState | 'claim_lost'> => {
     const result = await sendOnChannel(channels, reminder.channel, {
       id: reminder.reminderId,
       recipientRef: reminder.borrowerId,
       titleKey: 'reminder',
     });
     const record = reminderRecordOf(result);
-    await store.recordReminderAttempt(
+    const answer = await store.recordReminderAttempt(
       reminder.reminderId,
       record.state,
       record.providerRef,
       record.errorClass,
+      reminder.claimToken,
     );
+    if (answer === NOT_CLAIMED) {
+      // The claim is no longer ours (the lease ran out and the message was claimed again, or a hold stopped it). The database applied
+      // nothing: the message is not marked sent here and the report is not repeated. Whoever holds the claim now reports its own.
+      log.warn(
+        { job: 'reminders', reason: 'claim_no_longer_held', channel: reminder.channel },
+        'reminder report refused: the claim is no longer this worker’s',
+      );
+      return 'claim_lost';
+    }
     return record.state;
   };
 
@@ -653,7 +673,9 @@ export function createPeriodicJobs(
           log.warn({ job: 'mandates', ...errorFields(error) }, 'pre-debit notice was not recorded');
         }
       }
-      if (claimed.length < NOTICE_CLAIM_BATCH) break;
+      // Until a call returns nothing (bounded by the batches per run): a call may hand back fewer notices than the limit while more
+      // are claimable, so a short batch does not end the loop.
+      if (claimed.length === 0) break;
     }
     if (tally.claimed > 0) log.info({ job: 'mandates', ...tally }, 'pre-debit notices processed');
   };

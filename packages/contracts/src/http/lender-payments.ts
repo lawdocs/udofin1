@@ -53,6 +53,8 @@ export const LP_SETTLEMENT_STAGES = [
   'bank_confirmed',
   'lender_posted',
 ] as const;
+/** What a bank-confirmed stage rests on. Today the only basis is a credit the LENDER reported: Udofin has no bank statement of its own. */
+export const LP_BANK_CONFIRMATION_BASES = ['lender_reported_credit'] as const;
 export const LP_EVENT_OBJECT_KINDS = [
   'payment',
   'refund',
@@ -192,13 +194,15 @@ export const LpPaymentPage = Page(LpPaymentRow);
  * How far a successful provider payment has travelled, DERIVED from the tables (nothing sets a stage): the provider
  * captured it, the provider's settlement report lists it, the lender's bank credit matches, the lender's own receipt
  * carries our reference. `settlementDestinationOk` is false when the provider reported settling somewhere other than
- * the lender's verified account.
+ * the lender's verified account, and null when the provider did not state a destination. `bankConfirmationBasis` says what a
+ * confirmed bank stage rests on (null when it is not confirmed): the credit the lender reported, not a statement Udofin holds.
  */
 export const LpPaymentStage = z.strictObject({
   stage: z.enum(LP_SETTLEMENT_STAGES),
   providerCaptured: z.boolean(),
   providerSettled: z.boolean(),
   bankConfirmed: z.boolean(),
+  bankConfirmationBasis: z.enum(LP_BANK_CONFIRMATION_BASES).nullable(),
   lenderPosted: z.boolean(),
   settlementDestinationOk: z.boolean().nullable(),
 });
@@ -346,10 +350,20 @@ export const LpReconciliationSettings = z.strictObject({
 export const LpReconciliationSettingsList = z.strictObject({
   items: z.array(LpReconciliationSettings),
 });
+/**
+ * The waiting times, in the range the database accepts: 1 to 7 days and 1 to 168 hours. The ceilings are the platform's own
+ * limits and are not verified against any provider or bank agreement.
+ */
+export const LP_SETTLEMENT_LAG_DAYS = { min: 1, max: 7 } as const;
+export const LP_RECEIPT_LAG_HOURS = { min: 1, max: 168 } as const;
 export const LpReconciliationSettingsInput = z.strictObject({
   lenderId: Id,
-  settlementLagDays: z.number().int().min(0).max(100_000),
-  receiptLagHours: z.number().int().min(0).max(1_000_000),
+  settlementLagDays: z
+    .number()
+    .int()
+    .min(LP_SETTLEMENT_LAG_DAYS.min)
+    .max(LP_SETTLEMENT_LAG_DAYS.max),
+  receiptLagHours: z.number().int().min(LP_RECEIPT_LAG_HOURS.min).max(LP_RECEIPT_LAG_HOURS.max),
 });
 
 /** The answer of every settings write: the database function answered `set`. */
@@ -481,9 +495,25 @@ export const LpRunRow = z.strictObject({
 export const LpRunPage = Page(LpRunRow);
 
 /**
+ * What the standing line rests on. Zero settled to another account is evidence only when `zeroIsEvidence` is true: a
+ * settlement report exists and no batch lacks a verified destination. A batch whose destination the provider did not state
+ * is counted under `destinationUnstated*`; it is neither safe nor wrong, and it blocks the evidence. A field the report does
+ * not carry (a run made before this was recorded) is null, never zero, and a null `zeroIsEvidence` is not evidence.
+ */
+export const LpSettlementEvidence = z.strictObject({
+  settlementReportExists: z.boolean().nullable(),
+  offAccountBatches: z.number().int().min(0).nullable(),
+  offAccountNetMinor: z.number().int().min(0).nullable(),
+  destinationUnstatedBatches: z.number().int().min(0).nullable(),
+  destinationUnstatedMinor: z.number().int().min(0).nullable(),
+  destinationUnstatedNetMinor: z.number().int().min(0).nullable(),
+  zeroIsEvidence: z.boolean().nullable(),
+});
+
+/**
  * What the run could not check is listed in `notReconcilable`, never reported as reconciled. `settledToNonLender` is the
- * standing line: provider settlements reported to an account that is not the lender's verified one (items and paise);
- * anything other than zero is a critical finding.
+ * standing line: provider settlements reported to an account that is not the lender's verified one (items and gross paise
+ * of the batches); anything other than zero is a critical finding, and zero is evidence only as `settlementEvidence` says.
  */
 export const LpRunReport = z.strictObject({
   runDate: DateOnly.nullable(),
@@ -498,9 +528,12 @@ export const LpRunReport = z.strictObject({
     items: z.number().int().nullable(),
     minor: z.number().int().min(0).nullable(),
   }),
+  settlementEvidence: LpSettlementEvidence,
   settings: z.strictObject({
     settlementLagDays: z.number().int().nullable(),
     receiptLagHours: z.number().int().nullable(),
+    /** True when a waiting time is longer than the platform default (3 days, 72 hours); null when the run did not record it. */
+    abovePlatformDefault: z.boolean().nullable(),
   }),
 });
 

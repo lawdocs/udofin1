@@ -53,7 +53,7 @@ const STARTED = new Date(Date.now() - 2000);
 const RAIL_LIMITS = JSON.stringify({
   enach_api: { max_mandate_amount_minor: 5_000_000, needs_afa_each_debit: false },
 });
-const LOANS = 12;
+const LOANS = 13;
 const phone = () => `91${Math.floor(1_000_000_000 + Math.random() * 8_999_999_999)}`;
 const sha256 = (data: string | Uint8Array) => createHash('sha256').update(data).digest('hex');
 const UUID_RUN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
@@ -574,11 +574,13 @@ describe.skipIf(!enabled)('provider callback receiver over a real database', () 
     if (typeof value !== 'string') throw new Error('no event id');
     return value;
   };
+  // The replay namespace is one per payment configuration ('pc_' and the configuration id, migration 920): a delivery id is looked up
+  // by its own value, which is unique to the delivery.
   const seenCount = async (deliveryId: string) =>
     (
       await one<{ n: string }>(
-        `select count(*)::text as n from ops.seen_webhooks where source = 'provider_' || substr(md5($1::text), 1, 16) and message_id = $2`,
-        [PROVIDER, deliveryId],
+        `select count(*)::text as n from ops.seen_webhooks where source like 'pc\\_%' and message_id = $1`,
+        [deliveryId],
       )
     ).n;
   const outboxOf = (eventRowId: string) =>
@@ -620,6 +622,29 @@ describe.skipIf(!enabled)('provider callback receiver over a real database', () 
   }
   const noEventStored = async (delivery: MockDelivery) =>
     expect(await eventsByProviderId(eventIdOf(delivery))).toEqual([]);
+
+  /**
+   * The files share one database and others assert that no refund exists: a test that books one removes it again. The table is
+   * append-only, so the delete runs with triggers off, scoped to the payments of the one intent.
+   */
+  async function removeAdjustmentsOf(intent: string): Promise<void> {
+    const c = await admin.connect();
+    try {
+      await c.query('begin');
+      await c.query('set local session_replication_role = replica');
+      await c.query(
+        `delete from payments.payment_adjustments
+          where provider_payment_id in (select id from payments.provider_payments where intent_id = $1::uuid)`,
+        [intent],
+      );
+      await c.query('commit');
+    } catch (error) {
+      await c.query('rollback');
+      throw error;
+    } finally {
+      c.release();
+    }
+  }
 
   /** Stored event rows of this file: tracked so their outbox rows can be closed at the end. */
   async function trackEvent(providerEventId: string): Promise<string> {
@@ -868,6 +893,47 @@ describe.skipIf(!enabled)('provider callback receiver over a real database', () 
         amount_minor: '475000',
         payload_sha256: sha256(first.rawBody),
       });
+    });
+
+    it('a refund arrives with the reference of the payment it concerns, the database keeps it, and the compensating entry is booked against that payment', async () => {
+      const made = await pendingIntent(A, 12, 'refpar12');
+      const [captured, refunded] = deliveriesFor('refund', A, made, 'refpar12');
+      if (!captured || !refunded) throw new Error('scenario');
+      for (const delivery of [captured, refunded])
+        expect((await post(callbacks, A.token, delivery)).statusCode).toBe(200);
+      const capturedRow = await trackEvent(eventIdOf(captured));
+      const refundRow = await trackEvent(eventIdOf(refunded));
+      const parentOf = (event: string) =>
+        one<{ parent_payment_ref: string | null }>(
+          `select parent_payment_ref from payments.provider_events where id = $1`,
+          [event],
+        );
+      expect(await parentOf(refundRow)).toEqual({ parent_payment_ref: made.paymentRef });
+      expect(await parentOf(capturedRow)).toEqual({ parent_payment_ref: null });
+      const apply = (event: string) =>
+        workerPool.withSystem(async (tx) => {
+          const r = await tx.query<{ r: { outcome?: string } }>(
+            'select payments.apply_provider_event($1::uuid) as r',
+            [event],
+          );
+          return r.rows[0]?.r.outcome;
+        });
+      expect(await apply(capturedRow)).toBe('applied');
+      expect(await apply(refundRow)).toBe('applied');
+      try {
+        expect(
+          await q(
+            `select a.kind, a.amount_minor::text as amount_minor, p.provider_payment_ref
+               from payments.payment_adjustments a join payments.provider_payments p on p.id = a.provider_payment_id
+              where p.intent_id = $1`,
+            [made.intent],
+          ),
+        ).toEqual([
+          { kind: 'refund', amount_minor: '475000', provider_payment_ref: made.paymentRef },
+        ]);
+      } finally {
+        await removeAdjustmentsOf(made.intent);
+      }
     });
   });
 

@@ -240,6 +240,37 @@ describe('what a refusal may carry', () => {
     ]);
   });
 
+  it('names the two newer classes in the answer, and records the nearest class the database lists (it refuses an unknown one)', () => {
+    const errors = [
+      error({ rowNumber: 2, code: 'ref_looks_personal', field: 'lms_loan_ref' }),
+      error({ rowNumber: 3, code: 'receipt_date_in_future', field: 'value_date' }),
+    ];
+    // the audit function of the database (migration 911) answers 22023 for a code it does not list
+    expect(auditErrors(errors)).toEqual([
+      { row_no: 2, code: 'invalid_reference', field: 'lms_loan_ref' },
+      { row_no: 3, code: 'invalid_date', field: 'value_date' },
+    ]);
+    // the lender is told the real class
+    expect(groupRowErrors(errors).rows).toEqual([
+      {
+        rowNo: 2,
+        outcome: 'error',
+        errorCodes: ['ref_looks_personal'],
+        fieldNames: ['lms_loan_ref'],
+      },
+      {
+        rowNo: 3,
+        outcome: 'error',
+        errorCodes: ['receipt_date_in_future'],
+        fieldNames: ['value_date'],
+      },
+    ]);
+    // a name that is not a class at all (for example an object key) is neither audited nor shown
+    const hostile = [error({ code: 'constructor' as LmsImportError['code'] })];
+    expect(auditErrors(hostile)[0]?.code).toBe('malformed_file');
+    expect(groupRowErrors(hostile).rows[0]?.errorCodes).toEqual(['malformed_file']);
+  });
+
   it('caps the list at 1,000 entries and says so when grouping', () => {
     const many = Array.from({ length: 1500 }, (_, n) => error({ rowNumber: n + 1 }));
     expect(auditErrors(many)).toHaveLength(1000);

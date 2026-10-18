@@ -359,7 +359,7 @@ interface FakeProcessor extends PaymentsProcessor {
   intent: PaymentIntentRecord | undefined;
   mandate: MandateRecord | undefined;
   failures: Partial<Record<string, Error>>;
-  results: { handoff: string; applied: ApplyEventResult };
+  results: { handoff: string; applied: ApplyEventResult; order: string };
   /** Runs when a hand-off has been recorded: lets a test change the mandate as the borrower would while the provider call ran. */
   afterHandoff: (() => void) | undefined;
 }
@@ -374,7 +374,11 @@ function fakeProcessor(init: {
     intent: 'intent' in init ? init.intent : intentRecord(),
     mandate: 'mandate' in init ? init.mandate : mandateRecord(),
     failures: {},
-    results: { handoff: 'registration_pending', applied: { outcome: 'applied', reason: 'x' } },
+    results: {
+      handoff: 'registration_pending',
+      applied: { outcome: 'applied', reason: 'x' },
+      order: 'pending',
+    },
     afterHandoff: undefined,
     loadIntent(id) {
       calls.push(['loadIntent', id]);
@@ -384,8 +388,9 @@ function fakeProcessor(init: {
       calls.push(['recordOrderCreated', id, ref, expiry]);
       const failure = p.failures.recordOrderCreated;
       if (failure) return Promise.reject(failure);
-      if (p.intent) p.intent = { ...p.intent, status: 'pending', providerOrderRef: ref };
-      return Promise.resolve('pending');
+      if (p.intent && p.results.order === 'pending')
+        p.intent = { ...p.intent, status: 'pending', providerOrderRef: ref };
+      return Promise.resolve(p.results.order);
     },
     recordOrderFailed(id, reason: OrderFailureClass) {
       calls.push(['recordOrderFailed', id, reason]);
@@ -645,6 +650,25 @@ describe('payment.create_order', () => {
     await second.run('payment.create_order', { intent_id: INTENT });
     expect(again.created).toHaveLength(1); // one order at the provider, not two
     expect(names(second.processor).filter((n) => n === 'recordOrderCreated')).toHaveLength(2);
+  });
+
+  it('keeps no link when the database says the intent closed while the provider call ran (cancelled, failed or expired): the order is left at the provider and a closed reason is logged', async () => {
+    for (const closed of ['cancelled', 'failed', 'expired']) {
+      const provider = paymentPort();
+      const { processor, logs, run } = setup({}, { payment: provider });
+      processor.results.order = closed;
+      await run('payment.create_order', { intent_id: INTENT });
+      expect(provider.created, closed).toHaveLength(1);
+      expect(names(processor), closed).toEqual(['loadIntent', 'recordOrderCreated']);
+      expect(names(processor), closed).not.toContain('storeHandoffLink');
+      expect(logs.lines.at(-1), closed).toMatchObject({
+        level: 'warn',
+        fields: { intentStatus: closed, why: 'intent_not_pending' },
+      });
+      // neither the order nor the link reaches the log
+      expect(logs.text(), closed).not.toContain(`MOCK-ORDER-${INTENT}`);
+      expect(logs.text(), closed).not.toContain('https://');
+    }
   });
 
   it('an unknown intent is a permanent failure', async () => {
@@ -1457,18 +1481,53 @@ describe('mandate.cancel', () => {
     expect(logs.text()).not.toContain('MOCK-MANDATE-LIVE-1');
   });
 
-  it('sends nothing when no cancellation was requested, it was sent already, or the mandate is finished', async () => {
+  it('sends nothing when no cancellation was requested or it was sent already', async () => {
     for (const mandate of [
       { ...live(), cancelRequested: false },
       { ...live(), cancelSent: true },
-      { ...live(), status: 'cancelled' },
-      { ...live(), status: 'revoked' },
     ]) {
       const provider = await knowing();
       const { processor, run } = setup({ mandate }, { mandate: provider });
       await run('mandate.cancel', { mandate_id: MANDATE });
       expect(provider.cancelRequests).toHaveLength(0);
       expect(names(processor)).toEqual(['loadMandate']);
+    }
+  });
+
+  it('sends a requested cancellation that is still unsent whatever the status has become, once the provider has a reference (a late reference, a mandate that finished while the request waited)', async () => {
+    for (const status of [
+      'cancelled',
+      'revoked',
+      'rejected',
+      'expired',
+      'paused',
+      'requires_reconciliation',
+    ] as const) {
+      const provider = await knowing();
+      const { processor, logs, run } = setup(
+        { mandate: { ...live(), status } },
+        { mandate: provider },
+      );
+      await run('mandate.cancel', { mandate_id: MANDATE });
+      expect(provider.cancelRequests, status).toEqual([
+        { providerMandateRef: 'MOCK-MANDATE-LIVE-1', operationKey: MANDATE },
+      ]);
+      expect(names(processor), status).toEqual(['loadMandate', 'markMandateCancelSent']);
+      expect(logs.text()).not.toContain('MOCK-MANDATE-LIVE-1');
+    }
+  });
+
+  it('a finished mandate the provider holds no reference for has nothing to cancel there: nothing is sent and the job ends, it is not retried', async () => {
+    for (const status of ['cancelled', 'revoked', 'rejected', 'expired'] as const) {
+      const provider = await knowing();
+      const { processor, logs, run } = setup(
+        { mandate: { ...live(), status, providerMandateRef: null } },
+        { mandate: provider },
+      );
+      await run('mandate.cancel', { mandate_id: MANDATE });
+      expect(provider.cancelRequests, status).toHaveLength(0);
+      expect(names(processor), status).toEqual(['loadMandate']);
+      expect(logs.lines.at(-1)?.message).toContain('no reference to cancel');
     }
   });
 

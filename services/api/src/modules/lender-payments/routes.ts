@@ -297,6 +297,7 @@ interface ProviderPaymentRow {
   providerCaptured: boolean | null;
   providerSettled: boolean | null;
   bankConfirmed: boolean | null;
+  bankConfirmationBasis: string | null;
   lenderPosted: boolean | null;
   settlementDestinationOk: boolean | null;
 }
@@ -315,6 +316,7 @@ const PROVIDER_PAYMENT_COLUMNS = columns({
   providerCaptured: 's.provider_captured',
   providerSettled: 's.provider_settled',
   bankConfirmed: 's.bank_confirmed',
+  bankConfirmationBasis: 's.bank_confirmation_basis',
   lenderPosted: 's.lender_posted',
   settlementDestinationOk: 's.settlement_destination_ok',
 });
@@ -337,6 +339,7 @@ const mapProviderPayment = (r: ProviderPaymentRow) => ({
           providerCaptured: r.providerCaptured === true,
           providerSettled: r.providerSettled === true,
           bankConfirmed: r.bankConfirmed === true,
+          bankConfirmationBasis: r.bankConfirmationBasis,
           lenderPosted: r.lenderPosted === true,
           settlementDestinationOk: r.settlementDestinationOk,
         },
@@ -651,10 +654,22 @@ const DbReport = z.object({
   settled_to_non_lender: z
     .object({ items: z.number().int().optional(), minor: z.number().int().optional() })
     .optional(),
+  settlement_evidence: z
+    .object({
+      settlement_report_exists: z.boolean().optional(),
+      off_account_batches: z.number().int().optional(),
+      off_account_net_minor: z.number().int().optional(),
+      destination_unstated_batches: z.number().int().optional(),
+      destination_unstated_minor: z.number().int().optional(),
+      destination_unstated_net_minor: z.number().int().optional(),
+      zero_is_evidence: z.boolean().optional(),
+    })
+    .optional(),
   settings: z
     .object({
       settlement_lag_days: z.number().int().optional(),
       receipt_lag_hours: z.number().int().optional(),
+      above_platform_default: z.boolean().optional(),
     })
     .optional(),
 });
@@ -682,9 +697,21 @@ function mapReport(raw: unknown) {
       items: r.settled_to_non_lender?.items ?? null,
       minor: r.settled_to_non_lender?.minor ?? null,
     },
+    // What the standing line rests on. A key the run did not write (a run made before migration 922) is null, never zero or false:
+    // the portal treats only an explicit true as evidence.
+    settlementEvidence: {
+      settlementReportExists: r.settlement_evidence?.settlement_report_exists ?? null,
+      offAccountBatches: r.settlement_evidence?.off_account_batches ?? null,
+      offAccountNetMinor: r.settlement_evidence?.off_account_net_minor ?? null,
+      destinationUnstatedBatches: r.settlement_evidence?.destination_unstated_batches ?? null,
+      destinationUnstatedMinor: r.settlement_evidence?.destination_unstated_minor ?? null,
+      destinationUnstatedNetMinor: r.settlement_evidence?.destination_unstated_net_minor ?? null,
+      zeroIsEvidence: r.settlement_evidence?.zero_is_evidence ?? null,
+    },
     settings: {
       settlementLagDays: r.settings?.settlement_lag_days ?? null,
       receiptLagHours: r.settings?.receipt_lag_hours ?? null,
+      abovePlatformDefault: r.settings?.above_platform_default ?? null,
     },
   };
 }

@@ -15,6 +15,7 @@ import {
 } from '@udofin/adapters';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  NOT_CLAIMED,
   type ClaimedNotice,
   type ClaimedReminder,
   type ExpiryCandidate,
@@ -226,6 +227,16 @@ function jobs(
   return { instance, lines, registered, store };
 }
 
+/** A claim that hands the given notices out once and then nothing, as the database does (a claimed notice is not claimed again). */
+const claimOnce = <T>(items: readonly T[]) => {
+  let given = false;
+  return () => {
+    const batch = given ? [] : items;
+    given = true;
+    return Promise.resolve(batch);
+  };
+};
+
 const accepted: ChannelSendResult = { state: 'accepted' };
 const channelsOf = (inApp: ChannelSendResult, push: ChannelSendResult): ServiceChannels => ({
   in_app: { descriptor: createInAppInboxChannel().descriptor, send: () => Promise.resolve(inApp) },
@@ -337,6 +348,7 @@ describe('scheduling', () => {
       reminderId: ID(n),
       borrowerId: BORROWER,
       channel: 'in_app' as const,
+      claimToken: 1,
     }));
     let calls = 0;
     const { instance, store } = jobs({
@@ -405,10 +417,15 @@ describe('error isolation and the logging rule', () => {
 
 // ---- reminders --------------------------------------------------------------------------------------------------------------
 describe('reminders', () => {
-  const claimed = (channel: ClaimedReminder['channel'], n: number): ClaimedReminder => ({
+  const claimed = (
+    channel: ClaimedReminder['channel'],
+    n: number,
+    claimToken = 1,
+  ): ClaimedReminder => ({
     reminderId: ID(n),
     borrowerId: BORROWER,
     channel,
+    claimToken,
   });
 
   it('plans, claims, sends on in_app and push, records every attempt, and never calls anything for sms', async () => {
@@ -426,9 +443,9 @@ describe('reminders', () => {
       'claimDueReminders',
     ]);
     expect(store.called('recordReminderAttempt')).toEqual([
-      [ID(1), 'accepted', null, null],
-      [ID(2), 'accepted', 'mock-notice-1', null],
-      [ID(3), 'not_configured', null, null],
+      [ID(1), 'accepted', null, null, 1],
+      [ID(2), 'accepted', 'mock-notice-1', null, 1],
+      [ID(3), 'not_configured', null, null, 1],
     ]);
     // Only the opaque id and the fixed title key went to the push channel.
     expect(notifier.sent).toHaveLength(1);
@@ -449,7 +466,7 @@ describe('reminders', () => {
       const { instance } = jobs({ store, channels, environment });
       await instance.run('reminders');
       expect(store.called('recordReminderAttempt')).toEqual([
-        [ID(4), 'not_configured', null, null],
+        [ID(4), 'not_configured', null, null, 1],
       ]);
     }
   });
@@ -493,8 +510,8 @@ describe('reminders', () => {
     const { instance, lines } = jobs({ store, channels });
     await instance.run('reminders');
     expect(store.called('recordReminderAttempt')).toEqual([
-      [ID(5), 'failed', null, 'provider_error'],
-      [ID(6), 'not_configured', null, null],
+      [ID(5), 'failed', null, 'provider_error', 1],
+      [ID(6), 'not_configured', null, null, 1],
     ]);
     expect(lines.join('\n')).not.toContain('9876543210');
   });
@@ -513,6 +530,57 @@ describe('reminders', () => {
     expect(store.called('recordReminderAttempt')).toHaveLength(2);
     expect(lines.join('\n')).toContain('reminder attempt was not recorded');
     expect(lines.join('\n')).not.toContain('9123456780');
+  });
+
+  it('hands the token of each claim back with its report, so a retry (the second claim) reports its own', async () => {
+    const store = fakeStore({
+      claimDueReminders: () =>
+        Promise.resolve([claimed('in_app', 11, 1), claimed('in_app', 12, 2)]),
+    });
+    const { instance } = jobs({ store });
+    await instance.run('reminders');
+    expect(store.called('recordReminderAttempt').map((a) => [a[0], a[4]])).toEqual([
+      [ID(11), 1],
+      [ID(12), 2],
+    ]);
+  });
+
+  it('a report the database refuses because the claim is no longer ours is logged by a closed reason, not retried, not counted as sent, and the rest of the batch goes on', async () => {
+    const notifier = createMockNotifier('test');
+    const channels = createServiceChannels({ environment: 'test', push: notifier.channels.push });
+    // The database's answer for a stale token: the message was claimed again (token 2 is current) after this worker's lease ran out.
+    const current = new Map([[ID(21), 2]]);
+    const store = fakeStore({
+      claimDueReminders: () =>
+        Promise.resolve([
+          claimed('in_app', 21, 1),
+          claimed('in_app', 22, 1),
+          claimed('push', 23, 1),
+        ]),
+      recordReminderAttempt: (
+        id: string,
+        _state: string,
+        _ref: unknown,
+        _cls: unknown,
+        token: number,
+      ) => Promise.resolve(current.has(id) && current.get(id) !== token ? NOT_CLAIMED : 'accepted'),
+    });
+    const { instance, lines } = jobs({ store, channels });
+    await instance.run('reminders');
+    // each report was made exactly once: the refused one is not asked again
+    expect(store.called('recordReminderAttempt').map((a) => a[0])).toEqual([
+      ID(21),
+      ID(22),
+      ID(23),
+    ]);
+    const text = lines.join('\n');
+    expect(text).toContain('claim is no longer this worker');
+    expect(text).toContain('"reason":"claim_no_longer_held"');
+    expect(text).toContain('"claim_lost":1');
+    expect(text).toContain('"accepted":2');
+    expect(text).not.toContain('reminder attempt was not recorded');
+    // no identifier of the reminder reaches the log
+    expect(text).not.toContain(ID(21));
   });
 
   it('keeps asking while a full batch comes back, up to the cap', async () => {
@@ -1261,12 +1329,39 @@ describe('mandates', () => {
     const notifier = createMockNotifier('test');
     const channels = createServiceChannels({ environment: 'test', push: notifier.channels.push });
     const notices: ClaimedNotice[] = [{ noticeId: ID(70), borrowerId: BORROWER }];
-    const store = fakeStore({ claimPreDebitNotices: () => Promise.resolve(notices) });
+    const store = fakeStore({ claimPreDebitNotices: claimOnce(notices) });
     const { instance } = jobs({ store, channels });
     await instance.run('mandates');
     expect(notifier.sent).toHaveLength(1);
     expect(notifier.sent[0]?.payload).toEqual({ id: ID(70), titleKey: 'payment_update' });
     expect(store.called('recordPreDebitNotice')).toEqual([[ID(70), 'accepted', 'mock-notice-1']]);
+  });
+
+  it('keeps claiming pre-debit notices until a call returns nothing, even after a short batch, and stops at the cap (A22)', async () => {
+    const notice = (n: number): ClaimedNotice => ({ noticeId: ID(n), borrowerId: BORROWER });
+    const batches = [[notice(81), notice(82), notice(83)], [notice(84)], [notice(85)], []];
+    let call = 0;
+    const store = fakeStore({
+      claimPreDebitNotices: () => Promise.resolve(batches[call++] ?? []),
+    });
+    const { instance } = jobs({ store });
+    await instance.run('mandates');
+    expect(store.called('claimPreDebitNotices')).toHaveLength(4);
+    expect(store.called('recordPreDebitNotice').map((a) => a[0])).toEqual([
+      ID(81),
+      ID(82),
+      ID(83),
+      ID(84),
+      ID(85),
+    ]);
+
+    // A source that never runs dry is cut off at the batches allowed per run.
+    const endless = fakeStore({
+      claimPreDebitNotices: () => Promise.resolve([notice(86)]),
+    });
+    const capped = jobs({ store: endless });
+    await capped.instance.run('mandates');
+    expect(endless.called('claimPreDebitNotices')).toHaveLength(10);
   });
 
   const inApp = (result: ChannelSendResult) => ({ channel: 'in_app' as const, result });
@@ -1320,7 +1415,7 @@ describe('mandates', () => {
 
   it('with push not configured (staging, production) an accepted in-app message is NOT recorded as a notice that was sent (A54)', async () => {
     const store = fakeStore({
-      claimPreDebitNotices: () => Promise.resolve([{ noticeId: ID(72), borrowerId: BORROWER }]),
+      claimPreDebitNotices: claimOnce([{ noticeId: ID(72), borrowerId: BORROWER }]),
     });
     const channels = channelsOf(accepted, { state: 'not_configured' });
     const { instance, lines } = jobs({ store, channels });
@@ -1330,7 +1425,7 @@ describe('mandates', () => {
     expect(lines.join('\n')).toContain('"accepted":0');
     // A push that failed is released for a retry, not recorded as late and not as sent.
     const flaky = fakeStore({
-      claimPreDebitNotices: () => Promise.resolve([{ noticeId: ID(73), borrowerId: BORROWER }]),
+      claimPreDebitNotices: claimOnce([{ noticeId: ID(73), borrowerId: BORROWER }]),
     });
     await jobs({
       store: flaky,
@@ -1341,7 +1436,7 @@ describe('mandates', () => {
 
   it('a notice no channel could carry is recorded as not_configured and the delivery is never claimed', async () => {
     const store = fakeStore({
-      claimPreDebitNotices: () => Promise.resolve([{ noticeId: ID(71), borrowerId: BORROWER }]),
+      claimPreDebitNotices: claimOnce([{ noticeId: ID(71), borrowerId: BORROWER }]),
     });
     const channels = channelsOf({ state: 'not_configured' }, { state: 'not_configured' });
     const { instance } = jobs({ store, channels });
@@ -1649,7 +1744,9 @@ describe('nothing personal in a log line', () => {
     const store = fakeStore({
       planReminders: () => Promise.reject(new Error(canaries.join(' '))),
       claimDueReminders: () =>
-        Promise.resolve([{ reminderId: ID(1), borrowerId: BORROWER, channel: 'push' }]),
+        Promise.resolve([
+          { reminderId: ID(1), borrowerId: BORROWER, channel: 'push', claimToken: 1 },
+        ]),
       expiryCandidates: () =>
         Promise.resolve({
           cutoff: 'x',
@@ -1712,6 +1809,7 @@ describe('servicing event handlers', () => {
       'servicing.import.committed',
       'servicing.loan_closed',
       'servicing.sync_conflict.opened',
+      'servicing.sync_quarantine.opened',
     ]);
   });
 
@@ -1731,6 +1829,19 @@ describe('servicing event handlers', () => {
     const conflict = handlers['servicing.sync_conflict.opened']?.schema;
     expect(conflict?.safeParse({ conflict_id: ID(1), lender_org_id: LENDER }).success).toBe(true);
     expect(conflict?.safeParse({ conflict_id: ID(1) }).success).toBe(false);
+    const quarantine = handlers['servicing.sync_quarantine.opened']?.schema;
+    expect(quarantine?.safeParse({ quarantine_id: ID(1), lender_org_id: LENDER }).success).toBe(
+      true,
+    );
+    expect(quarantine?.safeParse({ quarantine_id: ID(1) }).success).toBe(false);
+    expect(quarantine?.safeParse({ lender_org_id: LENDER }).success).toBe(false);
+    expect(
+      quarantine?.safeParse({ quarantine_id: 'not-a-uuid', lender_org_id: LENDER }).success,
+    ).toBe(false);
+    expect(
+      quarantine?.safeParse({ quarantine_id: ID(1), lender_org_id: LENDER, loan_ref: 'L-1' })
+        .success,
+    ).toBe(false);
   });
 
   it('servicing.loan_closed suppresses the loan reminders and requests mandate cancellation, in one call', async () => {
@@ -1766,6 +1877,22 @@ describe('servicing event handlers', () => {
       event,
     );
     expect(store.calls).toHaveLength(0);
+  });
+
+  it('servicing.sync_quarantine.opened is acknowledged, touches nothing and logs the two ids only', async () => {
+    const store = fakeStore();
+    const { log, lines } = captureLog();
+    const payload = { quarantine_id: ID(7), lender_org_id: LENDER };
+    await handlersOf(store, log)['servicing.sync_quarantine.opened']?.run(payload, event);
+    expect(store.calls).toHaveLength(0);
+    expect(lines).toHaveLength(1);
+    const entry = JSON.parse(lines[0] ?? '{}') as { f: Record<string, unknown> };
+    // nothing beyond the event name and the two ids is carried into the log line
+    expect(entry.f).toEqual({
+      event: 'servicing.sync_quarantine.opened',
+      quarantine: ID(7),
+      lender: LENDER,
+    });
   });
 
   it('a database failure is raised, so the worker retries the event', async () => {

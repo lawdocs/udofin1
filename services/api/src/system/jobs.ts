@@ -18,7 +18,15 @@ export interface ClaimedReminder {
   readonly reminderId: string;
   readonly borrowerId: string;
   readonly channel: ReminderChannelName;
+  /**
+   * The attempt number of THIS claim (servicing.claim_due_reminders, migration 923). The report of what was sent hands it back: when
+   * the lease ran out and another worker claimed the message since, the database refuses the late report instead of applying it.
+   */
+  readonly claimToken: number;
 }
+
+/** What `recordReminderAttempt` answers when the database refused the report because the claim is no longer this worker's. */
+export const NOT_CLAIMED = 'not_claimed';
 
 /** The states servicing.record_reminder_attempt accepts for source `send`. */
 export type ReminderSendState = 'accepted' | 'failed' | 'not_configured';
@@ -106,11 +114,17 @@ export interface JobsStore {
   // Reminders
   planReminders(): Promise<number>;
   claimDueReminders(limit: number): Promise<readonly ClaimedReminder[]>;
+  /**
+   * Reports what the channel answered for a claimed message. The answer is the state recorded, `duplicate` for a repeated report, or
+   * `not_claimed` when the claim is no longer this worker's (the message was claimed again, or a hold stopped it): nothing was
+   * recorded then and the report must not be retried.
+   */
   recordReminderAttempt(
     reminderId: string,
     state: ReminderSendState,
     providerRef: string | null,
     errorClass: ReminderErrorClass | null,
+    claimToken: number,
   ): Promise<string>;
   // Payments upkeep
   expiryCandidates(graceSeconds: number, limit: number): Promise<ExpiryCandidates>;
@@ -272,22 +286,36 @@ export function createJobsStore(pool: SystemPool): JobsStore {
       return count(await scalar<number>('select servicing.plan_reminders() as r'));
     },
     async claimDueReminders(limit) {
-      const claimed = await rows<{ reminder_id: string; borrower_id: string; channel: string }>(
-        'select reminder_id, borrower_id, channel from servicing.claim_due_reminders($1::integer)',
+      const claimed = await rows<{
+        reminder_id: string;
+        borrower_id: string;
+        channel: string;
+        claim_token: number;
+      }>(
+        'select reminder_id, borrower_id, channel, claim_token from servicing.claim_due_reminders($1::integer)',
         [limit],
       );
       return claimed.map((row) => ({
         reminderId: row.reminder_id,
         borrowerId: row.borrower_id,
         channel: reminderChannel(row.channel),
+        claimToken: row.claim_token,
       }));
     },
-    async recordReminderAttempt(reminderId, state, providerRef, errorClass) {
-      const answer = await scalar<string>(
-        `select servicing.record_reminder_attempt($1::uuid, $2, 'send', $3, $4) as r`,
-        [reminderId, state, providerRef, errorClass],
-      );
-      return answer ?? 'unknown';
+    async recordReminderAttempt(reminderId, state, providerRef, errorClass, claimToken) {
+      try {
+        const answer = await scalar<string>(
+          `select servicing.record_reminder_attempt($1::uuid, $2, 'send', $3, $4, $5::integer) as r`,
+          [reminderId, state, providerRef, errorClass, claimToken],
+        );
+        return answer ?? 'unknown';
+      } catch (error) {
+        // 55000 not_claimed: the message was claimed again since (the lease ran out) or a hold stopped it. The report is refused and
+        // changes nothing; it is not an error of this worker and asking again cannot change the answer.
+        const failure = error as { code?: unknown; hint?: unknown } | null;
+        if (failure?.code === '55000' && failure.hint === 'not_claimed') return NOT_CLAIMED;
+        throw error;
+      }
     },
 
     // -- Payments upkeep ------------------------------------------------------------------------------------------------

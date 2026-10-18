@@ -881,7 +881,7 @@ export function lenderRemindersRoutes(_deps: Record<string, never>): RouteDefini
       operationId: 'releaseLenderCommunicationHold',
       summary: 'Release a hold',
       description:
-        'Needs reminder.policy.manage of the lender and a second factor. Messages suppressed during the hold stay suppressed; new ones are planned from the next planner run. Send {} when there is no note; a note is 10 to 200 characters. A hold already released answers already_released (409); a hold of another lender or an unknown id answers 404.',
+        'Needs reminder.policy.manage of the lender and a second factor. Releasing the hold resumes the messages it suppressed that are scheduled AFTER the release and belong to the approved policy; a message whose time passed during the hold stays suppressed, so nothing goes out late because a hold ended. New messages are planned from the next planner run. Send {} when there is no note; a note is 10 to 200 characters (longer or shorter is validation_failed, 422) and is checked as plain service text (hold_invalid, 422). A hold already released answers already_released (409); a hold of another lender or an unknown id answers 404.',
       tags: ['Reminders (lender)'],
       auth: 'staff',
       idempotent: true,

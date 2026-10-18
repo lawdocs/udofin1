@@ -2569,7 +2569,11 @@ describe.skipIf(!enabled)('borrower payments and mandates over HTTP', () => {
     });
 
     it('lists the debits with the notice state, newest first, and nothing the provider alone knows', async () => {
-      const mandate = state.active;
+      // A mandate of its own: state.active had its cancellation requested earlier in this file, and a mandate with a request shows
+      // no next debit (A52, M45).
+      const mandate = await newMandate('a4', 'm9');
+      await mandateLifecycle.handoff(mandate);
+      await mandateLifecycle.lookup(mandate, 'active');
       const lender = A.id;
       const snapshot = randomUUID();
       const debits: {
@@ -2613,7 +2617,9 @@ describe.skipIf(!enabled)('borrower payments and mandates over HTTP', () => {
           ref: `DBT-${RUN}-3`,
         },
         {
-          on: `${IST_TODAY} + 2`,
+          // The lender's newest report in this file says the next installment falls due three days from now: a planned debit for an
+          // earlier day would be shown as already paid (and is not offered as the next debit), so the first planned debit is on that day.
+          on: `${IST_TODAY} + 3`,
           planned: true,
           seq: 1,
           status: 'notified',
@@ -2623,7 +2629,7 @@ describe.skipIf(!enabled)('borrower payments and mandates over HTTP', () => {
           ref: null,
         },
         {
-          on: `${IST_TODAY} + 32`,
+          on: `${IST_TODAY} + 33`,
           planned: true,
           seq: 2,
           status: 'scheduled',
@@ -2646,7 +2652,7 @@ describe.skipIf(!enabled)('borrower payments and mandates over HTTP', () => {
               id,
               lender,
               mandate,
-              loanOf('a4', 'm6'),
+              loanOf('a4', 'm9'),
               d.planned,
               d.planned ? snapshot : null,
               d.seq,
@@ -2697,14 +2703,42 @@ describe.skipIf(!enabled)('borrower payments and mandates over HTTP', () => {
         (await get(`/v1/mandates/${mandate}`, person('a4').user)).json(),
       );
       expect(detail).toMatchObject({ nextDebitMinor: 475_000, nextDebitNotified: true });
-      expect(detail.nextDebitOn).toBe(await dayPlus(2));
+      expect(detail.nextDebitOn).toBe(await dayPlus(3));
+      // Once the borrower asks to cancel, nothing is taken any more: the planned debits stay on record but no next debit is shown (A52).
+      const asked = await post(`/v1/mandates/${mandate}/cancel`, person('a4').user, {});
+      expect(asked.statusCode, asked.body).toBe(202);
+      const afterRequest = BpMandate.parse(
+        (await get(`/v1/mandates/${mandate}`, person('a4').user)).json(),
+      );
+      expect(afterRequest).toMatchObject({
+        cancelRequested: true,
+        nextDebitOn: null,
+        nextDebitMinor: null,
+        nextDebitNotified: null,
+      });
+      // and the same through the list
+      expect(
+        BpMandateList.parse((await get('/v1/mandates', person('a4').user)).json()).items.find(
+          (m) => m.id === mandate,
+        ),
+      ).toMatchObject({ nextDebitOn: null, nextDebitMinor: null, nextDebitNotified: null });
     });
 
-    it('a lender whose mandates switch goes off hides every mandate route, and it comes back when the switch does', async () => {
-      const id = await newMandate('b1', 'two');
-      expect(BpMandate.parse((await get(`/v1/mandates/${id}`, person('b1').user)).json()).id).toBe(
-        id,
-      );
+    it('a lender whose mandates switch goes off keeps a live mandate listed and readable, hides a finished one and the options, and it all comes back when the switch does', async () => {
+      // A mandate that is not over stays visible (and cancellable) so the borrower is never left with one they cannot see; a
+      // finished mandate of that lender is hidden; nothing new can be started (U9).
+      const live = await newMandate('b1', 'two');
+      const finished = await newMandate('b1', 'three');
+      await mandateLifecycle.handoff(finished);
+      await mandateLifecycle.lookup(finished, 'rejected');
+      const listed = async () =>
+        BpMandateList.parse((await get('/v1/mandates', person('b1').user)).json()).items.map(
+          (m) => m.id,
+        );
+      expect(await listed()).toEqual(expect.arrayContaining([live, finished]));
+      expect(
+        BpMandate.parse((await get(`/v1/mandates/${live}`, person('b1').user)).json()).id,
+      ).toBe(live);
       const flip = (enabled: boolean) =>
         replica(async (c) => {
           await c.query(
@@ -2714,13 +2748,21 @@ describe.skipIf(!enabled)('borrower payments and mandates over HTTP', () => {
         });
       await flip(false);
       try {
-        expect(
-          BpMandateList.parse((await get('/v1/mandates', person('b1').user)).json()).items.some(
-            (m) => m.id === id,
-          ),
-        ).toBe(false);
-        expectProblem(await get(`/v1/mandates/${id}`, person('b1').user), 404, 'not_found');
-        expectProblem(await get(`/v1/mandates/${id}/debits`, person('b1').user), 404, 'not_found');
+        const whileOff = await listed();
+        expect(whileOff).toContain(live);
+        expect(whileOff).not.toContain(finished);
+        const detail = await get(`/v1/mandates/${live}`, person('b1').user);
+        expect(detail.statusCode, detail.body).toBe(200);
+        expect(BpMandate.parse(detail.json())).toMatchObject({ id: live, status: 'draft' });
+        const debits = await get(`/v1/mandates/${live}/debits`, person('b1').user);
+        expect(debits.statusCode, debits.body).toBe(200);
+        expect(BpMandateDebitList.parse(debits.json()).items).toEqual([]);
+        expectProblem(await get(`/v1/mandates/${finished}`, person('b1').user), 404, 'not_found');
+        expectProblem(
+          await get(`/v1/mandates/${finished}/debits`, person('b1').user),
+          404,
+          'not_found',
+        );
         expectProblem(
           await get(`/v1/loans/${loanOf('b1', 'two')}/mandate-options`, person('b1').user),
           404,
@@ -2729,9 +2771,10 @@ describe.skipIf(!enabled)('borrower payments and mandates over HTTP', () => {
       } finally {
         await flip(true);
       }
-      expect(BpMandate.parse((await get(`/v1/mandates/${id}`, person('b1').user)).json()).id).toBe(
-        id,
-      );
+      expect(await listed()).toEqual(expect.arrayContaining([live, finished]));
+      expect(
+        BpMandate.parse((await get(`/v1/mandates/${finished}`, person('b1').user)).json()).status,
+      ).toBe('rejected');
     });
   });
 
