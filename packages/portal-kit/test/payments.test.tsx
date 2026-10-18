@@ -20,7 +20,8 @@ import {
   LP_ADJUSTMENT_KINDS,
   LpPaymentListQuery,
 } from '@udofin/contracts';
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { userEvent } from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { type ZodType } from 'zod';
 import {
@@ -1144,6 +1145,7 @@ describe('payment detail: four separate stages', () => {
     expect(text(row(container, 'Provider captured'))).toContain('Recorded');
     expect(text(row(container, 'Provider captured'))).toContain('verified event');
     expect(text(row(container, 'Provider settled'))).toContain('No record yet');
+    expect(text(row(container, 'Provider settled'))).toContain('same reference and amount');
     expect(text(row(container, 'Bank confirmed'))).toContain('No record yet');
     expect(text(row(container, 'Lender posted'))).toContain('No record yet');
     expect(text(row(container, 'Lender posted'))).toContain('receipt from your own loan system');
@@ -1608,6 +1610,8 @@ describe('reconciliation', () => {
       <LpReconciliationReportView summary={ok(summary())} date="2026-10-16" />,
     );
     expect(text(container)).toContain('Settled to a non-lender account: 0 items, ₹0.00');
+    expect(text(container)).toContain('Zero is the expected figure');
+    expect(text(container)).not.toContain('Zero here is not evidence');
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
@@ -1619,6 +1623,7 @@ describe('reconciliation', () => {
       />,
     );
     expect(text(container)).toContain('Zero here is not evidence');
+    expect(text(container)).not.toContain('Zero is the expected figure');
   });
 
   it('raises a critical banner when anything settled to a non-lender account', () => {
@@ -2298,5 +2303,232 @@ describe('accessibility', () => {
       </>,
     );
     expect(container.querySelector('[style]')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// The browser looks at the first line of a statement; the server action and the API still decide.
+// ---------------------------------------------------------------------------------------------------------------
+describe('bank statement: the first line is checked in the browser', () => {
+  const accounts = ok({
+    items: [
+      {
+        settlementAccountId: uid(4),
+        lenderId: LENDER,
+        maskedRef: 'XXXXXX4321',
+        verificationStatus: 'verified' as const,
+        effectiveFrom: '2026-01-01',
+        effectiveTo: null,
+        usable: true,
+      },
+    ],
+  });
+  const show = () =>
+    render(
+      <LpBankCreditUploadView
+        accounts={accounts}
+        ctx={ctx(['payment.reconcile'], { returnTo: '/reconciliation/bank-credits' })}
+      />,
+    );
+  const paste = (value: string) =>
+    fireEvent.change(screen.getByLabelText('Or paste the statement text'), { target: { value } });
+  const BAD = 'valueDate,amountMinor,utr,narration\n2026-10-15,100,UTR-TEST-0001\n';
+  const GOOD = 'utr,valueDate,amountMinor\nUTR-TEST-0001,2026-10-15,100\n';
+
+  it('says nothing while there is nothing to look at', () => {
+    const { container } = show();
+    expect(text(container)).not.toContain('Problem with the first line');
+    expect(text(container)).not.toContain('The first line names the three columns');
+    paste('   ');
+    expect(text(container)).not.toContain('Problem with the first line');
+  });
+
+  it('warns about another column, in words, and says the whole file would be refused', () => {
+    const { container } = show();
+    paste(BAD);
+    const body = text(container);
+    expect(body).toContain('Problem with the first line');
+    expect(body).toContain('Any other column makes the server refuse the whole file');
+    expect(body).toContain('Nothing has been sent yet');
+    expect(body).not.toContain('The first line names the three columns');
+    // A warning only: the server decides, so the form can still be sent.
+    expect(
+      (screen.getByRole('button', { name: 'Upload the bank credits' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+  });
+
+  it('accepts exactly the three columns in any order, and still says the server decides', () => {
+    const { container } = show();
+    paste(GOOD);
+    expect(text(container)).toContain('The first line names the three columns');
+    expect(text(container)).toContain('The server still checks every line and decides');
+    expect(text(container)).not.toContain('Problem with the first line');
+  });
+
+  it('changes its mind when the text changes', () => {
+    const { container } = show();
+    paste(BAD);
+    expect(text(container)).toContain('Problem with the first line');
+    paste(GOOD);
+    expect(text(container)).not.toContain('Problem with the first line');
+    paste('');
+    expect(text(container)).not.toContain('The first line names the three columns');
+  });
+
+  it('reads the first line of a chosen file', async () => {
+    const user = userEvent.setup();
+    const { container } = show();
+    await user.upload(
+      screen.getByLabelText('Statement file (CSV)'),
+      new File([GOOD], 'statement.csv', { type: 'text/csv' }),
+    );
+    expect(await screen.findByText(/The first line names the three columns/)).toBeTruthy();
+    expect(text(container)).not.toContain('Problem with the first line');
+  });
+
+  it('warns about a chosen file with another column', async () => {
+    const user = userEvent.setup();
+    show();
+    await user.upload(
+      screen.getByLabelText('Statement file (CSV)'),
+      new File([BAD], 'statement.csv', { type: 'text/csv' }),
+    );
+    expect(await screen.findByText('Problem with the first line.')).toBeTruthy();
+  });
+
+  it('looks only at the start of a very large file', async () => {
+    const user = userEvent.setup();
+    show();
+    const big = `${GOOD}${'UTR-TEST-0001,2026-10-15,100\n'.repeat(20000)}`;
+    await user.upload(
+      screen.getByLabelText('Statement file (CSV)'),
+      new File([big], 'statement.csv', { type: 'text/csv' }),
+    );
+    expect(await screen.findByText(/The first line names the three columns/)).toBeTruthy();
+  });
+
+  it('says so when a file and pasted text are both given', async () => {
+    const user = userEvent.setup();
+    const { container } = show();
+    paste(GOOD);
+    await user.upload(
+      screen.getByLabelText('Statement file (CSV)'),
+      new File([GOOD], 'statement.csv', { type: 'text/csv' }),
+    );
+    expect(await screen.findByText('Both a file and pasted text are given.')).toBeTruthy();
+    expect(text(container)).toContain('Give only one of them');
+  });
+
+  it('ties the message to both controls for assistive technology', () => {
+    const { container } = show();
+    const live = container.querySelector('[aria-live="polite"]');
+    expect(live?.id).toBeTruthy();
+    for (const label of ['Statement file (CSV)', 'Or paste the statement text']) {
+      const control = screen.getByLabelText(label);
+      expect(control.getAttribute('aria-describedby') ?? '').toContain(live?.id ?? 'missing');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Filters that arrive in the address survive the filter forms and are never echoed unless they are ids.
+// ---------------------------------------------------------------------------------------------------------------
+describe('filters carried from one page to the next', () => {
+  const none = ok({ items: [], nextCursor: null });
+  const hostile = '"><b>x</b>';
+
+  it('keeps a loan account on the payments list and offers a way back', () => {
+    const { container } = render(
+      <LpPaymentsListView page={none} filters={{ loanAccountId: LOAN }} keep={{}} />,
+    );
+    expect(
+      container.querySelector(`input[type="hidden"][name="loanAccountId"]`)?.getAttribute('value'),
+    ).toBe(LOAN);
+    expect(screen.getByRole('link', { name: 'Show all payments' }).getAttribute('href')).toBe(
+      '/payments',
+    );
+  });
+
+  it('drops anything that is not an id instead of echoing it', () => {
+    const { container } = render(
+      <>
+        <LpPaymentsListView page={none} filters={{ loanAccountId: hostile }} keep={{}} />
+        <LpMandatesListView page={none} filters={{ loanAccountId: hostile }} keep={{}} />
+        <LpMandateDebitsView page={none} filters={{ mandateId: hostile }} keep={{}} />
+        <LpProviderEventsView
+          summary={ok({ lenderId: LENDER, items: [] })}
+          events={none}
+          filters={{ paymentIntentId: hostile }}
+          keep={{}}
+        />
+      </>,
+    );
+    expect(container.querySelector('input[type="hidden"]')).toBeNull();
+    expect(container.innerHTML).not.toContain('<b>x</b>');
+    expect(text(container)).not.toContain('Showing only');
+  });
+
+  it('keeps a loan account on the mandates list', () => {
+    const { container } = render(
+      <LpMandatesListView page={none} filters={{ loanAccountId: LOAN }} keep={{}} />,
+    );
+    expect(
+      container.querySelector('input[type="hidden"][name="loanAccountId"]')?.getAttribute('value'),
+    ).toBe(LOAN);
+    expect(text(container)).toContain('Showing only the mandates of one loan account');
+  });
+
+  it('keeps one mandate on the debits page, including the returned-only link', () => {
+    const { container } = render(
+      <LpMandateDebitsView page={none} filters={{ mandateId: uid(40) }} keep={{}} />,
+    );
+    expect(
+      container.querySelector('input[type="hidden"][name="mandateId"]')?.getAttribute('value'),
+    ).toBe(uid(40));
+    expect(
+      screen.getByRole('link', { name: 'Show returned debits only' }).getAttribute('href'),
+    ).toBe(`/mandates/debits?mandateId=${uid(40)}&status=returned`);
+    expect(screen.getByRole('link', { name: 'Open it' }).getAttribute('href')).toBe(
+      `/mandates/${uid(40)}`,
+    );
+  });
+
+  it('keeps one payment on the events page', () => {
+    const { container } = render(
+      <LpProviderEventsView
+        summary={ok({ lenderId: LENDER, items: [] })}
+        events={none}
+        filters={{ paymentIntentId: PAY }}
+        keep={{}}
+      />,
+    );
+    expect(
+      container
+        .querySelector('input[type="hidden"][name="paymentIntentId"]')
+        ?.getAttribute('value'),
+    ).toBe(PAY);
+    expect(screen.getByRole('link', { name: 'Open the payment' }).getAttribute('href')).toBe(
+      `/payments/${PAY}`,
+    );
+  });
+
+  it('links a payment with more events to the full list, and only then', () => {
+    const { rerender } = render(
+      <LpPaymentDetailView
+        detail={ok(detail())}
+        events={ok({ items: [event()], nextCursor: 'more' })}
+      />,
+    );
+    expect(
+      screen.getByRole('link', { name: 'Show all events of this payment' }).getAttribute('href'),
+    ).toBe(`/payments/events?paymentIntentId=${PAY}`);
+    rerender(
+      <LpPaymentDetailView
+        detail={ok(detail())}
+        events={ok({ items: [event()], nextCursor: null })}
+      />,
+    );
+    expect(screen.queryByRole('link', { name: 'Show all events of this payment' })).toBeNull();
   });
 });
