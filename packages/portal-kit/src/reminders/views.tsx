@@ -379,9 +379,10 @@ export function RemindersLogPage({
                         <td>
                           {formatCount(r.attempts)}{' '}
                           <a href={`/reminders/${r.id}`}>
-                            <span className="sr-only">Attempts for the reminder scheduled </span>
-                            View attempts
-                            <span className="sr-only"> {formatIst(r.scheduledFor)}</span>
+                            View attempts{' '}
+                            <span className="sr-only">
+                              for the reminder scheduled {formatIst(r.scheduledFor)}
+                            </span>
                           </a>
                         </td>
                       </tr>
@@ -735,14 +736,14 @@ export function WordingPage({
                 <>
                   <SelectInput
                     name="kind"
-                    label="Kind of reminder"
+                    label="Show only this kind"
                     blank="All kinds"
                     options={options(LR_REMINDER_KINDS, reminderKindWords)}
                     defaultValue={query.kind}
                   />
                   <SelectInput
                     name="language"
-                    label="Language"
+                    label="Show only this language"
                     blank="All languages"
                     options={options(LR_TEMPLATE_LANGUAGES, languageWords)}
                     defaultValue={query.language}

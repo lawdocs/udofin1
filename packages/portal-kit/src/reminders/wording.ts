@@ -225,7 +225,7 @@ export function percentFromBps(bps: number): string {
 
 /** What a person types as a percentage ("2.5"), as whole basis points, or null. Digits with at most two decimals only. */
 export function parsePercentToBps(text: string): number | null {
-  const m = /^(\d{1,5})(?:\.(\d{1,2}))?$/.exec(text.trim());
+  const m = /^(\d{1,6})(?:\.(\d{1,2}))?$/.exec(text.trim());
   if (!m) return null;
   const bps = Number(m[1]) * 100 + Number((m[2] ?? '').padEnd(2, '0') || '0');
   return bps <= 10_000_000 ? bps : null;
