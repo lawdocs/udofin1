@@ -302,22 +302,28 @@ select is((select count(*) from servicing.lender_features), 0::bigint, 'none of 
 -- ============================================================================================================================
 select pg_temp.as_system();
 select is(private.feature_prerequisites_unmet('f8b00000-0000-4000-8000-000000000002', 'payments'),
-  array['evidence_missing', 'lender_organisation_not_active', 'onboarding_gate_not_activated', 'payment_config_missing'],
-  'an onboarding lender short of its gate and without evidence or a payment configuration has four unmet reasons');
-select is(private.feature_prerequisites_unmet('f8b00000-0000-4000-8000-000000000001', 'payments'), array['evidence_missing'], 'an active, activated lender lacks only evidence until a request carries it');
+  array['evidence_missing', 'lender_organisation_not_active', 'onboarding_gate_not_activated', 'own_account_list_not_attested', 'payment_config_missing'],
+  'an onboarding lender short of its gate and without evidence, an attested own-account list or a payment configuration has five unmet reasons');
+select is(private.feature_prerequisites_unmet('f8b00000-0000-4000-8000-000000000001', 'payments'), array['evidence_missing', 'own_account_list_not_attested'],
+  'an active, activated lender with a valid configuration lacks only evidence and the attested own-account list until they are given');
 select ok('feature_not_enableable' = any (private.feature_prerequisites_unmet('f8b00000-0000-4000-8000-000000000001', 'collections')), 'collections reports feature_not_enableable');
 select ok('feature_unknown' = any (private.feature_prerequisites_unmet('f8b00000-0000-4000-8000-000000000001', 'nope')), 'an unknown feature reports feature_unknown');
 select pg_temp.as_user('f8000000-0000-4000-8000-000000000001');
 select is(pg_temp.err($$select servicing.request_feature_change('f8b00000-0000-4000-8000-000000000002', 'payments', true, '{"contract_ref":"SAMPLE-MSA-2"}', 'req-key-0000000020')$$), '55000|prerequisites_unmet',
   'a lender that is not active and not past its gate cannot be switched on');
 select is(pg_temp.msg($$select servicing.request_feature_change('f8b00000-0000-4000-8000-000000000002', 'payments', true, '{"contract_ref":"SAMPLE-MSA-2"}', 'req-key-0000000020')$$),
-  'prerequisites not met: lender_organisation_not_active, onboarding_gate_not_activated, payment_config_missing', 'the message lists the unmet reasons (generic ones and the payments configuration), never a value');
+  'prerequisites not met: lender_organisation_not_active, onboarding_gate_not_activated, own_account_list_not_attested, payment_config_missing', 'the message lists the unmet reasons (generic ones and the payments configuration), never a value');
 select pg_temp.as_owner();
 select is((select count(*) from servicing.feature_change_requests where lender_org_id = 'f8b00000-0000-4000-8000-000000000002'), 0::bigint, 'the refused request left nothing behind');
 
 -- ============================================================================================================================
 -- 5. The two-person flow
 -- ============================================================================================================================
+-- The own-account list is attested complete (migration 20261018000924, A17). Written directly here; the function that records it
+-- (payments.attest_own_account_list) and its refusals are tested in 028_p08a_fix_accounts.test.sql.
+select pg_temp.as_owner();
+insert into payments.own_account_attestations (event_kind, key_version, evidence_ref, entries_counted, actor_id)
+  values ('attested', 1, 'SAMPLE-OWN-ACCOUNT-LIST', 1, 'f8000000-0000-4000-8000-000000000001');
 select pg_temp.as_user('f8000000-0000-4000-8000-000000000001');
 select pg_temp.keep('req1', servicing.request_feature_change('f8b00000-0000-4000-8000-000000000001', 'payments', true, '{"contract_ref":"SAMPLE-MSA-1", "provider_evidence":"SAMPLE-DOC-7"}', 'req-key-0000000100')::text);
 select is(servicing.request_feature_change('f8b00000-0000-4000-8000-000000000001', 'payments', true, '{"contract_ref":"SAMPLE-MSA-1", "provider_evidence":"SAMPLE-DOC-7"}', 'req-key-0000000100')::text,

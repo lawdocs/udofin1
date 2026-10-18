@@ -4,7 +4,7 @@
 -- feature prerequisite. Synthetic data only (labelled SAMPLE). Error codes are reported as SQLSTATE|hint.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(569);
+select plan(579);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -69,11 +69,13 @@ create function pg_temp.register(n integer, k text, rule uuid, validated boolean
 returns uuid language sql as $fn$
   select payments.register_account(coalesce(fp, pg_temp.fp(n)), kv, masked, country, atype, rule, validated, kind, org, lname, purposes, eff_from, eff_to, k, others, rekeys)
 $fn$;
+-- The secret names default to the lender's own namespace (U51, migration 20261018000924): prefix + a sample suffix.
 create function pg_temp.draft(lender uuid, k text, provider text default 'sample_provider', mode text default 'production', merchant uuid default null,
-  settle uuid default null, secret text default 'SAMPLE_SECRET_REF', hook text default 'SAMPLE_WEBHOOK_REF', token text default null,
+  settle uuid default null, secret text default null, hook text default null, token text default null,
   limits jsonb default null, lsource text default null, evidence text default 'SAMPLE-EVIDENCE-CFG', contract text default 'SAMPLE-CONTRACT-CFG')
 returns uuid language sql as $fn$
-  select payments.draft_payment_config(lender, provider, mode, merchant, settle, secret, hook, coalesce(token, pg_temp.token(k)), limits, lsource, evidence, contract, k)
+  select payments.draft_payment_config(lender, provider, mode, merchant, settle, coalesce(secret, private.secret_ref_prefix(lender) || 'SAMPLE_SECRET_REF'),
+    coalesce(hook, private.secret_ref_prefix(lender) || 'SAMPLE_WEBHOOK_REF'), coalesce(token, pg_temp.token(k)), limits, lsource, evidence, contract, k)
 $fn$;
 -- Registry row written directly as the owner (fixtures for classification and linking): status, offsets in days from today (IST).
 create function pg_temp.regrow(n integer, kind text, org uuid, purposes text[], st text default 'verified', from_off integer default -30,
@@ -239,8 +241,10 @@ select has_index('payments', 'lender_payment_configs', 'lender_payment_configs_m
 select has_index('payments', 'lender_payment_configs', 'lender_payment_configs_settlement', 'the configuration''s settlement account foreign key is indexed');
 select has_index('payments', 'payment_intents', 'payment_intents_config', 'the intent''s configuration foreign key is indexed');
 select has_index('tenancy', 'lender_settlement_accounts', 'lender_settlement_accounts_registry', 'the settlement account''s registry link is indexed (and unique)');
-select ok((select bool_and(has_table_privilege('authenticated', t, 'select') and not has_table_privilege('authenticated', t, 'insert')
-                           and not has_table_privilege('authenticated', t, 'update') and not has_table_privilege('authenticated', t, 'delete'))
+-- provider_register is readable only by column since migration 20261018000924 (U41): any column privilege counts here, and the exact
+-- columns are asserted in 028_p08a_fix_accounts.test.sql.
+select ok((select bool_and(has_any_column_privilege('authenticated', t, 'select') and not has_any_column_privilege('authenticated', t, 'insert')
+                           and not has_any_column_privilege('authenticated', t, 'update') and not has_table_privilege('authenticated', t, 'delete'))
            from unnest(array['payments.account_format_rules', 'payments.account_format_rule_events', 'payments.account_registry', 'payments.account_registry_events',
                              'payments.provider_register', 'payments.merchant_registry', 'payments.lender_payment_configs', 'payments.lender_payment_config_events',
                              'payments.fingerprint_key_versions']) t),
@@ -444,6 +448,15 @@ select is(pg_temp.err(format($$select pg_temp.register(3, 'reg-key-000000034', %
 select pg_temp.as_user(pg_temp.u(1), 'aal1');
 select is(pg_temp.err(format($$select pg_temp.register(3, 'reg-key-000000035', %L::uuid)$$, pg_temp.got('rule2'))), '42501|mfa_required', 'registering needs a second factor');
 
+-- The own-account list (A17, migration 20261018000924): an account of Udofin is registered and verified, and the list is attested complete;
+-- from now on a LENDER's account can be verified and linked, and payments can be switched on. (The attestation itself is tested in 028.)
+select pg_temp.as_user(pg_temp.u(2));
+select pg_temp.keep('regu', pg_temp.register(900, 'reg-key-000000900', pg_temp.got('rule2')::uuid, kind => 'udofin', org => null, purposes => array['fee_collection'],
+  masked => 'XXXXXX0900', lname => 'Udofin SAMPLE Ltd (fixture)')::text);
+select pg_temp.as_user(pg_temp.u(4));
+select payments.verify_account(pg_temp.got('regu')::uuid, 'SAMPLE-EVIDENCE-OWN-1');
+select is(payments.attest_own_account_list('SAMPLE-OWN-ACCOUNT-LIST-1'), 'attested', 'the own-account list is attested complete (an Udofin account is verified, none is pending)');
+
 -- Verify: a different person, with evidence.
 select pg_temp.as_user(pg_temp.u(1));
 select is(pg_temp.err(format($$select payments.verify_account(%L, 'SAMPLE-EVIDENCE-016')$$, pg_temp.got('reg1'))), '42501|', 'the registrant cannot verify (no registry.verify permission)');
@@ -485,8 +498,8 @@ select is(pg_temp.err(format($$select payments.revoke_account(%L, 'a reason that
 select is(pg_temp.err(format($$select payments.reject_account(%L, 'a reason that is long enough')$$, pg_temp.got('reg1'))), '55000|not_unverified', 'a verified entry cannot be rejected (revoke it)');
 select is(pg_temp.err(format($$select pg_temp.register(2, 'reg-key-000000041', %L::uuid, masked => 'XXXXXX1002')$$, pg_temp.got('rule2'))), '42501|', 'a verifier cannot re-register');
 select pg_temp.as_user(pg_temp.u(1));
-select is(pg_temp.err(format($$select pg_temp.register(2, 'reg-key-000000042', %L::uuid, masked => 'XXXXXX1002')$$, pg_temp.got('rule2'))), '23505|account_already_registered',
-  'a rejected entry keeps its fingerprint: the account cannot be registered again under this key version');
+select isnt(pg_temp.register(2, 'reg-key-000000042', pg_temp.got('rule2')::uuid, masked => 'XXXXXX1002')::text, pg_temp.got('reg2'),
+  'a rejected LENDER entry releases its fingerprint (A14): the same account can be registered again, as a new entry (the rejected one stays as history)');
 -- Revoke: either permission, one person, a reason (fail-closed).
 select pg_temp.keep('reg7', pg_temp.register(7, 'reg-key-000000043', pg_temp.got('rule2')::uuid, masked => 'XXXXXX0007')::text);
 select is(pg_temp.err(format($$select payments.revoke_account(%L, 'short')$$, pg_temp.got('reg7'))), '22023|reason_required', 'a revocation needs a reason');
@@ -751,7 +764,10 @@ select is(pg_temp.err($$select payments.claim_merchant('f6b00000-0000-4000-8000-
 select pg_temp.as_user(pg_temp.u(14));
 select is(pg_temp.err($$select payments.claim_merchant('f6b00000-0000-4000-8000-000000000001', 'sample_provider', 'SAMPLE-MERCHANT-X9')$$), '42501|', 'a read-only user cannot claim');
 select pg_temp.as_user(pg_temp.u(12));
-select is(pg_temp.err($$select payments.claim_merchant('f6b00000-0000-4000-8000-000000000002', 'sample_provider', 'SAMPLE-MERCHANT-X1')$$), '23505|merchant_already_claimed', 'a merchant id claimed by lender X cannot be claimed by lender Y');
+-- A claim is only a CLAIM (A19, M2, U52): a claim of an id that lender X holds succeeds for lender Y exactly like any other claim, so the answer
+-- reveals nothing about who holds an id. Which claim can be verified is a platform decision (see below).
+select pg_temp.keep('my_squat', payments.claim_merchant('f6b00000-0000-4000-8000-000000000002', 'sample_provider', 'SAMPLE-MERCHANT-X1')::text);
+select isnt(pg_temp.got('my_squat'), pg_temp.got('mx1'), 'a claim of an id that lender X holds succeeds for lender Y as an ordinary, separate, UNVERIFIED claim (no existence oracle)');
 select pg_temp.keep('my1', payments.claim_merchant('f6b00000-0000-4000-8000-000000000002', 'sample_provider', 'SAMPLE-MERCHANT-Y1')::text);
 select pg_temp.as_user(pg_temp.u(15));
 select is(pg_temp.err($$select payments.claim_merchant('f6b00000-0000-4000-8000-000000000001', 'sample_provider', 'SAMPLE-MERCHANT-X9')$$), '42501|', 'a borrower cannot claim');
@@ -762,10 +778,10 @@ select is(pg_temp.err($$select payments.claim_merchant('f6b00000-0000-4000-8000-
 select pg_temp.keep('mfee', payments.register_udofin_fee_merchant('sample_provider', 'SAMPLE-UDOFIN-FEES')::text);
 select is(payments.register_udofin_fee_merchant('sample_provider', 'SAMPLE-UDOFIN-FEES')::text, pg_temp.got('mfee'), 'registering Udofin''s fee merchant again is idempotent');
 select is((select (owner_kind, purpose, owner_org_id is null)::text from payments.merchant_registry where id = pg_temp.got('mfee')::uuid), '(udofin_fees,fee_collection,t)', 'Udofin''s own fee merchant is a different record type');
-select is(pg_temp.err($$select payments.register_udofin_fee_merchant('sample_provider', 'SAMPLE-MERCHANT-X1')$$), '23505|merchant_already_claimed', 'a merchant claimed by a lender cannot be registered as Udofin''s');
 select is(pg_temp.err($$select payments.register_udofin_fee_merchant('unknown_provider', 'SAMPLE-UDOFIN-FEES')$$), '22023|provider_invalid', 'an unregistered provider is refused');
 select pg_temp.as_user(pg_temp.u(8));
-select is(pg_temp.err($$select payments.claim_merchant('f6b00000-0000-4000-8000-000000000001', 'sample_provider', 'SAMPLE-UDOFIN-FEES')$$), '23505|merchant_already_claimed', 'and Udofin''s fee merchant cannot be claimed by a lender');
+select pg_temp.keep('mx_squat_fee', payments.claim_merchant('f6b00000-0000-4000-8000-000000000001', 'sample_provider', 'SAMPLE-UDOFIN-FEES')::text);
+select isnt(pg_temp.got('mx_squat_fee'), pg_temp.got('mfee'), 'a lender''s claim of Udofin''s fee merchant id succeeds as an ordinary unverified claim (no existence oracle); it can never be verified (below)');
 select is(pg_temp.err($$select payments.register_udofin_fee_merchant('sample_provider', 'SAMPLE-UDOFIN-FEES-2')$$), '42501|', 'a lender cannot register an Udofin merchant');
 select pg_temp.keep('mx2', payments.claim_merchant('f6b00000-0000-4000-8000-000000000001', 'mock_gateway', 'SAMPLE-MERCHANT-X2')::text);
 select pg_temp.keep('mx3', payments.claim_merchant('f6b00000-0000-4000-8000-000000000001', 'sample_noevidence', 'SAMPLE-MERCHANT-X3')::text);
@@ -773,12 +789,12 @@ select pg_temp.keep('mx4', payments.claim_merchant('f6b00000-0000-4000-8000-0000
 select pg_temp.keep('mx5', payments.claim_merchant('f6b00000-0000-4000-8000-000000000001', 'sample_provider', 'SAMPLE-MERCHANT-X5')::text);
 select pg_temp.keep('mx6', payments.claim_merchant('f6b00000-0000-4000-8000-000000000001', 'sample_provider', 'SAMPLE-MERCHANT-X6')::text);
 select pg_temp.keep('mx7', payments.claim_merchant('f6b00000-0000-4000-8000-000000000001', 'sample_provider', 'SAMPLE-MERCHANT-X7')::text);
-select is((select count(*) from payments.merchant_registry), 7::bigint, 'lender X sees exactly its own seven merchants (not lender Y''s, not Udofin''s fee merchant)');
+select is((select count(*) from payments.merchant_registry), 8::bigint, 'lender X sees exactly its own eight merchant claims (seven real ones and the claim of Udofin''s fee merchant id; not lender Y''s, not Udofin''s fee merchant)');
 select is((select count(*) from payments.merchant_registry where owner_org_id = 'f6b00000-0000-4000-8000-000000000002'), 0::bigint, 'lender X sees none of lender Y''s merchants');
 select pg_temp.as_owner();
-select is((select count(*) from payments.merchant_registry), 9::bigint, 'nine merchants exist: lender X (seven), lender Y (one), Udofin fees (one)');
-select is(pg_temp.err($$insert into payments.merchant_registry (provider, merchant_ref, owner_kind, owner_org_id, purpose, claimed_by) values ('sample_provider', 'SAMPLE-MERCHANT-X1', 'lender', 'f6b00000-0000-4000-8000-000000000002', 'repayment', 'f6000000-0000-4000-8000-000000000001')$$), '23505|',
-  'the unique key (provider, merchant ref) holds for every writer, across ALL organisations');
+select is((select count(*) from payments.merchant_registry), 11::bigint, 'eleven merchant rows exist: lender X (eight), lender Y (two: its own and its claim of an id lender X holds), Udofin fees (one)');
+select is(pg_temp.err($$insert into payments.merchant_registry (provider, merchant_ref, owner_kind, owner_org_id, purpose, claimed_by) values ('sample_provider', 'SAMPLE-MERCHANT-X1', 'lender', 'f6b00000-0000-4000-8000-000000000001', 'repayment', 'f6000000-0000-4000-8000-000000000001')$$), '23505|',
+  'the unique key (provider, merchant ref, lender) over live claims holds for every writer: one live claim of an id per lender');
 select is(pg_temp.err($$insert into payments.merchant_registry (provider, merchant_ref, owner_kind, owner_org_id, purpose, claimed_by) values ('sample_provider', 'SAMPLE-CHECK-1', 'udofin_fees', null, 'repayment', 'f6000000-0000-4000-8000-000000000001')$$), '23514|',
   'an Udofin fee merchant can never carry the repayment purpose (check)');
 select is(pg_temp.err($$insert into payments.merchant_registry (provider, merchant_ref, owner_kind, owner_org_id, purpose, claimed_by) values ('sample_provider', 'SAMPLE-CHECK-2', 'lender', null, 'repayment', 'f6000000-0000-4000-8000-000000000001')$$), '23514|',
@@ -813,6 +829,12 @@ select is(pg_temp.err(format($$select payments.verify_merchant(%L, 'x')$$, pg_te
 select is(pg_temp.err(format($$select payments.verify_merchant(%L, 'SAMPLE-MERCHANT-EVIDENCE')$$, pg_temp.got('mfee'))), '55000|already_verified',
   'Udofin''s fee merchant was verified when the platform registered it; it is not re-verified');
 select is(payments.verify_merchant(pg_temp.got('mx1')::uuid, 'SAMPLE-MERCHANT-EVIDENCE'), 'verified', 'a platform user verifies the claim against evidence');
+-- Only ONE live claim of an id can be verified (A19, M2, U52); the competing claims are for the platform to settle, and say nothing to the lenders.
+select is(pg_temp.err(format($$select payments.verify_merchant(%L, 'SAMPLE-MERCHANT-EVIDENCE-Y')$$, pg_temp.got('my_squat'))), '55000|merchant_already_claimed',
+  'lender Y''s competing claim of the same id cannot be verified while lender X''s claim is verified');
+select is(pg_temp.err(format($$select payments.verify_merchant(%L, 'SAMPLE-MERCHANT-EVIDENCE-F')$$, pg_temp.got('mx_squat_fee'))), '55000|merchant_already_claimed',
+  'a lender''s claim of Udofin''s fee merchant id can never be verified');
+select is(pg_temp.err($$select payments.register_udofin_fee_merchant('sample_provider', 'SAMPLE-MERCHANT-X1')$$), '23505|merchant_already_claimed', 'a merchant id that is verified for a lender cannot be registered as Udofin''s');
 select is(payments.verify_merchant(pg_temp.got('mx1')::uuid, 'SAMPLE-MERCHANT-EVIDENCE'), 'verified', 'the same verification again is idempotent');
 select is(pg_temp.err(format($$select payments.verify_merchant(%L, 'SAMPLE-OTHER-EVIDENCE')$$, pg_temp.got('mx1'))), '55000|already_verified', 'but cannot be re-verified on other evidence');
 select is((select (verification_status, verification_evidence_ref, verified_by = pg_temp.u(1), verified_at is not null)::text from payments.merchant_registry where id = pg_temp.got('mx1')::uuid),
@@ -836,6 +858,11 @@ select is(pg_temp.err(format($$update payments.merchant_registry set verificatio
 -- ============================================================================================================================
 -- 7. Payment configuration: draft, submit, approve (maker-checker), validation (spec 7.1), kill switch, revalidation
 -- ============================================================================================================================
+-- The scenarios of sections 7 to 9 keep SEVERAL configurations of lender X active at once, for convenience (provider, merchant and mode
+-- variants). Migration 20261018000924 allows only ONE active configuration per lender (M5; tested in 028_p08a_fix_accounts.test.sql), so the
+-- unique index is dropped here, inside this transaction (the test rolls back), and these older scenarios keep testing what they were written for.
+select pg_temp.as_owner();
+drop index payments.lender_payment_configs_one_active;
 -- X's production-grade pieces: provider sample_provider (evidence), merchant mx1, settlement account sa(1) (verified through reg1).
 select pg_temp.as_user(pg_temp.u(8));
 select pg_temp.keep('c1', pg_temp.draft('f6b00000-0000-4000-8000-000000000001', 'cfg-key-0000000001', merchant => pg_temp.got('mx1')::uuid, settle => pg_temp.sa(1))::text);
@@ -1211,16 +1238,26 @@ select is(payments.suspend_payment_config(pg_temp.got('c_mock')::uuid, 'provider
 select is(payments.suspend_payment_config(pg_temp.got('c_mock')::uuid, 'provider incident under investigation today'), 'suspended', 'suspending again is idempotent');
 select is((select (status, status_reason, status_reasons)::text from payments.lender_payment_configs where id = pg_temp.got('c_mock')::uuid), '(suspended,"provider incident under investigation today",{platform_suspension})', 'reason recorded');
 select is((select (event_kind, actor_kind)::text from payments.lender_payment_config_events where config_id = pg_temp.got('c_mock')::uuid and event_kind = 'suspended'), '(suspended,platform)', 'in the history, by a platform actor');
--- Re-submission after a suspension needs a fresh two-person approval.
+-- A hold of the platform is not the lender's to undo (A13, M0, U49): the lender's maker cannot re-submit a platform-suspended configuration, its
+-- approver cannot retire it, and only a platform person OTHER than the suspender lifts the hold; then a fresh two-person approval follows.
 select pg_temp.as_owner();
 select set_config('udofin.allow_mock_providers', 'on', true);
 select pg_temp.as_user(pg_temp.u(9));
-select is(payments.submit_payment_config(pg_temp.got('c_mock')::uuid), 'pending_approval', 'a suspended configuration is re-submitted (validated again)');
+select is(pg_temp.err(format($$select payments.submit_payment_config(%L)$$, pg_temp.got('c_mock'))), '55000|platform_hold', 'the lender''s maker cannot re-submit a configuration the platform suspended');
+select is((select (hold_kind, hold_set_by = pg_temp.u(1), hold_set_at is not null)::text from payments.lender_payment_configs where id = pg_temp.got('c_mock')::uuid), '(platform,t,t)', 'the hold records who set it and when');
+select pg_temp.as_user(pg_temp.u(11));
+select is(pg_temp.err(format($$select payments.retire_payment_config(%L, 'a lender approver must not retire a held configuration')$$, pg_temp.got('c_mock'))), '55000|platform_hold', 'the lender''s approver cannot retire it either');
+select pg_temp.as_user(pg_temp.u(1));
+select is(pg_temp.err(format($$select payments.release_payment_config_hold(%L, 'the suspending person must not lift the hold')$$, pg_temp.got('c_mock'))), '42501|self_approval', 'the platform person who set the hold cannot lift it');
+select pg_temp.as_user(pg_temp.u(2));
+select is(payments.release_payment_config_hold(pg_temp.got('c_mock')::uuid, 'incident closed, evidence reviewed by a second person'), 'suspended', 'a DIFFERENT platform person lifts the hold: the configuration stays suspended');
+select pg_temp.as_user(pg_temp.u(9));
+select is(payments.submit_payment_config(pg_temp.got('c_mock')::uuid), 'pending_approval', 'once the hold is lifted, a suspended configuration is re-submitted (validated again)');
 select is((select (status, approved_by is null, approved_at is null)::text from payments.lender_payment_configs where id = pg_temp.got('c_mock')::uuid), '(pending_approval,t,t)', 'the earlier approval is cleared: it needs approving again');
 select pg_temp.as_user(pg_temp.u(10));
 select is(payments.decide_payment_config(pg_temp.got('c_mock')::uuid, true), 'active', 'and is approved again by an approver');
 select is((select array_agg(event_kind order by occurred_at) from payments.lender_payment_config_events where config_id = pg_temp.got('c_mock')::uuid),
-  array['drafted', 'submitted', 'approved', 'suspended', 'submitted', 'approved'], 'the whole life of the configuration is in its history');
+  array['drafted', 'submitted', 'approved', 'suspended', 'hold_released', 'submitted', 'approved'], 'the whole life of the configuration is in its history, including who lifted the hold');
 select pg_temp.as_owner();
 select set_config('udofin.allow_mock_providers', 'off', true);
 -- Retire.
@@ -1270,8 +1307,15 @@ select pg_temp.as_owner();
 update onboarding.lender_gates set stage = 'activated' where lender_org_id = 'f6b00000-0000-4000-8000-000000000001';
 select is((select (status_reason, status_reasons)::text from payments.lender_payment_configs where id = pg_temp.got('c1')::uuid), '("system hold: validation failed",{onboarding_gate_not_activated})', 'c1 was put on hold by the nightly run with the reason code');
 select is((select (event_kind, actor_kind)::text from payments.lender_payment_config_events where config_id = pg_temp.got('c1')::uuid and event_kind = 'suspended'), '(suspended,system)', 'recorded as a system hold');
+-- The nightly run and the system suspension are HOLDS (A13): the lender cannot re-submit while one stands on ANY configuration of the lender.
 select pg_temp.as_user(pg_temp.u(9));
-select is(payments.submit_payment_config(pg_temp.got('c1')::uuid), 'pending_approval', 'once the cause is fixed, the configuration is re-submitted ...');
+select is(pg_temp.err(format($$select payments.submit_payment_config(%L)$$, pg_temp.got('c1'))), '55000|platform_hold', 'the lender cannot re-submit a configuration the nightly run put on hold, even once the cause is fixed');
+select pg_temp.as_user(pg_temp.u(1));
+select is((select count(*) from (select payments.release_payment_config_hold(id, 'SAMPLE: hold reviewed and lifted by the platform') from payments.lender_payment_configs
+  where lender_org_id = 'f6b00000-0000-4000-8000-000000000001' and status = 'suspended' and hold_kind is not null) x), 3::bigint,
+  'a platform person lifts the system holds (the nightly run''s and the earlier system suspension): any platform user holding providers.manage can');
+select pg_temp.as_user(pg_temp.u(9));
+select is(payments.submit_payment_config(pg_temp.got('c1')::uuid), 'pending_approval', 'once the hold is lifted and the cause is fixed, the configuration is re-submitted ...');
 select pg_temp.as_user(pg_temp.u(11));
 select is(payments.decide_payment_config(pg_temp.got('c1')::uuid, true, 'SAMPLE re-approval'), 'active', '... and approved again by a different approver');
 select pg_temp.as_system();
@@ -1413,7 +1457,7 @@ select ok(pg_temp.cnt('payments.lender_payment_configs') = pg_temp.got('x_c')::b
 select pg_temp.as_user(pg_temp.u(12));
 select is((select pg_temp.cnt('payments.lender_payment_configs') + pg_temp.cnt('payments.lender_payment_config_events')), 0::bigint, 'lender Y sees none of lender X''s configurations or history');
 select is((select count(*) from payments.merchant_registry where owner_org_id = 'f6b00000-0000-4000-8000-000000000001'), 0::bigint, 'nor lender X''s merchants');
-select is((select count(*) from payments.merchant_registry), 1::bigint, 'only its own merchant');
+select is((select count(*) from payments.merchant_registry), 2::bigint, 'only its own two merchant claims (its own merchant and the claim of an id lender X holds)');
 select pg_temp.as_user(pg_temp.u(1));
 select ok(pg_temp.cnt('payments.account_registry') = pg_temp.got('t_reg')::bigint and pg_temp.cnt('payments.account_registry_events') = pg_temp.got('t_rege')::bigint and pg_temp.cnt('payments.account_format_rules') = pg_temp.got('t_rule')::bigint and pg_temp.cnt('payments.account_format_rule_events') = pg_temp.got('t_rulee')::bigint and pg_temp.got('t_reg')::bigint > 10,
   'a registry manager sees the registry, the rules and their histories');
@@ -1477,7 +1521,7 @@ select is((select count(*) from audit.events where action = 'payments.settlement
 select is((select count(*) from audit.events where action = 'payments.settlement_account.requested'), 2::bigint, 'one audit record per created account (the idempotent repeat and every refusal wrote none)');
 insert into tenancy.lender_settlement_accounts (lender_org_id, label, bank_name, masked_account_ref)
 select 'f6b00000-0000-4000-8000-000000000001', 'SAMPLE filler ' || g, 'Filler Bank', 'XXXXXX' || lpad(g::text, 4, '0')
-  from generate_series(1, 20 - (select count(*)::int from tenancy.lender_settlement_accounts where lender_org_id = 'f6b00000-0000-4000-8000-000000000001')) g;
+  from generate_series(1, 20 - (select count(*)::int from tenancy.lender_settlement_accounts where lender_org_id = 'f6b00000-0000-4000-8000-000000000001' and status <> 'revoked')) g;
 select pg_temp.as_user(pg_temp.u(8));
 select is(pg_temp.err($$select payments.request_settlement_account('f6b00000-0000-4000-8000-000000000001', 'SAMPLE one too many', 'Sample Bank', 'XXXXXX9999')$$), '22023|too_many_settlement_accounts', 'a lender cannot pile up more than twenty settlement accounts');
 select is(payments.request_settlement_account('f6b00000-0000-4000-8000-000000000001', 'SAMPLE collection account', 'Sample Bank', 'XXXXXX7421')::text, pg_temp.got('sa_req1'), 'but a repeat of an existing one still answers it');

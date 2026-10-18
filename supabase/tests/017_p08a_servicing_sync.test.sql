@@ -394,8 +394,10 @@ select is(pg_temp.err($$select servicing.set_lms_connection('e9b00000-0000-4000-
 select pg_temp.as_user('e9000000-0000-4000-8000-000000000003', 'aal1');
 select is(pg_temp.err($$select servicing.set_lms_connection('e9b00000-0000-4000-8000-000000000001', 'file_import', 'active')$$), '42501|mfa_required', 'a session without the second factor is refused');
 select pg_temp.as_user('e9000000-0000-4000-8000-000000000012');
-select is(pg_temp.err($$select servicing.set_lms_connection('e9b00000-0000-4000-8000-000000000003', 'file_import', 'active')$$), '55000|feature_disabled',
-  'with the servicing_sync switch off (the default) nothing can be written, even by an authorised operator');
+-- Since migration 20261018000924 (A42) the file_import / manual connection row itself can be recorded while the switch is off (the switch needs
+-- an active connection); every other kind and every servicing write still needs the switch.
+select is(pg_temp.err($$select servicing.set_lms_connection('e9b00000-0000-4000-8000-000000000003', 'mock', 'draft')$$), '55000|feature_disabled',
+  'with the servicing_sync switch off (the default) nothing but the file_import / manual connection row can be written, even by an authorised operator');
 select is(pg_temp.err($$select servicing.stage_import('e9b00000-0000-4000-8000-000000000003', 'loan', 'file', repeat('2', 64), 100, 'udofin-lms-import-v1', '[{}]', 'idem-switch-off-0001')$$), '55000|feature_disabled', 'nor can a file be staged');
 
 -- Direct writes are impossible for everyone but the owner
@@ -1316,7 +1318,7 @@ select pg_temp.as_user('e9000000-0000-4000-8000-000000000001');
 select is(pg_temp.err($$select servicing.kill_feature('e9b00000-0000-4000-8000-000000000001', 'servicing_sync', 'Emergency test of the servicing kill switch', 'e9-kill-key-000000001')$$), 'ok', 'a platform administrator turns lender X''s servicing_sync switch off');
 select pg_temp.as_user('e9000000-0000-4000-8000-000000000003');
 select is(pg_temp.err(format($$select servicing.stage_import('e9b00000-0000-4000-8000-000000000001', 'loan', 'file', %L, 1000, 'udofin-lms-import-v1', '[{}]', 'idem-after-kill-0001')$$, repeat('9', 64))), '55000|feature_disabled', 'after the switch is off nothing can be staged');
-select is(pg_temp.err($$select servicing.set_lms_connection('e9b00000-0000-4000-8000-000000000001', 'file_import', 'active')$$), '55000|feature_disabled', 'nor the connection changed');
+select is(pg_temp.err($$select servicing.set_lms_connection('e9b00000-0000-4000-8000-000000000001', 'mock', 'draft')$$), '55000|feature_disabled', 'nor another kind of connection recorded (A42: only the file_import / manual row may be recorded with the switch off)');
 select pg_temp.as_user('e9000000-0000-4000-8000-000000000011');
 select is(pg_temp.err(format($$select servicing.commit_import(%L)$$, (pg_temp.got('rj2')::jsonb) ->> 'batch_id')), '55000|feature_disabled', 'nor a previewed batch committed');
 select is(pg_temp.err(format($$select servicing.reject_import(%L, 'Rejected after the switch went off')$$, (pg_temp.got('rj2')::jsonb) ->> 'batch_id')), '55000|feature_disabled', 'nor rejected');

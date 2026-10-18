@@ -107,7 +107,8 @@ insert into auth.users (id, phone, raw_app_meta_data) values
   ('d0000000-0000-4000-8000-000000000001', null, '{"actor_type":"staff"}'),
   ('d0000000-0000-4000-8000-000000000002', null, '{"actor_type":"staff"}');
 
-select pg_temp.as_system();
+-- Fixture rows are created as the database owner (the system role can no longer lift the change-control guard: migration 20261018000924, U53).
+select pg_temp.as_owner();
 select set_config('udofin.change_apply', 'on', true);
 insert into tenancy.organizations (id, kind, legal_name, display_name, regulator_registration_no, status) values
   ('a0000000-0000-4000-8000-000000000000', 'platform', 'Udofin Platform (test)', 'Udofin', null, 'active'),
@@ -570,7 +571,8 @@ select is((select count(*) from documents.acknowledgements), 1::bigint, 'and onl
 select is((select count(*) from documents.kfs_inputs), 1::bigint, 'and its own KFS data');
 select pg_temp.as_owner();
 -- A category the draft rule does not name has no rule: nothing can be prepared for it, however complete the data is.
-select pg_temp.as_system();
+-- (Fixture rows in tenancy tables are written as the database owner: the system role can no longer lift the change-control guard, U53.)
+select pg_temp.as_owner();
 insert into tenancy.memberships (org_id, user_id, status) select 'c1000000-0000-4000-8000-000000000000', 'aaaaaaaa-0000-4000-8000-000000000001', 'active' on conflict do nothing;
 insert into tenancy.membership_roles (membership_id, role_id)
 select m.id, (select id from tenancy.roles where org_id is null and applies_to = 'lender' and key = 'credit_officer')

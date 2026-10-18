@@ -670,6 +670,10 @@ select is(payments.sweep_mandates(interval '1 hour', interval '1 hour', interval
 -- 11. Activation prerequisites
 -- ============================================================================================================================
 select pg_temp.as_owner();
+-- The own-account list is attested complete (migration 20261018000924, A17: payments and mandates need it). Written directly here; the
+-- function and its refusals are tested in 028_p08a_fix_accounts.test.sql.
+insert into payments.own_account_attestations (event_kind, key_version, evidence_ref, entries_counted, actor_id)
+  values ('attested', 1, 'SAMPLE-OWN-ACCOUNT-LIST', 1, (select id from auth.users order by id limit 1));
 select is(private.feature_prerequisites_unmet(pg_temp.ly(), 'mandates'),
   array['evidence_missing', 'mandate_policy_missing', 'mandate_rail_not_configured', 'payment_config_missing', 'payment_config_mock_or_sandbox_only', 'provider_not_mandate_capable'],
   'a lender with a payment-only mock provider, no rail limits and no settings cannot turn mandates on');

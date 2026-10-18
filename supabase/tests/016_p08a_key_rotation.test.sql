@@ -5,7 +5,7 @@
 -- Error codes are reported as SQLSTATE|hint.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(58);
+select plan(59);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -95,6 +95,8 @@ select pg_temp.keep('rD', pg_temp.reg(4, 'rot-key-000000013', 1, pg_temp.got('ru
 select pg_temp.keep('rE', pg_temp.reg(5, 'rot-key-000000014', 1, pg_temp.got('rule')::uuid)::text);
 select pg_temp.as_user(pg_temp.u(3));
 select payments.verify_account(pg_temp.got('rA')::uuid, 'SAMPLE-ROT-EVIDENCE-A');
+-- A lender's account is verified only while the own-account list is attested complete (A17, migration 20261018000924).
+select is(payments.attest_own_account_list('SAMPLE-ROT-OWN-LIST'), 'attested', 'the own-account list (the verified Udofin account) is attested complete under key version 1');
 select payments.verify_account(pg_temp.got('rB')::uuid, 'SAMPLE-ROT-EVIDENCE-B');
 select payments.verify_account(pg_temp.got('rD')::uuid, 'SAMPLE-ROT-EVIDENCE-D');
 select payments.revoke_account(pg_temp.got('rD')::uuid, 'ownership changed, entry withdrawn for good');
