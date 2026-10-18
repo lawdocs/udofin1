@@ -36,9 +36,11 @@ import {
  *   lms_loan_ref          required  lender's loan reference
  *   borrower_ref          required  an OPAQUE reference as supplied: Udofin application reference or lender customer
  *                                   reference. Never a name, phone number, PAN, Aadhaar or account number: values
- *                                   shaped like a PAN, or like a 9 to 18 digit number (separators - . : / _ ignored),
- *                                   are rejected (`borrower_ref_looks_personal`). A name cannot be recognised by shape,
- *                                   so keeping names out is the lender's responsibility
+ *                                   shaped like a PAN (the whole reference, or one part between the separators - . : / _),
+ *                                   or like a 9 to 18 digit number (separators ignored), are rejected
+ *                                   (`borrower_ref_looks_personal`). A name cannot be recognised by shape, so keeping names
+ *                                   out is the lender's responsibility. Every other reference field refuses a PAN-shaped
+ *                                   whole or part (`ref_looks_personal`)
  *   status                required  active | closed | foreclosed | written_off | cancelled
  *   sanctioned_amount     required  decimal rupees, > 0
  *   disbursed_amount, disbursement_ref, disbursement_date (YYYY-MM-DD)
@@ -54,7 +56,9 @@ import {
  * kind = receipt (one row per receipt or reversal)
  *   lms_loan_ref, lms_receipt_ref (the lender's id of THIS row), receipt_kind (receipt | reversal),
  *   reverses_receipt_ref (required for a reversal, forbidden for a receipt), amount (> 0, positive also for
- *   reversals), value_date (YYYY-MM-DD), payment_mode (optional, reference charset), bank_reference (optional, e.g. UTR)
+ *   reversals), value_date (YYYY-MM-DD; not after the India-time date of reported_as_of: `receipt_date_in_future`),
+ *   payment_mode (optional, reference charset, a short label: a run of 9 or more digits is refused), bank_reference
+ *   (optional, e.g. UTR; a 10-digit number starting 6 to 9, or a 13 to 18 digit number, is refused)
  *
  * kind = schedule (one report = one source_record_id per loan)
  *   lms_loan_ref + the common fields, and installments: JSON carries an `installments` array of
@@ -335,11 +339,13 @@ export type LmsImportErrorCode =
   | 'missing_required'
   | 'invalid_reference'
   | 'borrower_ref_looks_personal'
+  | 'ref_looks_personal'
   | 'invalid_amount'
   | 'amount_not_positive'
   | 'invalid_date'
   | 'invalid_timestamp'
   | 'timestamp_in_future'
+  | 'receipt_date_in_future'
   | 'invalid_integer'
   | 'invalid_status'
   | 'invalid_receipt_kind'
@@ -364,11 +370,45 @@ export interface LmsImportError {
 }
 
 const REFERENCE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$/;
-/** A PAN anywhere in the reference, once separators are removed ('ABCDE-1234-F', 'PAN:ABCDE1234F'). */
-const PAN_LIKE = /[A-Za-z]{5}[0-9]{4}[A-Za-z]/;
+/**
+ * A PAN: five letters, four digits, a letter, in any case. Anchored: it must be the whole reference once separators are removed
+ * ('ABCDE-1234-F') or one part between separators ('PAN:ABCDE1234F'). A shape that only occurs INSIDE a longer part (a UUID, a
+ * loan number such as 'LOANX2026B7') is not a PAN. Mirrors private.servicing_ref_looks_personal (migration 20261018000925).
+ */
+const PAN_SHAPE = /^[A-Za-z]{5}[0-9]{4}[A-Za-z]$/;
 /** Only digits (9 to 18) once separators are removed: phone, Aadhaar, account or card number shaped. */
 const NUMBER_LIKE = /^\+?[0-9]{9,18}$/;
+/** A payment mode is a short label (upi, neft): a run of 9 or more digits in it is a number. */
+const MODE_NUMBER_LIKE = /[0-9]{9,}/;
+/** A bank reference shaped like a mobile number (10 digits starting 6 to 9) or like a 13 to 18 digit account or card number. */
+const BANK_MOBILE_LIKE = /^[6-9][0-9]{9}$/;
+const BANK_NUMBER_LIKE = /^[0-9]{13,18}$/;
 const REFERENCE_SEPARATORS = /[-.:/_]/g;
+const REFERENCE_PARTS = /[-.:/_]/;
+
+/** Which reference field is being read: what else, beyond a PAN shape, makes a value look like personal data. */
+type ReferenceKind = 'ref' | 'mode' | 'bank';
+
+function panShaped(value: string): boolean {
+  return (
+    PAN_SHAPE.test(value.replace(REFERENCE_SEPARATORS, '')) ||
+    value.split(REFERENCE_PARTS).some((part) => PAN_SHAPE.test(part))
+  );
+}
+
+/** The shape test for every reference field except the borrower reference. A shape check only; a name cannot be recognised. */
+function referenceLooksPersonal(value: string, kind: ReferenceKind): boolean {
+  if (panShaped(value)) return true;
+  const compact = value.replace(REFERENCE_SEPARATORS, '');
+  if (kind === 'mode') return MODE_NUMBER_LIKE.test(compact);
+  if (kind === 'bank') return BANK_MOBILE_LIKE.test(compact) || BANK_NUMBER_LIKE.test(compact);
+  return false;
+}
+
+/** The India-time calendar date (YYYY-MM-DD) of a canonical UTC timestamp. India has no daylight saving: a fixed +05:30. */
+function indiaDateOf(utcTimestamp: string): string {
+  return new Date(Date.parse(utcTimestamp) + 330 * 60_000).toISOString().slice(0, 10);
+}
 const SOURCE_SYSTEM = /^[a-z][a-z0-9_]{1,49}$/;
 const ISO_DATE = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/;
 const ISO_TIMESTAMP =
@@ -434,16 +474,17 @@ class FieldReader {
 
   // Conventions: `undefined` = this field failed (an error was recorded); `null` = optional field absent.
 
-  reference(name: string): string | undefined {
+  reference(name: string, kind: ReferenceKind = 'ref'): string | undefined {
     const value = this.cell(name);
     if (value === undefined) return this.fail(name, 'missing_required');
     if (typeof value !== 'string' || !REFERENCE.test(value))
       return this.fail(name, 'invalid_reference');
+    if (referenceLooksPersonal(value, kind)) return this.fail(name, 'ref_looks_personal');
     return value;
   }
 
-  optionalReference(name: string): string | null | undefined {
-    return this.cell(name) === undefined ? null : this.reference(name);
+  optionalReference(name: string, kind: ReferenceKind = 'ref'): string | null | undefined {
+    return this.cell(name) === undefined ? null : this.reference(name, kind);
   }
 
   /**
@@ -454,7 +495,7 @@ class FieldReader {
     const value = this.cell(name);
     if (typeof value === 'string') {
       const compact = value.replace(REFERENCE_SEPARATORS, '');
-      if (PAN_LIKE.test(compact) || NUMBER_LIKE.test(compact)) {
+      if (panShaped(value) || NUMBER_LIKE.test(compact)) {
         return this.fail(name, 'borrower_ref_looks_personal');
       }
     }
@@ -789,8 +830,8 @@ export function normaliseLmsReceipt(
   const reverses = r.optionalReference('reverses_receipt_ref');
   const amount = r.money('amount', true);
   const valueDate = r.date('value_date');
-  const paymentMode = r.optionalReference('payment_mode');
-  const bankReference = r.optionalReference('bank_reference');
+  const paymentMode = r.optionalReference('payment_mode', 'mode');
+  const bankReference = r.optionalReference('bank_reference', 'bank');
   const sourceRecordId = r.reference('source_record_id');
   const reportedAt = r.timestamp('reported_as_of', now);
   const sequence = r.optionalInteger('sequence');
@@ -800,6 +841,9 @@ export function normaliseLmsReceipt(
         ? reverses === null || reverses === lmsReceiptRef
         : reverses !== null;
     if (wrongReversal) r.fail('reverses_receipt_ref', 'reversal_reference_invalid');
+    // A receipt cannot be dated after the India-time day of the report that carries it (the database refuses it the same way).
+    if (valueDate !== undefined && reportedAt !== undefined && valueDate > indiaDateOf(reportedAt))
+      r.fail('value_date', 'receipt_date_in_future');
   }
   if (
     r.errors.length > 0 ||
@@ -1399,11 +1443,13 @@ const IMPORT_ERROR_CODES: Readonly<Record<LmsImportErrorCode, true>> = {
   missing_required: true,
   invalid_reference: true,
   borrower_ref_looks_personal: true,
+  ref_looks_personal: true,
   invalid_amount: true,
   amount_not_positive: true,
   invalid_date: true,
   invalid_timestamp: true,
   timestamp_in_future: true,
+  receipt_date_in_future: true,
   invalid_integer: true,
   invalid_status: true,
   invalid_receipt_kind: true,

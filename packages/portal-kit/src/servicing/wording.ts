@@ -119,11 +119,13 @@ const IMPORT_ERROR: Readonly<Record<string, string>> = {
   invalid_reference: 'A reference has a character or a length the format does not allow.',
   borrower_ref_looks_personal:
     'The borrower reference looks like personal data. Use an opaque reference of your own.',
+  ref_looks_personal: 'A reference looks like personal data. Use an opaque reference of your own.',
   invalid_amount: 'An amount is not plain rupees with at most two decimals.',
   amount_not_positive: 'An amount must be more than zero.',
   invalid_date: 'A date is not a real date written as YYYY-MM-DD.',
   invalid_timestamp: 'A time is not a valid time with an offset.',
   timestamp_in_future: 'A reported time is in the future.',
+  receipt_date_in_future: 'A receipt is dated after the report that carries it.',
   invalid_integer: 'A whole number is not valid.',
   invalid_status: 'The loan status is not one the format allows.',
   invalid_receipt_kind: 'The receipt kind is neither receipt nor reversal.',
