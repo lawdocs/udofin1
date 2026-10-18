@@ -4,14 +4,37 @@ import { formatRupees } from './money';
 /**
  * Money, date and time text for the loan screens. Nothing here rounds, totals or converts a figure: money arrives as
  * integer paise and leaves as rupees with Indian digit grouping; a date-only value stays the calendar date it is.
+ *
+ * Dates and times do not use `Intl`: the month names are fixed tables and India time is computed as UTC plus 5 hours 30
+ * minutes (India has no daylight saving time), so the text is the same on every device and every engine, in the tests and on
+ * the phone. Digits are the ones used everywhere else in the app.
  */
-
-const LOCALE: Record<Language, string> = { en: 'en-IN', hi: 'hi-IN' };
 
 /** Rupees with the rupee sign and Indian digit grouping (12,34,567). Decimals appear only when there are paise. */
 export function formatAmount(paise: number): string {
   return `₹${formatRupees(paise)}`;
 }
+
+const MONTHS: Record<Language, readonly string[]> = {
+  en: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+  hi: [
+    'जनवरी',
+    'फ़रवरी',
+    'मार्च',
+    'अप्रैल',
+    'मई',
+    'जून',
+    'जुलाई',
+    'अगस्त',
+    'सितंबर',
+    'अक्टूबर',
+    'नवंबर',
+    'दिसंबर',
+  ],
+};
+
+/** India Standard Time is always UTC+05:30. */
+const IST_OFFSET_MINUTES = 330;
 
 const ISO_INSTANT = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})$/;
 
@@ -30,54 +53,42 @@ export function parseInstant(iso: string): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function parts(
-  date: Date,
-  language: Language,
-  options: Intl.DateTimeFormatOptions,
-): Record<string, string> | null {
-  try {
-    const formatted = new Intl.DateTimeFormat(LOCALE[language], options).formatToParts(date);
-    const out: Record<string, string> = {};
-    for (const part of formatted) out[part.type] = part.value;
-    return out;
-  } catch {
-    return null;
-  }
+const two = (n: number): string => String(n).padStart(2, '0');
+
+/** "5 Nov 2026" from a year, a month (1 to 12) and a day. */
+function dayText(year: number, month: number, day: number, language: Language): string {
+  return `${String(day)} ${MONTHS[language][month - 1] ?? ''} ${String(year)}`;
+}
+
+/** The wall-clock fields of an instant in India time. */
+function istFields(date: Date) {
+  const ist = new Date(date.getTime() + IST_OFFSET_MINUTES * 60_000);
+  return {
+    year: ist.getUTCFullYear(),
+    month: ist.getUTCMonth() + 1,
+    day: ist.getUTCDate(),
+    hour: ist.getUTCHours(),
+    minute: ist.getUTCMinutes(),
+  };
 }
 
 /**
  * "18 Oct 2026, 14:30 IST": the lender's report time or any other instant, in India time, always naming the zone so the
- * borrower is not left to guess. `hourCycle: 'h23'` keeps midnight as 00:00 (some engines print 24:00 with `hour12: false`).
- * An unreadable value gives an empty string, never a made-up time.
+ * borrower is not left to guess. Midnight is 00:00. An unreadable value gives an empty string, never a made-up time.
  */
 export function formatReportedAt(iso: string, language: Language): string {
   const date = parseInstant(iso);
   if (!date) return '';
-  const p = parts(date, language, {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-    timeZone: 'Asia/Kolkata',
-  });
-  if (!p) return `${date.toISOString().slice(0, 16).replace('T', ' ')} UTC`;
-  return `${p.day ?? ''} ${p.month ?? ''} ${p.year ?? ''}, ${p.hour ?? ''}:${p.minute ?? ''} IST`;
+  const f = istFields(date);
+  return `${dayText(f.year, f.month, f.day, language)}, ${two(f.hour)}:${two(f.minute)} IST`;
 }
 
 /** The calendar day of an instant in India time ("18 Oct 2026"). */
 export function formatInstantDay(iso: string, language: Language): string {
   const date = parseInstant(iso);
   if (!date) return '';
-  const p = parts(date, language, {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    timeZone: 'Asia/Kolkata',
-  });
-  if (!p) return date.toISOString().slice(0, 10);
-  return `${p.day ?? ''} ${p.month ?? ''} ${p.year ?? ''}`;
+  const f = istFields(date);
+  return dayText(f.year, f.month, f.day, language);
 }
 
 /** True for a real calendar date written YYYY-MM-DD (not 2026-02-31). */
@@ -97,21 +108,13 @@ export function isCalendarDate(value: string): boolean {
 }
 
 /**
- * A date without a time ("2026-12-01") is a calendar day, not an instant: it is formatted from its own parts in UTC, so no
- * time zone can move it to the day before or after. An unreadable value gives an empty string.
+ * A date without a time ("2026-12-01") is a calendar day, not an instant: it is written from its own parts, so no time zone can
+ * move it to the day before or after. An unreadable value gives an empty string.
  */
 export function formatDateOnly(value: string, language: Language): string {
   if (!isCalendarDate(value)) return '';
   const [year = 0, month = 1, day = 1] = value.split('-').map(Number);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  const p = parts(date, language, {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    timeZone: 'UTC',
-  });
-  if (!p) return value;
-  return `${p.day ?? ''} ${p.month ?? ''} ${p.year ?? ''}`;
+  return dayText(year, month, day, language);
 }
 
 /** The number of bytes a base64 text decodes to, worked out from its length (no decoding). -1 for text that is not base64. */

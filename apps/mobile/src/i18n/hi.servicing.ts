@@ -69,7 +69,7 @@ export const hiServicing: Record<keyof typeof enServicing, string> = {
   'loans.schedule.none':
     'दिखाने के लिए कोई सूची नहीं है। {lender} ने सूची नहीं बताई है, या उसकी जाँच हो रही है।',
   'loans.schedule.note':
-    'यह {lender} की सूची है। इसमें यह नहीं बताया गया कि कौन-सी किस्तें चुकाई जा चुकी हैं। जो बताया गया है वह खाते की गतिविधि में दिखता है।',
+    'यह {lender} की सूची है। इसमें किसी किस्त की स्थिति नहीं दिखाई गई है। जो बताया गया है वह खाते की गतिविधि में दिखता है।',
   'loans.schedule.row': 'किस्त {seq}, देय {date}',
   'loans.schedule.principal': 'मूलधन: {amount}',
   'loans.schedule.interest': 'ब्याज: {amount}',

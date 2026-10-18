@@ -72,7 +72,7 @@ export const enServicing = {
   'loans.schedule.none':
     'There is no schedule to show. {lender} has not reported one, or it is being checked.',
   'loans.schedule.note':
-    "This is {lender}'s schedule. It does not say which instalments have been paid. Account activity shows what has been reported.",
+    "This is {lender}'s schedule. It does not show the state of any instalment. Account activity shows what has been reported.",
   'loans.schedule.row': 'Instalment {seq}, due {date}',
   'loans.schedule.principal': 'Principal: {amount}',
   'loans.schedule.interest': 'Interest: {amount}',
