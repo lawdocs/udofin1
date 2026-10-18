@@ -220,11 +220,10 @@ export function PlatformForm({
   children: ReactNode;
 }) {
   return (
+    // A function action sets the method and the encoding itself; naming them here would only draw a warning.
     <form
       action={action}
-      method="post"
       className={inline ? 'inline' : 'form'}
-      encType="multipart/form-data"
       {...(autoComplete ? { autoComplete } : {})}
     >
       {op ? <input type="hidden" name="op" value={op} /> : null}
