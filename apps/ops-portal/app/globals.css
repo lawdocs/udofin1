@@ -1,0 +1,240 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--color-background);
+  color: var(--color-text);
+  font-family: var(--font-family);
+  font-size: var(--font-size-md);
+  line-height: 1.45;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.shell {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: var(--space-xl) var(--space-lg);
+}
+
+.shell h1 {
+  font-size: var(--font-size-xxl);
+  margin: 0 0 var(--space-sm);
+}
+
+.muted {
+  color: var(--color-text-muted);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.skip-link {
+  position: absolute;
+  left: var(--space-sm);
+  top: -4rem;
+  background: var(--color-surface);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.skip-link:focus {
+  top: var(--space-sm);
+}
+
+.portal-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-lg);
+  padding: var(--space-md) var(--space-lg);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.portal-header nav ul {
+  display: flex;
+  gap: var(--space-md);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.portal-header nav a[aria-current='page'] {
+  font-weight: 700;
+  text-decoration: none;
+  border-bottom: 2px solid var(--color-primary);
+}
+
+.portal-user {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.auth-card {
+  max-width: 28rem;
+}
+
+.form {
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.form label {
+  font-weight: 600;
+}
+
+input {
+  font: inherit;
+  padding: var(--space-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-background);
+  color: var(--color-text);
+}
+
+button {
+  font: inherit;
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  cursor: pointer;
+}
+
+button.secondary {
+  background: transparent;
+  color: var(--color-primary);
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.form-error,
+.state-error {
+  color: var(--color-danger);
+}
+
+.state {
+  padding: var(--space-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.card {
+  padding: var(--space-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-md);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  text-align: left;
+  padding: var(--space-sm);
+  border-bottom: 1px solid var(--color-border);
+}
+
+form.inline {
+  display: flex;
+  gap: var(--space-xs);
+}
+
+/* Onboarding screens (shared with the lender portal). */
+.field {
+  display: grid;
+  gap: var(--space-xs);
+  margin-bottom: var(--space-sm);
+}
+.field input,
+.field select,
+.field textarea,
+select,
+textarea {
+  font: inherit;
+  padding: var(--space-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-background);
+  color: var(--color-text);
+}
+.facts {
+  display: grid;
+  gap: var(--space-xs);
+  margin: 0 0 var(--space-md);
+}
+.facts > div {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1fr) 2fr;
+  gap: var(--space-md);
+}
+.facts dt {
+  font-weight: 600;
+}
+.facts dd {
+  margin: 0;
+  white-space: pre-wrap;
+}
+.stages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  list-style: none;
+  padding: 0;
+}
+.stages li {
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+.stages li.done::before {
+  content: '✓ ';
+}
+.stages li.current {
+  font-weight: 700;
+  border-color: var(--color-primary);
+}
+.tabs ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+  list-style: none;
+  padding: 0;
+}
+.tabs a[aria-current='page'] {
+  font-weight: 700;
+  border-bottom: 2px solid var(--color-primary);
+  text-decoration: none;
+}
+fieldset {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+details {
+  margin-top: var(--space-sm);
+}
