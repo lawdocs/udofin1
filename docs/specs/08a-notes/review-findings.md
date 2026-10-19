@@ -24,7 +24,7 @@ In total that is 10 application parts plus 9 database parts: **19 review dimensi
 
 **What the fix builders did.** Each fix builder took one area, wrote a forward-only change (database migrations 20261018000920 to 20261018000926, TypeScript, portals, the mobile app), added tests that fail when the fix is removed, and wrote a note of what changed, what the owner must decide and what risks remain. Those notes are the `fixes-*.md` files and they are the source of every outcome in section 6.
 
-**What this record's author did.** I read every fix note and the two findings files. For the fifteen high findings I also checked that the identifiers the notes name exist in the migrations at the base commit (for example the hold columns in migration 924, the unique settlement reference in 922, the in-query notice filters in 921, the link rule in 920 and the file-import connection branch in 924). I did not run the test suites. Final test totals are not stated here: [[COUNTS]].
+**What this record's author did.** I read every fix note and the two findings files. For the fifteen high findings I also checked that the identifiers the notes name exist in the migrations at the base commit (for example the hold columns in migration 924, the unique settlement reference in 922, the in-query notice filters in 921, the link rule in 920 and the file-import connection branch in 924). I did not run the test suites. Final test totals are in the Phase 08a paragraph of `docs/testing/strategy.md`.
 
 ## 3. Findings by area
 
@@ -81,7 +81,7 @@ Fifteen findings were rated high. They fall into eight stories.
 
 - **Independent review is not proof of absence.** The reviewers read the code as it stood at commit 8463bb1. They worked from the code and a local database. No real payment provider, bank, lender system or device exists in this repository to test against. Every statement about provider behaviour, bank references and regulation remains unverified until the provider, the bank, the lender or counsel supplies the text.
 - **The fixes are new code.** The fix wave added seven migrations (20261018000920 to 20261018000926) and changed TypeScript, portal and mobile code. No review of the fix wave itself is recorded in the fix notes. New defects are possible.
-- **"Fixed" is what the fix notes say.** I read the notes and spot-checked the high findings against the code. I did not re-run the tests. [[COUNTS]]
+- **"Fixed" is what the fix notes say.** I read the notes and spot-checked the high findings against the code. I did not re-run the tests; the totals the lead ran are in the Phase 08a paragraph of `docs/testing/strategy.md`.
 - **Findings the fix notes do not settle, found while writing this record** (all listed in `docs-D3.md` for the lead):
   - **A12** (two people resolving the same exception at once write duplicate history, and two bank-credit uploads of the same bank reference race) is mentioned in no fix note and the code is unchanged.
   - **U43** (the stored penal-charge figure is not tied to the sentence the borrower sees) is mentioned in no fix note and the code is unchanged. It is raised as D-149.
