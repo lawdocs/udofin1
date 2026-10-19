@@ -981,7 +981,7 @@ describe.skipIf(!enabled)(
         expect(sealed).not.toBe(naive);
       });
 
-      it('refuses the same real account again, under any owner, and keeps one entry per account', async () => {
+      it('refuses the same account number at the same bank again, under any owner (best effort: the fingerprint covers the bank code and the number as typed)', async () => {
         const sample = JSON.parse(state.sampleE ?? '{}') as Sample;
         const again = await post('/v1/platform/accounts', ids.p1, registerBody(sample));
         expect(again.statusCode).toBe(409);
