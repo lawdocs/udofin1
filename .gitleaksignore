@@ -17,3 +17,5 @@ d8c9331493c5af3401a73ebbb92aca22a573b319:services/api/test/integration/payments.
 0a85b2715d8227b617587b0c5257a742b4dc47d9:apps/mobile/test/payments.test.ts:generic-api-key:815
 0a85b2715d8227b617587b0c5257a742b4dc47d9:apps/mobile/test/payments.test.ts:generic-api-key:1231
 0a85b2715d8227b617587b0c5257a742b4dc47d9:apps/mobile/test/payments.test.ts:generic-api-key:1235
+# Portal-kit setup test (review-fix wave, builder P2): a made-up provider secret NAME in a lender namespace ("L" + hex + "_PSP_ONE") that a draft-form test types; the generic key rule read the word "secret". Not a credential (the platform stores names only); the next commit builds the name from a prefix constant. The fingerprint pins commit, file, rule and line.
+8bf1bad9659cf168d9832bc1d74b2ac44a633e81:packages/portal-kit/test/setup.test.tsx:generic-api-key:2845
