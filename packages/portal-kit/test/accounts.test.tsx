@@ -9,7 +9,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import * as kit from '../src/index.js';
 import { ExceptionDetailPage, ExceptionsPage } from '../src/accounts/exception-views.js';
 import { FeaturesPage } from '../src/accounts/feature-views.js';
+import { HoldsPage } from '../src/accounts/hold-views.js';
 import { MerchantsPage, SettlementPage } from '../src/accounts/merchant-views.js';
+import { OwnAccountListPage } from '../src/accounts/own-list-views.js';
 import { ProvidersPage } from '../src/accounts/provider-views.js';
 import { RegistryPage, RulesPage, registrationReadiness } from '../src/accounts/registry-views.js';
 import { type LenderChoice } from '../src/accounts/types.js';
@@ -22,6 +24,7 @@ import {
   CATALOGUE,
   catalogueEntry,
   changeRequest,
+  CONFIG_2,
   contextFor,
   EXCEPTION_1,
   EXCEPTION_2,
@@ -36,7 +39,9 @@ import {
   ME,
   OTHER,
   ok,
+  ownListState,
   page,
+  paymentConfig,
   platformException,
   provider,
   REGISTRY_1,
@@ -1723,6 +1728,20 @@ describe('across all the screens', () => {
       ctx={full('/exceptions')}
       notice={NONE}
     />,
+    <OwnAccountListPage
+      key="o"
+      state={ok(ownListState())}
+      ctx={full('/accounts/own-accounts')}
+      notice={NONE}
+    />,
+    <HoldsPage
+      key="h"
+      configs={page([paymentConfig(), paymentConfig({ id: CONFIG_2, holdKind: 'system' })])}
+      lenders={FINANCE}
+      query={{}}
+      ctx={full('/providers/holds')}
+      notice={NONE}
+    />,
   ];
 
   it('gives every control a label and ticks no box for the person', () => {
@@ -1808,6 +1827,8 @@ describe('across all the screens', () => {
         notice={NONE}
       />,
       <ExceptionDetailPage key="d" detail={bad} lenders={null} ctx={full()} notice={NONE} />,
+      <OwnAccountListPage key="o" state={bad} ctx={full()} notice={NONE} />,
+      <HoldsPage key="h" configs={bad} lenders={null} query={{}} ctx={full()} notice={NONE} />,
     ];
     for (const element of failing) {
       const { container } = render(element);
@@ -1853,6 +1874,10 @@ describe('across all the screens', () => {
       'AccountsFeaturesPage',
       'AccountsExceptionsPage',
       'AccountsExceptionDetailPage',
+      'AccountsOwnListPage',
+      'AccountsHoldsPage',
+      'loadPlatformOwnAccountList',
+      'loadPlatformSuspendedConfigs',
       'createPlatformClient',
       'platformCaps',
       'runAccountsOperation',

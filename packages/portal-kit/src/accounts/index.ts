@@ -3,6 +3,8 @@
 export { createPlatformClient, type PlatformApi, type PlatformResult } from './client.js';
 export { type AccountsContext } from './common.js';
 export { ProvidersPage as AccountsProvidersPage } from './provider-views.js';
+export { HoldsPage as AccountsHoldsPage } from './hold-views.js';
+export { OwnAccountListPage as AccountsOwnListPage } from './own-list-views.js';
 export {
   RegistryPage as AccountsRegistryPage,
   RulesPage as AccountsRulesPage,
@@ -40,6 +42,8 @@ export {
   loadResolvedExceptions as loadPlatformResolvedExceptions,
   loadException as loadPlatformException,
   loadLenderChoices as loadPlatformLenderChoices,
+  loadOwnAccountList as loadPlatformOwnAccountList,
+  loadSuspendedConfigs as loadPlatformSuspendedConfigs,
   type PlatformCaps,
   type AccountsQuery,
 } from './data.js';

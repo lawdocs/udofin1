@@ -39,6 +39,9 @@ interface Notice {
 export const isFeatureLocked = (entry: CatalogueEntry): boolean =>
   !entry.enableable || isLockedFeature(entry.feature);
 
+/** The features whose switch-on also needs the own-account list to be attested (the database refuses otherwise). */
+const OWN_LIST_FEATURES: readonly string[] = ['payments', 'mandates'];
+
 function LockedNote({ entry }: { entry: CatalogueEntry }) {
   return (
     <>
@@ -103,6 +106,12 @@ function SwitchCard({
           </p>
           {pending ? (
             <p role="status">A request for this switch is waiting for a decision (see below).</p>
+          ) : null}
+          {OWN_LIST_FEATURES.includes(entry.feature) && !enabled ? (
+            <p className="muted">
+              Switching this on also needs the own-account list to be attested, whichever lender it
+              is for. <a href="/accounts/own-accounts">Open the own-account list</a>.
+            </p>
           ) : null}
           {ctx.caps.featuresManage && !enabled && !pending ? (
             <details>

@@ -4,6 +4,7 @@ import { istOrDash } from '../servicing/format.js';
 import {
   AccountsNotice,
   PlatformForm,
+  ProvidersNav,
   ProviderField,
   Section,
   type AccountsContext,
@@ -180,6 +181,7 @@ export function ProvidersPage({
   return (
     <div>
       <h1>Payment providers</h1>
+      <ProvidersNav current="/providers" />
       <p>
         The register of the payment and mandate providers Udofin may use. Nothing is filled in for
         you: an empty register means no provider has been chosen. The evidence label is what a

@@ -11,6 +11,9 @@ import {
   LpException,
   LpExceptionDetail,
   MerchantEntry,
+  OwnAccountListEvent,
+  OwnAccountListState,
+  PaymentConfigEntry,
   PaymentProviderEntry,
   RegistryAccountEntry,
   ReturnCodeClassEntry,
@@ -41,6 +44,10 @@ export const EXCEPTION_1 = '0190a000-0000-7000-8000-000000000601';
 export const EXCEPTION_2 = '0190a000-0000-7000-8000-000000000602';
 export const EVENT_1 = '0190a000-0000-7000-8000-000000000701';
 export const CODE_1 = '0190a000-0000-7000-8000-000000000801';
+export const CONFIG_1 = '0190a000-0000-7000-8000-000000000901';
+export const CONFIG_2 = '0190a000-0000-7000-8000-000000000902';
+export const OWN_EVENT_1 = '0190a000-0000-7000-8000-000000000a01';
+export const OWN_EVENT_2 = '0190a000-0000-7000-8000-000000000a02';
 
 /** Made-up values that must never appear in a page, an address, an error or a log line. */
 export const CANARY_ACCOUNT = '482719503628';
@@ -333,6 +340,61 @@ export const exceptionDetail = (over: object = {}) =>
     },
     over,
   );
+
+/** A payment configuration as the platform reads it. Secret NAMES inside the lender's namespace; never a value. */
+export const paymentConfig = (over: object = {}) =>
+  make(
+    PaymentConfigEntry,
+    {
+      id: CONFIG_1,
+      lenderId: LENDER_A,
+      provider: 'sample_pay',
+      providerMode: 'production',
+      merchantRegistryId: MERCHANT_1,
+      settlementAccountId: SETTLEMENT_1,
+      secretRef: 'L00000000000A_PSP_ONE',
+      webhookSecretRef: 'L00000000000A_PSP_TWO',
+      railLimits: {},
+      railLimitsSource: null,
+      evidenceRef: null,
+      contractSectionRef: null,
+      status: 'suspended',
+      draftedBy: OTHER,
+      draftedAt: NOW,
+      submittedBy: OTHER,
+      submittedAt: NOW,
+      approvedBy: ME,
+      approvedAt: NOW,
+      statusReason: null,
+      statusReasons: ['platform_suspension'],
+      lastValidatedAt: null,
+      lastValidationOk: null,
+      holdKind: 'platform',
+      holdSetAt: '2026-10-18T10:00:00.000000+05:30',
+      updatedAt: NOW,
+    },
+    over,
+  );
+
+export const ownListEvent = (over: object = {}) =>
+  make(
+    OwnAccountListEvent,
+    {
+      id: OWN_EVENT_1,
+      eventKind: 'attested',
+      keyVersion: 1,
+      evidenceRef: 'Sample reconciliation sheet 4',
+      reason: null,
+      entriesCounted: 2,
+      actorId: OTHER,
+      occurredAt: NOW,
+    },
+    over,
+  );
+
+/** The own-account list as the platform reads it: attested by default, with its one attestation. */
+export const ownListState = (over: object = {}) =>
+  make(OwnAccountListState, { keyVersion: 1, attested: true, events: [ownListEvent()] }, over);
 
 // ---- results of loaders -----------------------------------------------------------------------------------------------
 export const ok = <T>(data: T) => ({ ok: true as const, status: 200, data });

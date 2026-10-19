@@ -6,6 +6,14 @@
 const lookup = (table: Readonly<Record<string, string>>, key: string | null, unknown: string) =>
   key !== null && Object.hasOwn(table, key) ? (table[key] ?? unknown) : unknown;
 
+// The mode, status and reason codes of a payment configuration are worded once, for the lender screens. The platform screen for
+// suspended configurations reuses those words so the two portals never describe the same thing differently.
+export {
+  configStatusWords as paymentConfigStatusWords,
+  modeWords as paymentConfigModeWords,
+  reasonWords as paymentConfigReasonWords,
+} from '../setup/wording.js';
+
 // -- Providers -----------------------------------------------------------------------------------------------------
 const PROVIDER_KIND: Readonly<Record<string, string>> = {
   payment: 'Payments',
@@ -175,6 +183,13 @@ const DECISION_RESULT: Readonly<Record<string, string>> = {
   applied: 'The request was approved and the switch has changed.',
   rejected: 'The request was rejected. Nothing changed.',
   expired: 'The request had run out of time, so it was not applied. Nothing changed.',
+  // The answers of the own-account list and of a hold release (see ownlist.* and hold.release in operations.ts).
+  attested:
+    'The own-account list was recorded as attested, with the evidence reference you gave. This is the platform’s own statement.',
+  attestation_withdrawn:
+    'The attestation was withdrawn. Lender accounts cannot be verified or linked, and payments and mandates cannot be switched on, until the list is attested again.',
+  hold_released:
+    'The hold was released. The configuration stays suspended: the lender submits it again and a different approver at the lender approves it.',
 };
 export const decisionResultWords = (result: string): string | null =>
   Object.hasOwn(DECISION_RESULT, result) ? (DECISION_RESULT[result] ?? null) : null;
@@ -187,6 +202,8 @@ const FEATURE_REASON: Readonly<Record<string, string>> = {
   lender_organisation_not_active: 'The lender’s organisation is not active.',
   onboarding_gate_not_activated: 'The lender’s onboarding has not reached the activated stage.',
   evidence_missing: 'The request carries no evidence references.',
+  own_account_list_not_attested:
+    'The own-account list has not been attested. Attest it first, on the Own-account list page.',
   payment_config_missing: 'There is no active payment configuration in production mode.',
   payment_config_mock_or_sandbox_only:
     'Only a mock or sandbox payment configuration is active. Those are for testing only and never count.',
@@ -212,6 +229,71 @@ export const reasonCodesFrom = (value: string | undefined): string[] =>
     .split(',')
     .filter((part) => /^[a-z][a-z0-9_]{1,63}$/.test(part))
     .slice(0, 10);
+
+/**
+ * Where to go next after a refusal or a missing prerequisite: a fixed page of this portal, chosen by the closed code and never by
+ * anything the server wrote. The sentence for the code says what to do; the link takes you there.
+ */
+const NEXT_STEP: Readonly<Record<string, { href: string; label: string }>> = {
+  own_account_list_not_attested: {
+    href: '/accounts/own-accounts',
+    label: 'Open the own-account list',
+  },
+  own_account_list_incomplete: { href: '/accounts', label: 'Open the registered accounts' },
+  platform_hold: {
+    href: '/providers/holds',
+    label: 'Open the suspended payment configurations',
+  },
+};
+/** The links that follow a refusal code and the unmet reasons that came with it, each at most once, in a fixed order. */
+export function nextStepsFor(
+  error: string | undefined,
+  reasons: readonly string[],
+): { href: string; label: string }[] {
+  const seen = new Set<string>();
+  const steps: { href: string; label: string }[] = [];
+  for (const code of [error, ...reasons]) {
+    if (code === undefined || !Object.hasOwn(NEXT_STEP, code) || seen.has(code)) continue;
+    const step = NEXT_STEP[code];
+    if (step) {
+      seen.add(code);
+      steps.push(step);
+    }
+  }
+  return steps;
+}
+
+// -- The own-account list ----------------------------------------------------------------------------------------------
+const OWN_LIST_EVENT: Readonly<Record<string, string>> = {
+  attested: 'Attested',
+  withdrawn: 'Attestation withdrawn',
+};
+export const ownListEventWords = (kind: string): string =>
+  lookup(OWN_LIST_EVENT, kind, 'An event this screen has no wording for');
+
+// -- A hold on a suspended payment configuration ---------------------------------------------------------------------
+const HOLD_KIND: Readonly<Record<string, string>> = {
+  platform: 'Held by the platform (a member of Udofin staff suspended it with the kill switch)',
+  system: 'Held by the system (the nightly check, or an automatic suspension after a mismatch)',
+};
+export const holdKindWords = (kind: string | null): string =>
+  kind === null
+    ? 'Suspended without a hold: the lender can submit it again'
+    : lookup(HOLD_KIND, kind, 'A hold this screen has no wording for');
+
+/** The rule for lifting a hold, said before anybody tries: who may lift which kind. */
+const RELEASE_RULE: Readonly<Record<string, string>> = {
+  platform:
+    'A hold set by a member of staff can be released only by a different member of staff. This page does not say who set it. If you suspended this configuration yourself, ask a colleague to release the hold.',
+  system:
+    'A hold set by the system can be released by any member of staff who may manage providers.',
+};
+export const releaseRuleWords = (kind: string): string | null =>
+  Object.hasOwn(RELEASE_RULE, kind) ? (RELEASE_RULE[kind] ?? null) : null;
+
+/** Limits of the reason that releases a hold: plain text of 10 to 200 characters. */
+export const RELEASE_REASON_MIN = 10;
+export const RELEASE_REASON_MAX = 200;
 
 // -- Exceptions ------------------------------------------------------------------------------------------------------
 const EXCEPTION_CLASS: Readonly<Record<string, string>> = {
@@ -319,7 +401,8 @@ const ERROR: Readonly<Record<string, string>> = {
   account_already_registered: 'That account is already in the registry. Nothing was stored.',
   account_registered_under_other_key:
     'That account is already registered under another key version. Nothing was stored.',
-  key_version_not_active: 'No fingerprint key version is active, so nothing can be registered.',
+  key_version_not_active:
+    'No fingerprint key version is active, so nothing can be registered or attested.',
   key_version_not_allowed: 'That key version cannot take a registration.',
   already_rekeyed: 'That entry was already re-registered under the new key version.',
   idempotency_conflict:
@@ -350,7 +433,8 @@ const ERROR: Readonly<Record<string, string>> = {
   provider_invalid: 'That provider is not valid.',
   return_code_invalid: 'The return code is not valid.',
   merchant_ref_invalid: 'The merchant reference is not valid.',
-  merchant_already_claimed: 'That merchant reference is already taken.',
+  merchant_already_claimed:
+    'Another claim of this merchant reference is already verified, so this claim cannot be verified. Nothing was changed.',
   merchant_not_active: 'That merchant is not active.',
   already_verified: 'That merchant is already verified.',
   already_linked: 'That settlement account is already linked.',
@@ -366,6 +450,17 @@ const ERROR: Readonly<Record<string, string>> = {
     'The lender does not yet meet what this switch needs. The reasons are listed below.',
   request_not_pending: 'That request is no longer waiting for a decision.',
   confirm_required: 'Tick the box to confirm before switching a feature off.',
+  attest_confirm_required:
+    'Tick the box to confirm that you checked the evidence before you record the statement.',
+  own_account_list_not_attested:
+    'The own-account list has not been attested, so lender accounts cannot be verified or linked, and payments and mandates cannot be switched on. Attest the list first, then try again. Nothing was changed.',
+  own_account_list_incomplete:
+    'The list cannot be attested yet: at least one verified Udofin account must be registered, and no Udofin or group account may still be waiting for verification. Register and verify those accounts first. Nothing was recorded.',
+  platform_hold:
+    'A hold stands on a payment configuration of this lender, so nothing can be submitted, approved or retired for the lender. Release the hold first, then try again. Nothing was changed.',
+  active_config_exists:
+    'Another payment configuration of this lender is already approved. A lender can have only one: the lender retires the other one first. Nothing was changed.',
+  config_state_invalid: 'The payment configuration is not in a state that allows this.',
   exception_state_invalid: 'That is not possible in the exception’s current state.',
   assignee_invalid: 'The person to assign to was not valid.',
   evidence_required: 'Give one to three short references to what you checked.',
