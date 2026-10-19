@@ -8,6 +8,7 @@ import {
   accountsErrorMessage,
   decisionResultWords,
   featureReasonWords,
+  nextStepsFor,
   reasonCodesFrom,
 } from './wording.js';
 
@@ -43,6 +44,8 @@ export function AccountsNotice({
 }) {
   if (error) {
     const codes = reasonCodesFrom(reasons);
+    // A refusal that has a next step links to the page where it is taken: a fixed page chosen by the code, never by server text.
+    const steps = nextStepsFor(error, codes);
     return (
       <div role="alert" className="form-error">
         <p>{accountsErrorMessage(error)}</p>
@@ -53,6 +56,11 @@ export function AccountsNotice({
             ))}
           </ul>
         ) : null}
+        {steps.map((step) => (
+          <p key={step.href}>
+            <a href={step.href}>{step.label}</a>
+          </p>
+        ))}
       </div>
     );
   }
@@ -67,6 +75,7 @@ const NAV = [
   { href: '/accounts/rules', label: 'Format rules and key versions' },
   { href: '/accounts/settlement', label: 'Settlement accounts' },
   { href: '/accounts/merchants', label: 'Merchants' },
+  { href: '/accounts/own-accounts', label: 'Own-account list' },
 ] as const;
 
 /** Links between the account registry pages. The current page is named in words, not only by style. */
@@ -75,6 +84,28 @@ export function AccountsNav({ current }: { current: (typeof NAV)[number]['href']
     <nav aria-label="Account registry pages" className="tabs">
       <ul>
         {NAV.map((item) => (
+          <li key={item.href}>
+            <a href={item.href} aria-current={item.href === current ? 'page' : undefined}>
+              {item.label}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  );
+}
+
+const PROVIDER_NAV = [
+  { href: '/providers', label: 'Providers and return codes' },
+  { href: '/providers/holds', label: 'Suspended payment configurations' },
+] as const;
+
+/** Links between the provider pages. The current page is named in words, not only by style. */
+export function ProvidersNav({ current }: { current: (typeof PROVIDER_NAV)[number]['href'] }) {
+  return (
+    <nav aria-label="Provider pages" className="tabs">
+      <ul>
+        {PROVIDER_NAV.map((item) => (
           <li key={item.href}>
             <a href={item.href} aria-current={item.href === current ? 'page' : undefined}>
               {item.label}

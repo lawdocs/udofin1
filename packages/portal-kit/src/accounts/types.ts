@@ -7,6 +7,8 @@ import {
   type LpException,
   type LpExceptionDetail,
   type MerchantEntry,
+  type OwnAccountListState,
+  type PaymentConfigEntry,
   type PaymentProviderEntry,
   type RegistryAccountEntry,
   type ReturnCodeClassEntry,
@@ -31,6 +33,8 @@ export type MerchantRow = MerchantEntry;
 export type CatalogueEntry = z.infer<typeof FeatureCatalogEntry>;
 export type SwitchState = FeatureSwitchState;
 export type ChangeRequest = FeatureChangeRequestEntry;
+export type OwnListState = OwnAccountListState;
+export type ConfigEntry = PaymentConfigEntry;
 export type PlatformException = z.infer<typeof LpException>;
 export type ExceptionDetail = z.infer<typeof LpExceptionDetail>;
 

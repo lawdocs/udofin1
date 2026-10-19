@@ -308,8 +308,8 @@ function MerchantCard({
               hidden={{ id: merchant.id }}
             >
               <p>
-                Revoking suspends the active payment configurations that use this merchant. The
-                reference stays taken.
+                Revoking suspends the active payment configurations that use this merchant. Once it
+                is revoked, another claim of the same reference can be verified.
               </p>
               <AreaField
                 name="reason"

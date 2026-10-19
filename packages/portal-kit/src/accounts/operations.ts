@@ -1,6 +1,8 @@
 import {
   AccountFormatRuleApproveInput,
   AccountFormatRuleDraftInput,
+  AccountsActionResult,
+  AccountsEvidenceLabel,
   AccountsReasonInput,
   FeatureChangeDecided,
   FeatureChangeDecisionInput,
@@ -14,6 +16,8 @@ import {
   LpExceptionReopenInput,
   LpExceptionResolveInput,
   MerchantVerifyInput,
+  OwnAccountListAttestInput,
+  OwnAccountListState,
   PaymentProviderInput,
   RegistryAccountRegisterInput,
   RegistryAccountRegistered,
@@ -33,6 +37,8 @@ import {
   PROVIDER_KINDS,
   PROVIDER_STATUSES,
   reasonCodesFrom,
+  RELEASE_REASON_MAX,
+  RELEASE_REASON_MIN,
   RETURN_CLASSES,
   safeErrorCode,
 } from './wording.js';
@@ -359,6 +365,56 @@ export const ACCOUNTS_OPERATIONS: Readonly<Record<string, AccountsOperation>> = 
     },
   },
 
+  // ---- The own-account list and the hold on a payment configuration -----------------------------------------------------
+  // The answer of each is checked against the contract and then against what the operation was meant to do, so a drifted or
+  // wrong answer is never reported as a success.
+  'ownlist.attest': {
+    portals: ops,
+    run: (api, form, key) => {
+      // The person's own act: one deliberate tick, and a reference to what the list was reconciled against.
+      if (form.get('confirm') !== 'on') return Promise.resolve(bad('attest_confirm_required'));
+      const evidenceRef = str(form, 'evidenceRef');
+      if (!evidenceRef || !AccountsEvidenceLabel.safeParse(evidenceRef).success)
+        return Promise.resolve(bad('evidence_invalid'));
+      const note = str(form, 'note');
+      return checked(
+        OwnAccountListAttestInput,
+        { evidenceRef, ...(note ? { note } : {}) },
+        (body) => api.post('/v1/platform/own-account-list/attest', OwnAccountListState, body, key),
+      );
+    },
+  },
+  'ownlist.withdraw': {
+    portals: ops,
+    run: (api, form, key) => {
+      const reason = reasonText(form, 'reason');
+      if (!reason) return Promise.resolve(bad('reason_required'));
+      return checked(AccountsReasonInput, { reason }, (body) =>
+        api.post('/v1/platform/own-account-list/withdraw', OwnAccountListState, body, key),
+      );
+    },
+  },
+  'hold.release': {
+    portals: ops,
+    run: (api, form, key) => {
+      const id = uuid(form, 'id');
+      if (!id) return Promise.resolve(bad());
+      // A short, plain reason: 10 to 200 characters after trimming. Longer or shorter is refused before anything is sent.
+      const reason = str(form, 'reason');
+      if (!reason || reason.length < RELEASE_REASON_MIN)
+        return Promise.resolve(bad('reason_required'));
+      if (reason.length > RELEASE_REASON_MAX) return Promise.resolve(bad('reason_invalid'));
+      return checked(AccountsReasonInput, { reason }, (body) =>
+        api.post(
+          `/v1/platform/payment-configs/${id}/release-hold`,
+          AccountsActionResult,
+          body,
+          key,
+        ),
+      );
+    },
+  },
+
   // ---- Merchants --------------------------------------------------------------------------------------------------
   'merchant.verify': {
     portals: ops,
@@ -562,6 +618,22 @@ export async function runAccountsOperation(
   if (typeof key !== 'string' || !KEY.test(key)) return { ok: false, code: 'validation_failed' };
   const result = await operation.run(api, form, key);
   if (!result.ok) return failure(result);
+  if (name === 'ownlist.attest' || name === 'ownlist.withdraw') {
+    const state = OwnAccountListState.safeParse(result.data);
+    // An attestation must leave the list attested, and a withdrawal must leave it not attested.
+    const wanted = name === 'ownlist.attest';
+    return state.success && state.data.attested === wanted
+      ? { ok: true, result: wanted ? 'attested' : 'attestation_withdrawn' }
+      : { ok: false, code: 'bad_response' };
+  }
+  if (name === 'hold.release') {
+    const released = AccountsActionResult.safeParse(result.data);
+    const id = form.get('id');
+    // The configuration stays suspended: the hold is lifted, nothing else changes.
+    return released.success && released.data.id === id && released.data.status === 'suspended'
+      ? { ok: true, result: 'hold_released' }
+      : { ok: false, code: 'bad_response' };
+  }
   if (name === 'feature.decide') {
     const decided = FeatureChangeDecided.safeParse(result.data);
     // The answer matters: an "expired" decision applied nothing.
@@ -605,7 +677,7 @@ export function safeAccountsReturnPath(value: unknown): string {
   const QUERY = String.raw`(?:\?[A-Za-z0-9=&_.%,:-]{1,700})?`;
   const ID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
   const allowed = new RegExp(
-    `^/(?:providers|accounts(?:/rules|/settlement|/merchants)?|features|exceptions(?:/${ID})?)${QUERY}$`,
+    `^/(?:providers(?:/holds)?|accounts(?:/rules|/settlement|/merchants|/own-accounts)?|features|exceptions(?:/${ID})?)${QUERY}$`,
   );
   return typeof value === 'string' && allowed.test(value) ? value : '/accounts';
 }

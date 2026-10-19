@@ -8,6 +8,8 @@ import {
   LpExceptionDetail,
   LpExceptionPage,
   MerchantPage,
+  OwnAccountListState,
+  PaymentConfigPage,
   PaymentProviderList,
   RegistryAccountEntry,
   RegistryAccountPage,
@@ -46,6 +48,13 @@ export function platformCaps(permissions: readonly string[]): PlatformCaps {
 /** Either registry permission. */
 export const mayReadRegistry = (caps: PlatformCaps): boolean =>
   caps.registryManage || caps.registryVerify;
+
+/** Attesting the own-account list is the registry verifier's decision (one person, with evidence). */
+export const mayAttestOwnList = (caps: PlatformCaps): boolean => caps.registryVerify;
+/** Withdrawing the attestation is open to either registry permission (the API fails closed the same way). */
+export const mayWithdrawOwnList = (caps: PlatformCaps): boolean => mayReadRegistry(caps);
+/** Releasing a hold on a payment configuration needs the provider permission. */
+export const mayReleaseHold = (caps: PlatformCaps): boolean => caps.providersManage;
 
 // ---------------------------------------------------------------------------------------------------------------
 // Page queries (from the URL). Anything that does not look right is dropped, never passed on.
@@ -219,6 +228,17 @@ export const loadMerchants = (api: PlatformApi, query: AccountsQuery) =>
   api.get(
     `/v1/platform/merchants${qs({ limit: PAGE, cursor: query.cursor, lenderId: query.lenderId, verification: query.verification, status: query.status })}`,
     MerchantPage,
+  );
+
+/** Whether the list of Udofin and group accounts is attested, for the active key version, with the latest events. */
+export const loadOwnAccountList = (api: PlatformApi) =>
+  api.get('/v1/platform/own-account-list', OwnAccountListState);
+
+/** Suspended payment configurations of every lender (or one), newest first: the ones that may carry a hold. */
+export const loadSuspendedConfigs = (api: PlatformApi, query: AccountsQuery) =>
+  api.get(
+    `/v1/platform/payment-configs${qs({ limit: PAGE, cursor: query.cursor, lenderId: query.lenderId, status: 'suspended' })}`,
+    PaymentConfigPage,
   );
 
 export const loadFeatureCatalogue = (api: PlatformApi) =>
