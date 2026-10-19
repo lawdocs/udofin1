@@ -9,7 +9,7 @@
 -- Synthetic data only (labelled SAMPLE). Error codes are reported as SQLSTATE|hint.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(159);
+select plan(237);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -286,7 +286,7 @@ select is((select array_agg(feature order by feature) from servicing.lender_feat
 
 -- ============================================================================================================================
 -- Loans (applications are an earlier phase's rows: fixtures), then the lenders' files through stage_import and commit_import.
--- Applications 1 to 9, 13 and 14 are borrower b1 at lender X, 10 is b2 at X, 11 is b2 at Y, 12 is b1 at Y.
+-- Applications 1 to 9 and 13 to 16 are borrower b1 at lender X, 10 is b2 at X, 11 is b2 at Y, 12 is b1 at Y.
 -- ============================================================================================================================
 select pg_temp.as_owner();
 insert into lending.loan_products (id, lender_org_id, category_key, code, name, status) values
@@ -298,12 +298,12 @@ values ('fa910000-0000-4000-8000-000000000001', 'fa900000-0000-4000-8000-0000000
        ('fa910000-0000-4000-8000-000000000002', 'fa900000-0000-4000-8000-000000000002', pg_temp.ly(), 1, 'approved', 1000000, 50000000, 180, 1825, 'fixed', 1400, 2400, pg_temp.u(28), pg_temp.u(29), now(), now());
 insert into lending.loan_requests (id, borrower_id, category_key, requested_amount_minor, requested_tenure_days, purpose_code, status)
 select ('fa700000-0000-4000-8000-0000000000' || lpad(n::text, 2, '0'))::uuid, case when n in (10, 11) then pg_temp.got('b2')::uuid else pg_temp.got('b1')::uuid end, 'personal', 5000000, 365, 'education', 'submitted'
-from generate_series(1, 14) n;
+from generate_series(1, 16) n;
 insert into lending.applications (id, lender_org_id, loan_request_id, borrower_id, product_version_id, status, requested_amount_minor, requested_tenure_days, lender_reference)
 select ('fa200000-0000-4000-8000-0000000000' || lpad(n::text, 2, '0'))::uuid, case when n in (11, 12) then pg_temp.ly() else pg_temp.lx() end,
        ('fa700000-0000-4000-8000-0000000000' || lpad(n::text, 2, '0'))::uuid, case when n in (10, 11) then pg_temp.got('b2')::uuid else pg_temp.got('b1')::uuid end,
        case when n in (11, 12) then 'fa910000-0000-4000-8000-000000000002' else 'fa910000-0000-4000-8000-000000000001' end::uuid, 'disbursement_pending', 5000000, 365, 'SAMPLE-APP-' || n
-from generate_series(1, 14) n;
+from generate_series(1, 16) n;
 
 -- Row builders for the lenders' files (labelled SAMPLE figures; 4,750.00 due is 4,000.00 principal and 750.00 interest).
 create function pg_temp.lrow(p_ref text, p_app text, p_due_days integer, p_srid text, p_hours numeric default 1, p_extra jsonb default '{}'::jsonb) returns jsonb language sql as $fn$
@@ -345,12 +345,14 @@ select is(pg_temp.imp(pg_temp.lx(), 10, 'loan', 'x-loans', jsonb_build_array(
   pg_temp.lrow('SAMPLE-LN-7', 'SAMPLE-APP-7', 3, 'SRC-L7'), pg_temp.lrow('SAMPLE-LN-8', 'SAMPLE-APP-8', 2, 'SRC-L8'), pg_temp.lrow('SAMPLE-LN-9', 'SAMPLE-APP-9', 0, 'SRC-L9'),
   pg_temp.lrow('SAMPLE-LN-10', 'SAMPLE-APP-10', 3, 'SRC-L10'),
   pg_temp.lrow('SAMPLE-LN-11', 'SAMPLE-APP-13', 26, 'SRC-L11', 0, '{"overdue_principal":"4000.00","overdue_interest":"750.00","total_overdue":"4750.00","days_past_due":"4"}'),
-  pg_temp.lrow('SAMPLE-LN-12', 'SAMPLE-APP-14', 26, 'SRC-L12', 0, '{"overdue_principal":"4000.00","overdue_interest":"750.00","total_overdue":"4750.00","days_past_due":"4"}'))), 'committed:{"new": 12}', 'A: lender X''s servicing operator imports twelve loans (stage, then commit)');
+  pg_temp.lrow('SAMPLE-LN-12', 'SAMPLE-APP-14', 26, 'SRC-L12', 0), pg_temp.lrow('SAMPLE-LN-13', 'SAMPLE-APP-15', 0, 'SRC-L13', 0), pg_temp.lrow('SAMPLE-LN-14', 'SAMPLE-APP-16', 0, 'SRC-L14', 0))),
+  'committed:{"new": 14}', 'A: lender X''s servicing operator imports fourteen loans (stage, then commit)');
 select is(pg_temp.imp(pg_temp.lx(), 10, 'schedule', 'x-sched', jsonb_build_array(
   pg_temp.srow('SAMPLE-LN-1', 3, 'SRC-S1'), pg_temp.srow('SAMPLE-LN-2', 3, 'SRC-S2'), pg_temp.srow('SAMPLE-LN-3', 3, 'SRC-S3'), pg_temp.srow('SAMPLE-LN-4', 3, 'SRC-S4'),
   pg_temp.srow('SAMPLE-LN-5', 3, 'SRC-S5'), pg_temp.srow('SAMPLE-LN-6', 3, 'SRC-S6'), pg_temp.srow('SAMPLE-LN-7', 3, 'SRC-S7'), pg_temp.srow('SAMPLE-LN-8', 2, 'SRC-S8'),
   pg_temp.srow('SAMPLE-LN-9', 0, 'SRC-S9'), pg_temp.srow('SAMPLE-LN-10', 3, 'SRC-S10'),
-  pg_temp.srow('SAMPLE-LN-11', -4, 'SRC-S11', 0), pg_temp.srow('SAMPLE-LN-12', -4, 'SRC-S12', 0))), 'committed:{"new": 12}', 'A: and their repayment schedules (loans 11 and 12 are four days overdue)');
+  pg_temp.srow('SAMPLE-LN-11', -4, 'SRC-S11', 0), pg_temp.srow('SAMPLE-LN-12', -4, 'SRC-S12', 0), pg_temp.srow('SAMPLE-LN-13', 0, 'SRC-S13', 0), pg_temp.srow('SAMPLE-LN-14', 0, 'SRC-S14', 0))),
+  'committed:{"new": 14}', 'A: and their repayment schedules (loan 11 is four days overdue; loans 9, 13 and 14 fall due today)');
 select is(pg_temp.imp(pg_temp.ly(), 20, 'loan', 'y-loans', jsonb_build_array(
   pg_temp.lrow('SAMPLE-LN-Y1', 'SAMPLE-APP-11', 3, 'SRC-LY1'), pg_temp.lrow('SAMPLE-LN-Y2', 'SAMPLE-APP-12', 3, 'SRC-LY2'))), 'committed:{"new": 2}', 'A: lender Y imports its two loans');
 select is(pg_temp.imp(pg_temp.ly(), 20, 'schedule', 'y-sched', jsonb_build_array(
@@ -361,7 +363,7 @@ select servicing.complete_disbursements(pg_temp.ly());
 select pg_temp.as_owner();
 create function pg_temp.lid(p_ref text) returns uuid language sql as $fn$ select id from servicing.loan_accounts where lms_loan_ref = p_ref $fn$;
 grant execute on all functions in schema pg_temp to public;
-select is((select count(*) from servicing.loan_accounts where status = 'active' and last_synced_at is not null), 14::bigint, 'A: fourteen loan accounts exist, lender-reported and active');
+select is((select count(*) from servicing.loan_accounts where status = 'active' and last_synced_at is not null), 16::bigint, 'A: sixteen loan accounts exist, lender-reported and active');
 
 -- ============================================================================================================================
 -- FLOW A.2  A payment from the borrower's request to a bank-confirmed, lender-posted payment, and what each side and every other party sees.
@@ -852,6 +854,275 @@ select pg_temp.as_user(pg_temp.u(27));
 select is((select count(*) from payments.reconciliation_exceptions where class in ('mandate_notice_late', 'mandate_debit_unresolved')), 0::bigint, 'B: and lender Y sees none of those exceptions');
 select pg_temp.as_user(pg_temp.u(41));
 select is((select (status)::text from payments.my_mandates()), 'active', 'B: lender Y''s mandate is untouched by lender X''s cancellation (still active)');
+
+-- ============================================================================================================================
+-- FLOW C  Reminders: the policy and wording approved by two people (flow A), planned from the lender's schedule, claimed inside the window, reported
+--         with the claim token; a hold placed and released; an overdue message without and with the lender's approved penal-charge sentence; the
+--         quiet period after a payment decided by the lender's receipts (a partial reversal keeps it, a full one lifts it).
+--         Loans 9, 13 and 14 fall due today, so their pre-due message (the day before) is due. Loan 11 is four days overdue (its overdue message is
+--         due since yesterday), loan 12 becomes overdue after the sentence was approved. Loan 10 is borrower b2's at lender X.
+-- ============================================================================================================================
+select pg_temp.as_owner();
+-- The reminder window is judged at a fixed IST time of day through the seam only that check reads (a non-production session setting).
+create function pg_temp.at_ist(p_time text) returns void language plpgsql as $fn$
+begin
+  perform set_config('udofin.allow_mock_providers', 'on', true);
+  perform set_config('udofin.test_clock', pg_temp.d()::text || ' ' || p_time || '+05:30', true);
+end
+$fn$;
+create function pg_temp.rem(p_loan text, p_kind text, p_ch text default 'in_app') returns text language plpgsql security definer as $fn$
+declare v text;
+begin
+  select r.status || coalesce(':' || r.suppress_reason, '') into v from servicing.reminders r
+   where r.loan_account_id = pg_temp.lid(p_loan) and r.kind = p_kind and r.channel = p_ch order by r.scheduled_for limit 1;
+  return v;
+end
+$fn$;
+create function pg_temp.rid(p_loan text, p_kind text, p_ch text default 'in_app') returns uuid language plpgsql security definer as $fn$
+declare v uuid;
+begin
+  select r.id into v from servicing.reminders r where r.loan_account_id = pg_temp.lid(p_loan) and r.kind = p_kind and r.channel = p_ch order by r.scheduled_for limit 1;
+  return v;
+end
+$fn$;
+grant execute on all functions in schema pg_temp to public;
+
+-- 0. The lender's receipts decide the quiet period: loan 13 got a payment that is reversed by 0.01, loan 14 one that is reversed in full.
+select is(pg_temp.imp(pg_temp.lx(), 10, 'receipt', 'x-receipts-q', jsonb_build_array(pg_temp.rrow('SAMPLE-LN-13', 'RC-Q13', '4750.00', 'UPI-Q13', 0), pg_temp.rrow('SAMPLE-LN-14', 'RC-Q14', '4750.00', 'UPI-Q14', 0))),
+  'committed:{"new": 2}', 'C: the lender posts a receipt on loan 13 and one on loan 14 (4,750.00 each, today)');
+select is(pg_temp.imp(pg_temp.lx(), 10, 'receipt', 'x-reversals-q', jsonb_build_array(
+  pg_temp.rrow('SAMPLE-LN-13', 'RV-Q13', '0.01', 'REV-Q13', 0, '{"receipt_kind":"reversal","reverses_receipt_ref":"RC-Q13"}'),
+  pg_temp.rrow('SAMPLE-LN-14', 'RV-Q14', '4750.00', 'REV-Q14', 0, '{"receipt_kind":"reversal","reverses_receipt_ref":"RC-Q14"}'))), 'committed:{"new": 2}', 'C: and reverses 0.01 of the first and all of the second');
+-- 1. Planning, from the approved policy and the lender's schedules.
+select pg_temp.as_system();
+select is(servicing.plan_reminders() > 0, true, 'C: the planner plans messages for the lender''s loans');
+select is(array[pg_temp.rem('SAMPLE-LN-9', 'pre_due'), pg_temp.rem('SAMPLE-LN-9', 'pre_due', 'push'), pg_temp.rem('SAMPLE-LN-11', 'overdue'), pg_temp.rem('SAMPLE-LN-11', 'overdue', 'push')],
+  array['planned', 'planned', 'planned', 'planned'], 'C: loan 9 has its pre-due message planned on both channels, loan 11 its overdue message');
+select is(servicing.plan_reminders(), 0, 'C: planning again plans nothing (idempotent)');
+select pg_temp.as_user(pg_temp.u(11));
+select is((select count(*) from servicing.reminders where loan_account_id = pg_temp.lid('SAMPLE-LN-9')) > 0, true, 'C: lender X''s communications admin reads the planned messages');
+select pg_temp.as_user(pg_temp.u(21));
+select is((select count(*) from servicing.reminders where lender_org_id = pg_temp.lx()) + (select count(*) from servicing.reminder_policies where lender_org_id = pg_temp.lx())
+          + (select count(*) from servicing.reminder_templates where lender_org_id = pg_temp.lx()), 0::bigint, 'C: lender Y''s communications admin sees none of lender X''s messages, policy or wording');
+select is((select count(*) from servicing.reminders where lender_org_id = pg_temp.ly()) > 0, true, 'C: but its own');
+-- 2. Claiming: outside the window nothing is claimed; inside it the due messages are.
+select pg_temp.as_system();
+select pg_temp.at_ist('03:00');
+select is((select count(*) from servicing.claim_due_reminders(100)), 0::bigint, 'C: at 03:00 IST (outside the window) nothing is claimed');
+select pg_temp.at_ist('12:00');
+select pg_temp.as_system();
+select pg_temp.keep('claimed', (select string_agg(c.kind || '/' || c.channel || '/' || (select la.lms_loan_ref from servicing.loan_accounts la where la.id = c.loan_account_id), ',' order by c.kind, c.channel, (select la.lms_loan_ref from servicing.loan_accounts la where la.id = c.loan_account_id))
+  from servicing.claim_due_reminders(100) c where c.loan_account_id in (pg_temp.lid('SAMPLE-LN-9'), pg_temp.lid('SAMPLE-LN-11'), pg_temp.lid('SAMPLE-LN-13'), pg_temp.lid('SAMPLE-LN-14'))));
+select is(pg_temp.got('claimed'), 'pre_due/in_app/SAMPLE-LN-14,pre_due/in_app/SAMPLE-LN-9,pre_due/push/SAMPLE-LN-14,pre_due/push/SAMPLE-LN-9',
+  'C: at noon the pre-due messages of loans 9 and 14 are claimed on both channels; loan 13 (a payment reversed by 0.01) and loan 11 (no penal-charge sentence) are not');
+select is(array[pg_temp.rem('SAMPLE-LN-13', 'pre_due'), pg_temp.rem('SAMPLE-LN-14', 'pre_due'), pg_temp.rem('SAMPLE-LN-11', 'overdue')], array['suppressed:recent_payment', 'claimed', 'suppressed:penal_text_missing'],
+  'C: loan 13 is quiet (its receipt is still posted after a reversal of 0.01), loan 14 is not (its receipt is reversed in full), loan 11''s overdue message is stopped: no approved penal-charge sentence');
+select pg_temp.as_user(pg_temp.u(17));
+select is((select (class, severity, owner)::text from payments.reconciliation_exceptions where class = 'penal_text_missing'), '(penal_text_missing,warning,lender)', 'C: the lender is told, as its own exception, that the overdue message needs its penal-charge sentence');
+select pg_temp.as_user(pg_temp.u(27));
+select is((select count(*) from payments.reconciliation_exceptions where lender_org_id = pg_temp.lx()), 0::bigint, 'C: lender Y sees no exception of lender X');
+select pg_temp.as_system();
+-- 3. Reporting a send with the claim token.
+select pg_temp.as_system();
+select is(servicing.record_reminder_attempt(pg_temp.rid('SAMPLE-LN-9', 'pre_due'), 'accepted', 'send', 'SAMPLE-INAPP-1', null, 1), 'accepted', 'C: the worker reports the in-app message of loan 9 as accepted, with its claim token');
+select is(pg_temp.err(format($$select servicing.record_reminder_attempt(%L, 'accepted', 'send', 'SAMPLE-PUSH-1', null, 2)$$, pg_temp.rid('SAMPLE-LN-9', 'pre_due', 'push'))), '55000|not_claimed',
+  'C: a report with the wrong claim token (another worker claimed it since) is refused');
+select is(servicing.record_reminder_attempt(pg_temp.rid('SAMPLE-LN-9', 'pre_due', 'push'), 'accepted', 'send', 'SAMPLE-PUSH-1', null, 1), 'accepted', 'C: and with the right token it is recorded');
+select is(servicing.record_reminder_attempt(pg_temp.rid('SAMPLE-LN-14', 'pre_due'), 'accepted', 'send', 'SAMPLE-INAPP-2', null, 1), 'accepted', 'C: loan 14''s message too');
+select pg_temp.as_user(pg_temp.u(40));
+select is((select (kind, due_date = pg_temp.d(), message)::text from servicing.my_reminders() where loan_account_id = pg_temp.lid('SAMPLE-LN-9')),
+  format('(pre_due,t,"Reminder from Alpha: your installment of Rs 4,750.00 is due on %s.")', to_char(pg_temp.d(), 'FMDD Mon YYYY')), 'C: the borrower reads the lender''s approved wording with the lender''s figures');
+select is((select count(*) from servicing.my_reminders()), 2::bigint, 'C: and exactly two messages (loans 9 and 14); nothing about the loan whose payment still counts');
+select pg_temp.as_user(pg_temp.u(41));
+select is((select count(*) from servicing.my_reminders()), 0::bigint, 'C: the other borrower sees none of them');
+-- 4. A hold on a loan: its messages stop, and the ones still to come resume when it is released.
+select pg_temp.as_user(pg_temp.u(21));
+select is(pg_temp.err(format($$select servicing.place_communication_hold(%L, 'complaint', 'borrower complained about the reminders')$$, pg_temp.lid('SAMPLE-LN-10'))), 'P0002|', 'C: another lender''s communications admin cannot place a hold on lender X''s loan');
+select pg_temp.as_user(pg_temp.u(11));
+select is((select count(*) from servicing.reminders where loan_account_id = pg_temp.lid('SAMPLE-LN-10') and status = 'planned'), 2::bigint, 'C: loan 10 (due in three days) has its two pre-due messages planned for the day before');
+select pg_temp.keep('hold', servicing.place_communication_hold(pg_temp.lid('SAMPLE-LN-10'), 'complaint', 'borrower complained about the reminders')::text);
+select is((select array_agg(distinct status || ':' || coalesce(suppress_reason, '') order by status || ':' || coalesce(suppress_reason, '')) from servicing.reminders where loan_account_id = pg_temp.lid('SAMPLE-LN-10')),
+  array['suppressed:hold'], 'C: the hold stops every message of loan 10');
+select is(pg_temp.err(format($$select servicing.place_communication_hold(%L, 'complaint', 'a second hold on the same loan')$$, pg_temp.lid('SAMPLE-LN-10'))), '23505|hold_active', 'C: a loan has one active hold');
+select pg_temp.as_user(pg_temp.u(21));
+select is(pg_temp.err(format($$select servicing.release_communication_hold(%L, 'another lender must not release this hold')$$, pg_temp.got('hold'))), 'P0002|', 'C: another lender cannot release it');
+select pg_temp.as_user(pg_temp.u(11));
+select is(servicing.release_communication_hold(pg_temp.got('hold')::uuid, 'complaint resolved with the borrower'), 'released', 'C: the lender releases the hold');
+select is((select array_agg(distinct status order by status) from servicing.reminders where loan_account_id = pg_temp.lid('SAMPLE-LN-10')), array['planned'], 'C: the messages still to come are planned again');
+-- 5. Overdue: without a sentence the message stayed stopped; the lender drafts a sentence, a second person approves it.
+select pg_temp.as_user(pg_temp.u(11));
+select pg_temp.keep('pen', servicing.draft_penal_charge_text(pg_temp.lx(), 'flat', 50000, null, true, true, 'Charge as per the loan agreement', 'A separate penal charge of 500.00 applies to the overdue amount.')::text);
+select is(pg_temp.err(format($$select servicing.approve_penal_charge_text(%L)$$, pg_temp.got('pen'))), 'P0002|', 'C: the person who drafted the sentence cannot approve it (the approval right is a different permission)');
+select pg_temp.as_user(pg_temp.u(21));
+select is(pg_temp.err(format($$select servicing.approve_penal_charge_text(%L)$$, pg_temp.got('pen'))), 'P0002|', 'C: another lender''s approver cannot see it');
+select pg_temp.as_user(pg_temp.u(12));
+select is(servicing.approve_penal_charge_text(pg_temp.got('pen')::uuid), 'approved', 'C: a second person approves the sentence');
+-- Loan 12 becomes overdue: the lender''s newer report.
+select is(pg_temp.imp(pg_temp.lx(), 10, 'loan', 'x-loan-12-overdue', jsonb_build_array(pg_temp.lrow('SAMPLE-LN-12', 'SAMPLE-APP-14', 26, 'SRC-L12B', 0,
+  '{"overdue_principal":"4000.00","overdue_interest":"750.00","total_overdue":"4750.00","days_past_due":"4","outstanding_principal":"40000.00"}'))), 'committed:{"changed": 1}', 'C: loan 12 is reported overdue by four days');
+select pg_temp.as_system();
+select is(servicing.plan_reminders() >= 2, true, 'C: its overdue message is planned');
+select pg_temp.at_ist('12:00');
+select pg_temp.as_system();
+select is((select count(*) from servicing.claim_due_reminders(100) where loan_account_id = pg_temp.lid('SAMPLE-LN-12') and kind = 'overdue'), 2::bigint, 'C: with the approved sentence the overdue message of loan 12 is claimed on both channels');
+select is(servicing.record_reminder_attempt(pg_temp.rid('SAMPLE-LN-12', 'overdue'), 'accepted', 'send', 'SAMPLE-INAPP-3', null, 1), 'accepted', 'C: and reported');
+select pg_temp.as_user(pg_temp.u(40));
+select is((select message from servicing.my_reminders() where loan_account_id = pg_temp.lid('SAMPLE-LN-12')),
+  format('Alpha reminder: Rs 4,750.00 is overdue since %s. A separate penal charge of 500.00 applies to the overdue amount.', to_char(pg_temp.d(-4), 'FMDD Mon YYYY')), 'C: the borrower reads the lender''s own sentence, verbatim, in the overdue message');
+select pg_temp.as_owner();
+select is(pg_temp.rem('SAMPLE-LN-11', 'overdue'), 'suppressed:penal_text_missing', 'C: loan 11''s overdue message, stopped before the sentence existed, stays stopped (nothing is sent late because a sentence was approved)');
+select set_config('udofin.allow_mock_providers', 'off', true);
+select set_config('udofin.test_clock', '', true);
+
+-- ============================================================================================================================
+-- SP leftover (a): an amountMinor above the table limit (1e14 paise) is an invalid receipt, not a check violation that fails the callback.
+--    It has to correlate first, so the borrower b2 asks to pay loan 10 and the worker records the order.
+-- ============================================================================================================================
+create function pg_temp.ingq(p_token text, p_delivery jsonb) returns text language plpgsql as $fn$
+declare v_state text; v_hint text;
+begin
+  return (payments.ingest_provider_delivery(p_token, p_delivery) ->> 'outcome');
+exception when others then
+  get stacked diagnostics v_state = returned_sqlstate, v_hint = pg_exception_hint;
+  return 'error:' || v_state || '|' || coalesce(v_hint, '');
+end
+$fn$;
+grant execute on all functions in schema pg_temp to public;
+select pg_temp.keep('iz', pg_temp.ask(41, 'SAMPLE-LN-10', 'pay-key-030-Z1-0000001')::text);
+select pg_temp.as_system();
+select is(payments.record_order_created(pg_temp.got('iz')::uuid, 'ORD-Z1'), 'pending', 'SP: the order of the payment is recorded');
+select is(pg_temp.ingq(pg_temp.got('tokx'), pg_temp.dlv('DLV-Z1', 'EVT-Z1', 'payment', 'captured', 'PAY-Z1', 'ORD-Z1', 100000000000001)), 'invalid',
+  'SP: a verified delivery whose amount is one paise above the table limit is an invalid receipt (it used to fail with a check violation)');
+select is(pg_temp.ingq(pg_temp.got('tokx'), pg_temp.dlv('DLV-Z3', 'EVT-Z3', 'payment', 'captured', 'PAY-Z3', 'ORD-Z1', 999999999999999)), 'invalid', 'SP: so is the largest fifteen-digit amount');
+select is(pg_temp.ingq(pg_temp.got('tokx'), pg_temp.dlv('DLV-Z4', 'EVT-Z4', 'debit', 'pending', 'SAMPLE-DB-Z4', 'SAMPLE-PM-B1', 100000000000001)), 'invalid', 'SP: and a debit event with such an amount');
+select pg_temp.as_owner();
+select is((select (outcome, reason_class)::text from payments.webhook_receipts where delivery_id = 'DLV-Z1'), '(invalid,malformed_event)', 'SP: the receipt holds a closed reason and no value');
+select is((select count(*) from payments.provider_events where provider_event_id in ('EVT-Z1', 'EVT-Z3', 'EVT-Z4')), 0::bigint, 'SP: and nothing is stored as an event');
+select is((select status::text from payments.payment_intents where id = pg_temp.got('iz')::uuid), 'pending', 'SP: the payment request is untouched');
+select pg_temp.as_system();
+select is(pg_temp.ingq(pg_temp.got('tokx'), pg_temp.dlv('DLV-Z2', 'EVT-Z2', 'payment', 'captured', 'PAY-Z2', 'ORD-Z1', 100000000000000)), 'ok', 'SP: control: exactly the limit (1e14 paise) is a verified event');
+select pg_temp.as_owner();
+select is((select amount_minor from payments.provider_events where provider_event_id = 'EVT-Z2'), 100000000000000::bigint, 'SP: and is stored with its amount');
+
+-- ============================================================================================================================
+-- SP leftover (b): a live mandate whose configuration is not active cannot be refreshed by an event; the sweep raises it to the platform.
+-- ============================================================================================================================
+select pg_temp.as_system();
+-- The events of this file are stamped two seconds ahead of the clock; let the last check become older than a zero waiting time.
+select pg_sleep(2.2);
+select is((payments.sweep_mandates(p_unresolved_after => interval '0 seconds') ->> 'refresh_blocked')::int, 0, 'SP: while the configuration is active nothing is raised, however old the last check');
+select pg_temp.as_user(pg_temp.u(1));
+select is(payments.suspend_payment_config(pg_temp.cfgx(), 'provider reported a settlement incident again'), 'suspended', 'SP: a platform person suspends lender X''s configuration (a hold)');
+select pg_temp.as_system();
+select is((payments.sweep_mandates() ->> 'refresh_blocked')::int, 0, 'SP: with the default waiting time (a day) a mandate checked today is not raised yet');
+select is((payments.sweep_mandates(p_unresolved_after => interval '0 seconds') ->> 'refresh_blocked')::int, 1, 'SP: once its last check is older than the waiting time, the live mandate of the suspended configuration is raised');
+select pg_temp.as_owner();
+select is((select (class, severity, owner)::text from payments.reconciliation_exceptions where subject ->> 'mandate_id' = pg_temp.mid(1)::text and status <> 'resolved'), '(mandate_unresolved,warning,platform)',
+  'SP: as a warning owned by the platform, naming the mandate');
+select is((select count(*) from payments.reconciliation_exceptions where class = 'mandate_unresolved' and subject ->> 'mandate_id' = pg_temp.mid(2)::text), 0::bigint, 'SP: the cancelled mandate of the same configuration is not raised (it is over)');
+select is((select count(*) from payments.reconciliation_exceptions where subject ->> 'mandate_id' = pg_temp.mid(3)::text), 0::bigint, 'SP: nor lender Y''s mandate (its configuration is active)');
+select pg_temp.as_system();
+select is((payments.sweep_mandates(p_unresolved_after => interval '0 seconds') ->> 'refresh_blocked')::int, 0, 'SP: the next sweep raises it once only');
+select pg_temp.as_owner();
+select is((select count(*) from payments.reconciliation_exceptions where class = 'mandate_unresolved' and subject ->> 'mandate_id' = pg_temp.mid(1)::text and status <> 'resolved'), 1::bigint, 'SP: one open exception');
+select pg_temp.as_user(pg_temp.u(27));
+select is((select count(*) from payments.reconciliation_exceptions where lender_org_id = pg_temp.lx()), 0::bigint, 'SP: lender Y''s viewer sees none of it');
+select pg_temp.as_user(pg_temp.u(13));
+select pg_temp.as_owner();
+select pg_temp.keep('mexc', (select id::text from payments.reconciliation_exceptions where class = 'mandate_unresolved' and subject ->> 'mandate_id' = pg_temp.mid(1)::text and status <> 'resolved'));
+select pg_temp.as_user(pg_temp.u(13));
+select is(pg_temp.err(format($$select payments.resolve_exception(%L, 'other', '{"note_ref":"SAMPLE-1"}'::jsonb, 'the lender must not close a platform matter')$$, pg_temp.got('mexc'))),
+  '42501|', 'SP: and the lender cannot close it (a platform matter)');
+-- A mandate that WAS refreshed (a lookup the platform did by hand) is not raised, whatever its configuration: lender Y's configuration is suspended too.
+select pg_temp.as_user(pg_temp.u(1));
+select payments.suspend_payment_config(pg_temp.cfgy(), 'provider reported a settlement incident again');
+select pg_temp.as_system();
+select is(payments.apply_mandate_lookup(pg_temp.mid(3), 'active', null, clock_timestamp()), 'ignored_stale', 'SP: the platform looks lender Y''s mandate up by hand (nothing changed at the provider)');
+select is((payments.sweep_mandates(p_unresolved_after => interval '1 hour') ->> 'refresh_blocked')::int, 0, 'SP: a mandate checked a moment ago is not raised although its configuration is suspended');
+select pg_temp.as_owner();
+select is((select count(*) from payments.reconciliation_exceptions where subject ->> 'mandate_id' = pg_temp.mid(3)::text), 0::bigint, 'SP: lender Y has no exception');
+
+-- ============================================================================================================================
+-- Feature evidence uses the accounts area's personal-data screen (the same evidence object guards a conflict resolution).
+-- ============================================================================================================================
+select pg_temp.as_owner();
+select is(array[private.feature_evidence_ok('{"ref_a":"1234 5678 9012"}'), private.feature_evidence_ok('{"ref_a":"1234-5678-9012"}'), private.feature_evidence_ok('{"ref_a":"123456789"}'),
+                private.feature_evidence_ok('{"ref_a":"ABCDE1234f"}'), private.feature_evidence_ok('{"ref_a":"HDFC0001234"}'), private.feature_evidence_ok('{"ref_a":"see www.example.test"}'),
+                private.feature_evidence_ok('{"ref_a":"someone@example.test"}'), private.feature_evidence_ok('{"ref_a":"call 98765 43210"}'),
+                private.feature_evidence_ok('{"ref_a":"password=hunter2x"}'), private.feature_evidence_ok('{"a9876543210":"SAMPLE-1"}')],
+  array[false, false, false, false, false, false, false, false, false, false], 'Evidence: digits split by spaces or hyphens, a lower-case PAN, an IFSC, a link, an e-mail address, a spaced phone number, a secret and a phone-shaped key are all refused');
+select is(array[private.feature_evidence_ok('{"contract_ref":"SAMPLE-MSA-1"}'), private.feature_evidence_ok('{"contract_ref":"SAMPLE-MSA-2026-0007","provider_evidence":"SAMPLE-DOC-7"}'),
+                private.feature_evidence_ok('{"ref_a":"12345678"}'), private.feature_evidence_ok('{"decision_ref":"DEC 2026 10 18"}')],
+  array[true, true, true, true], 'Evidence: control: the references the activation tests use, and eight digits, still pass');
+select is(array[private.feature_evidence_ok('{}'), private.feature_evidence_ok('["x"]'), private.feature_evidence_ok('{"ref_a":{"b":"c"}}'), private.feature_evidence_ok('{"ref_a":""}'), private.feature_evidence_ok(null)],
+  array[true, false, false, false, false], 'Evidence: shape: an empty object is still fine for the check (the functions ask for evidence separately); lists, nesting, empty values and null are refused');
+-- Through the functions that use it.
+select pg_temp.as_user(pg_temp.u(5));
+select is(pg_temp.err(format($$select servicing.request_feature_change(%L, 'payments', true, '{"ref_a":"1234 5678 9012"}', 'feature-key-030-9000001')$$, pg_temp.lx())), '22023|evidence_invalid', 'Evidence: a switch request with spaced digits as evidence is refused');
+-- A loan conflict (the same record reported again at the same time with other figures) and its resolution by the lender.
+select pg_temp.as_owner();
+select pg_temp.keep('l10rep', (select to_char(reported_as_of at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') from servicing.balance_snapshots where loan_account_id = pg_temp.lid('SAMPLE-LN-10') order by version desc limit 1));
+select is(pg_temp.imp(pg_temp.lx(), 10, 'loan', 'x-loan-10-conflict', jsonb_build_array(pg_temp.lrow('SAMPLE-LN-10', 'SAMPLE-APP-10', 3, 'SRC-L10', 1,
+  jsonb_build_object('reported_as_of', pg_temp.got('l10rep'), 'outstanding_principal', '39000.00')))), 'committed:{"conflict": 1}', 'Evidence: the lender reports loan 10 again with other figures for the same moment: a conflict');
+select pg_temp.as_owner();
+select pg_temp.keep('cf', (select id::text from servicing.sync_conflicts where loan_account_id = pg_temp.lid('SAMPLE-LN-10') and status = 'open'));
+select pg_temp.as_user(pg_temp.u(10));
+select servicing.acknowledge_sync_conflict(pg_temp.got('cf')::uuid);
+select is(pg_temp.err(format($$select servicing.resolve_sync_conflict(%L, 'existing', 'The lender confirms the existing figures.', '{"ref_a":"1234 5678 9012"}'::jsonb)$$, pg_temp.got('cf'))), '22023|evidence_invalid',
+  'Evidence: the resolution of a conflict refuses spaced digits in its evidence object');
+select is(pg_temp.err(format($$select servicing.resolve_sync_conflict(%L, 'existing', 'The lender confirms the existing figures.', '{"ref_a":"ABCDE1234f"}'::jsonb)$$, pg_temp.got('cf'))), '22023|evidence_invalid', 'Evidence: nor a lower-case PAN');
+select is(pg_temp.err(format($$select servicing.resolve_sync_conflict(%L, 'existing', 'The lender confirms the existing figures.', '{"statement_ref":"SAMPLE-STMT-2026-0007"}'::jsonb)$$, pg_temp.got('cf'))), 'ok',
+  'Evidence: control: with an ordinary reference the lender''s operator resolves it');
+select pg_temp.as_user(pg_temp.u(20));
+select is((select count(*) from servicing.sync_conflicts where lender_org_id = pg_temp.lx()), 0::bigint, 'Evidence: lender Y''s operator sees none of lender X''s conflicts');
+
+-- ============================================================================================================================
+-- The evidence position of the reminder window rule.
+-- ============================================================================================================================
+select pg_temp.as_owner();
+select is((select (evidence_status, approval_status, direction_ref like '%text confirmed in the primary extract on file%', direction_ref like '%unverified%', exclusions like '%is not applicable to microfinance loans%')::text
+             from documents.applicability_rules where rule_key = 'servicing.reminder_window.default' and version = 1), '(interpretation,draft,t,f,t)',
+  'Rule: the reminder window rule is still a draft labelled interpretation; its direction reference no longer says "unverified" about para 100 (confirmed in the primary extract on file) and its text says what is interpretation');
+select is((select count(*) from documents.applicability_rules where approval_status = 'approved' and rule_key like 'servicing.%'), 0::bigint, 'Rule: and no seed rule was approved by the migration');
+
+-- ============================================================================================================================
+-- A refused file is recorded with every value-free class the importer can name (task 6); a class that could carry a value is not accepted.
+-- ============================================================================================================================
+select pg_temp.as_user(pg_temp.u(10));
+create function pg_temp.rej(p_code text, p_field text default null) returns text language plpgsql as $fn$
+declare v_state text; v_hint text;
+begin
+  perform servicing.record_rejected_file(pg_temp.lx(), 'receipt', 'file', pg_temp.sha('rej-' || p_code || coalesce(p_field, '')), 1000, 'udofin-lms-import-v1', 3,
+    jsonb_build_array(jsonb_build_object('row_no', 2, 'code', p_code, 'field', p_field)));
+  return 'recorded';
+exception when others then
+  get stacked diagnostics v_state = returned_sqlstate, v_hint = pg_exception_hint;
+  return v_state || '|' || coalesce(v_hint, '');
+end
+$fn$;
+grant execute on all functions in schema pg_temp to public;
+select is(pg_temp.rej('ref_looks_personal', 'bank_reference'), 'recorded', 'Task 6: a refused file whose error is ref_looks_personal (field bank_reference) is recorded');
+select is(pg_temp.rej('receipt_date_in_future', 'value_date'), 'recorded', 'Task 6: and one whose error is receipt_date_in_future (field value_date)');
+select is((select array_agg(c order by c) from unnest(array['file_too_large', 'too_many_rows', 'empty_file', 'malformed_file', 'unknown_column', 'missing_column', 'duplicate_column', 'column_count_mismatch',
+  'unknown_field', 'missing_required', 'invalid_reference', 'borrower_ref_looks_personal', 'ref_looks_personal', 'invalid_amount', 'amount_not_positive', 'invalid_date', 'invalid_timestamp',
+  'timestamp_in_future', 'receipt_date_in_future', 'invalid_integer', 'invalid_status', 'invalid_receipt_kind', 'incomplete_disbursement', 'incomplete_next_due', 'disbursed_exceeds_sanctioned',
+  'reversal_reference_invalid', 'invalid_items', 'inconsistent_report_head', 'duplicate_row', 'conflicting_duplicate']) c where pg_temp.rej(c) = 'recorded'),
+  (select array_agg(c order by c) from unnest(array['file_too_large', 'too_many_rows', 'empty_file', 'malformed_file', 'unknown_column', 'missing_column', 'duplicate_column', 'column_count_mismatch',
+  'unknown_field', 'missing_required', 'invalid_reference', 'borrower_ref_looks_personal', 'ref_looks_personal', 'invalid_amount', 'amount_not_positive', 'invalid_date', 'invalid_timestamp',
+  'timestamp_in_future', 'receipt_date_in_future', 'invalid_integer', 'invalid_status', 'invalid_receipt_kind', 'incomplete_disbursement', 'incomplete_next_due', 'disbursed_exceeds_sanctioned',
+  'reversal_reference_invalid', 'invalid_items', 'inconsistent_report_head', 'duplicate_row', 'conflicting_duplicate']) c),
+  'Task 6: all thirty classes of the importer''s file and row errors (the list of lms.ts without invalid_validity) are accepted');
+select is(pg_temp.rej('invalid_validity'), '22023|errors_invalid', 'Task 6: invalid_validity (a quotation problem, not a file error) is still not a file class');
+select is(array[pg_temp.rej('ABCDE1234F'), pg_temp.rej('9876543210'), pg_temp.rej('Ramesh Kumar'), pg_temp.rej('ref_looks_personal ABCDE1234F'), pg_temp.rej('')],
+  array['22023|errors_invalid', '22023|errors_invalid', '22023|errors_invalid', '22023|errors_invalid', '22023|errors_invalid'], 'Task 6: a code that is a value (a PAN, a phone number, a name, a class with a value attached, nothing) is refused');
+select is(array[pg_temp.rej('invalid_amount', 'ABCDE1234F'), pg_temp.rej('invalid_amount', '9876543210'), pg_temp.rej('invalid_amount', 'amount_text')],
+  array['22023|errors_invalid', '22023|errors_invalid', '22023|errors_invalid'], 'Task 6: nor a field that is not one of the format''s own field names');
+select pg_temp.as_owner();
+select is((select metadata -> 'errors' from audit.events where action = 'servicing.import.file_rejected' and entity_id = pg_temp.sha('rej-ref_looks_personalbank_reference')),
+  '[{"code": "ref_looks_personal", "field": "bank_reference", "row_no": 2}]'::jsonb, 'Task 6: the audit record holds the position, the class and the field name, and no value');
+select pg_temp.as_user(pg_temp.u(20));
+select is(pg_temp.err(format($$select servicing.record_rejected_file(%L, 'receipt', 'file', %L, 1000, 'udofin-lms-import-v1', 3, '[{"row_no":2,"code":"ref_looks_personal","field":null}]'::jsonb)$$, pg_temp.lx(), pg_temp.sha('rej-other'))),
+  '42501|', 'Task 6: another lender''s operator cannot record a refused file for lender X');
 
 select * from finish();
 rollback;
