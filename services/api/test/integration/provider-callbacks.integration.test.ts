@@ -195,7 +195,10 @@ describe.skipIf(!enabled)('provider callback receiver over a real database', () 
     const id = randomUUID();
     const tag = id.replaceAll('-', '').slice(0, 12);
     const loanCount = options.loans ?? 0;
-    const webhookSecretRef = options.webhookSecretRef ?? `D_HOOK_${tag.toUpperCase()}`;
+    // The secret names of a configuration lie inside the namespace of its lender (L, the last twelve hexadecimal digits of the
+    // lender id in capitals, an underscore): the receiver hands on a webhook secret name only then (U51).
+    const namespace = `L${id.replaceAll('-', '').slice(-12).toUpperCase()}_`;
+    const webhookSecretRef = options.webhookSecretRef ?? `${namespace}HOOK_${tag.toUpperCase()}`;
     const secret = options.secret ?? `not_a_secret_${randomBytes(12).toString('hex')}`;
     if (!secrets.has(webhookSecretRef)) secrets.set(webhookSecretRef, secret);
     const token = randomBytes(32).toString('base64url');
@@ -304,20 +307,22 @@ describe.skipIf(!enabled)('provider callback receiver over a real database', () 
       const configId = (
         await c.query<{ id: string }>(
           `insert into payments.lender_payment_configs (lender_org_id, provider, provider_mode, merchant_registry_id, settlement_account_id, secret_ref, webhook_secret_ref,
-                                                        endpoint_token_hash, rail_limits, rail_limits_source, evidence_ref, contract_section_ref, idempotency_key, drafted_by)
+                                                        endpoint_token_hash, rail_limits, rail_limits_source, evidence_ref, contract_section_ref, idempotency_key, drafted_by,
+                                                        secret_namespace)
              values ($1, $2, 'mock', $3, $4, $5, $6, $7, $8::jsonb, 'SAMPLE copy of provider documentation (fixture)',
-                     'SAMPLE-EVIDENCE-2', 'SAMPLE-CONTRACT-1', $9, $10) returning id`,
+                     'SAMPLE-EVIDENCE-2', 'SAMPLE-CONTRACT-1', $9, $10, $11) returning id`,
           [
             id,
             PROVIDER,
             merchant,
             settlement,
-            `D_PROV_KEY_${tag.toUpperCase()}`,
+            `${namespace}PROV_KEY_${tag.toUpperCase()}`,
             webhookSecretRef,
             hashEndpointToken(token),
             RAIL_LIMITS,
             `sample-fixture-config-d-${tag}`,
             maker,
+            namespace,
           ],
         )
       ).rows[0]?.id;
@@ -638,8 +643,9 @@ describe.skipIf(!enabled)('provider callback receiver over a real database', () 
 
     A = await buildLender('Alpha', { loans: LOANS });
     B = await buildLender('Beta');
-    // C shares A's webhook secret NAME (and so its value): a provider that signs every lender's deliveries alike.
-    C = await buildLender('Gamma', { webhookSecretRef: A.webhookSecretRef, secret: A.secret });
+    // C has its own secret NAME (inside its own namespace) but the same VALUE as A: a provider that signs every lender's
+    // deliveries alike.
+    C = await buildLender('Gamma', { secret: A.secret });
     M = await buildLender('Merchant');
     S1 = await buildLender('SuspendedCo');
     S2 = await buildLender('RetiredCo');
