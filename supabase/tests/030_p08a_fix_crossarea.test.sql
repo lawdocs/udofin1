@@ -320,9 +320,11 @@ create function pg_temp.srow(p_ref text, p_due_days integer, p_srid text, p_hour
       jsonb_build_object('installment_seq', '1', 'due_date', pg_temp.dt(p_due_days), 'principal', '4000.00', 'interest', '750.00', 'fees', '0.00'),
       jsonb_build_object('installment_seq', '2', 'due_date', pg_temp.dt(p_due_days + 30), 'principal', '4000.00', 'interest', '750.00', 'fees', '0.00')))
 $fn$;
-create function pg_temp.rrow(p_ref text, p_receipt text, p_amount text, p_bank text, p_hours numeric default 1, p_extra jsonb default '{}'::jsonb) returns jsonb language sql as $fn$
+create function pg_temp.rrow(p_ref text, p_receipt text, p_amount text, p_bank text, p_hours numeric default 0, p_extra jsonb default '{}'::jsonb) returns jsonb language sql as $fn$
+  -- The value date is the India-time day of the report that carries the receipt (a receipt dated after its own report is refused).
   select jsonb_strip_nulls(jsonb_build_object(
-    'lms_loan_ref', p_ref, 'lms_receipt_ref', p_receipt, 'receipt_kind', 'receipt', 'amount', p_amount, 'value_date', pg_temp.dt(0), 'payment_mode', 'upi',
+    'lms_loan_ref', p_ref, 'lms_receipt_ref', p_receipt, 'receipt_kind', 'receipt', 'amount', p_amount,
+    'value_date', to_char((clock_timestamp() - make_interval(secs => (p_hours * 3600)::integer)) at time zone 'Asia/Kolkata', 'YYYY-MM-DD'), 'payment_mode', 'upi',
     'bank_reference', p_bank, 'source_record_id', 'SRC-' || p_receipt, 'reported_as_of', pg_temp.ts(p_hours)) || p_extra)
 $fn$;
 -- A lender's file: stage it and commit it as the lender's servicing operator; returns the committed status and counts, or the row errors.
@@ -934,8 +936,9 @@ select pg_temp.at_ist('03:00');
 select is((select count(*) from servicing.claim_due_reminders(100)), 0::bigint, 'C: at 03:00 IST (outside the window) nothing is claimed');
 select pg_temp.at_ist('12:00');
 select pg_temp.as_system();
+-- (The due-day message of a loan due today is scheduled for 09:00 IST: after that hour it is claimed as well, so the check names the pre-due kind.)
 select pg_temp.keep('claimed', (select string_agg(c.kind || '/' || c.channel || '/' || (select la.lms_loan_ref from servicing.loan_accounts la where la.id = c.loan_account_id), ',' order by c.kind, c.channel, (select la.lms_loan_ref from servicing.loan_accounts la where la.id = c.loan_account_id))
-  from servicing.claim_due_reminders(100) c where c.loan_account_id in (pg_temp.lid('SAMPLE-LN-9'), pg_temp.lid('SAMPLE-LN-11'), pg_temp.lid('SAMPLE-LN-13'), pg_temp.lid('SAMPLE-LN-14'))));
+  from servicing.claim_due_reminders(100) c where c.kind in ('pre_due', 'overdue') and c.loan_account_id in (pg_temp.lid('SAMPLE-LN-9'), pg_temp.lid('SAMPLE-LN-11'), pg_temp.lid('SAMPLE-LN-13'), pg_temp.lid('SAMPLE-LN-14'))));
 select is(pg_temp.got('claimed'), 'pre_due/in_app/SAMPLE-LN-14,pre_due/in_app/SAMPLE-LN-9,pre_due/push/SAMPLE-LN-14,pre_due/push/SAMPLE-LN-9',
   'C: at noon the pre-due messages of loans 9 and 14 are claimed on both channels; loan 13 (a payment reversed by 0.01) and loan 11 (no penal-charge sentence) are not');
 select is(array[pg_temp.rem('SAMPLE-LN-13', 'pre_due'), pg_temp.rem('SAMPLE-LN-14', 'pre_due'), pg_temp.rem('SAMPLE-LN-11', 'overdue')], array['suppressed:recent_payment', 'claimed', 'suppressed:penal_text_missing'],
@@ -962,7 +965,7 @@ select is((select count(*) from servicing.my_reminders()), 0::bigint, 'C: the ot
 select pg_temp.as_user(pg_temp.u(21));
 select is(pg_temp.err(format($$select servicing.place_communication_hold(%L, 'complaint', 'borrower complained about the reminders')$$, pg_temp.lid('SAMPLE-LN-10'))), 'P0002|', 'C: another lender''s communications admin cannot place a hold on lender X''s loan');
 select pg_temp.as_user(pg_temp.u(11));
-select is((select count(*) from servicing.reminders where loan_account_id = pg_temp.lid('SAMPLE-LN-10') and status = 'planned'), 2::bigint, 'C: loan 10 (due in three days) has its two pre-due messages planned for the day before');
+select is((select count(*) from servicing.reminders where loan_account_id = pg_temp.lid('SAMPLE-LN-10') and status = 'planned' and kind = 'pre_due'), 2::bigint, 'C: loan 10 (due in three days) has its two pre-due messages planned for the day before');
 select pg_temp.keep('hold', servicing.place_communication_hold(pg_temp.lid('SAMPLE-LN-10'), 'complaint', 'borrower complained about the reminders')::text);
 select is((select array_agg(distinct status || ':' || coalesce(suppress_reason, '') order by status || ':' || coalesce(suppress_reason, '')) from servicing.reminders where loan_account_id = pg_temp.lid('SAMPLE-LN-10')),
   array['suppressed:hold'], 'C: the hold stops every message of loan 10');
