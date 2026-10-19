@@ -94,6 +94,7 @@ How a client should read it:
 | ------ | ---- | ------------ | --------- |
 | GET | `/v1/lender/merchants` | The lender's merchant identifiers and their verification state | `listLenderMerchants` |
 | POST | `/v1/lender/merchants` | Claim the lender's merchant identifier at a provider (payment.configure, aal2) | `claimMerchant` |
+| POST | `/v1/lender/merchants/{id}/withdraw` | Withdraw one of the lender's unverified merchant claims (payment.configure, aal2) | `withdrawMerchantClaim` |
 | GET | `/v1/lender/payment-configs` | The lender's payment configurations, newest first | `listLenderPaymentConfigs` |
 | POST | `/v1/lender/payment-configs` | Draft a payment configuration (payment.configure, aal2) | `draftPaymentConfig` |
 | GET | `/v1/lender/payment-configs/{id}` | One payment configuration of the lender | `getLenderPaymentConfig` |
@@ -112,6 +113,7 @@ How a client should read it:
 | GET | `/v1/lender/settlement-accounts` | The lender's own settlement accounts (masked) and whether each is linked to the registry | `listLenderSettlementAccounts` |
 | POST | `/v1/lender/settlement-accounts` | Ask for one of the lender's own settlement accounts to be set up (payment.configure, aal2) | `requestSettlementAccount` |
 | GET | `/v1/lender/settlement-accounts/registry-status` | Registry state of the lender's own settlement accounts: masked reference, status, dates and whether usable now | `getSettlementAccountRegistryStatus` |
+| POST | `/v1/lender/settlement-accounts/{id}/withdraw` | Withdraw a settlement account request that was never linked to the registry (payment.configure, aal2) | `withdrawSettlementAccount` |
 | GET | `/v1/lender/webhook-summary` | How many provider callbacks reached your payment configurations, by outcome | `getLenderWebhookSummary` |
 
 ## Lender: mandates
@@ -195,9 +197,10 @@ How a client should read it:
 | POST | `/v1/platform/merchants/{id}/verify` | Confirm, against evidence, that a lender's claimed merchant identifier is its own (platform.payments.providers.manage, aal2) | `verifyMerchant` |
 | GET | `/v1/platform/payment-configs` | Payment configurations of every lender (platform) | `listPlatformPaymentConfigs` |
 | GET | `/v1/platform/payment-configs/{id}` | One payment configuration (platform) | `getPlatformPaymentConfig` |
+| POST | `/v1/platform/payment-configs/{id}/release-hold` | Lift the hold of a suspended configuration (platform.payments.providers.manage, aal2, a reason; a platform hold only by a different person) | `releasePaymentConfigHold` |
 | POST | `/v1/platform/payment-configs/{id}/retire` | Retire an active or suspended configuration (platform.payments.providers.manage, aal2) | `retirePaymentConfigAsPlatform` |
 | POST | `/v1/platform/payment-configs/{id}/suspend` | Platform kill switch: suspend an active configuration (platform.payments.providers.manage, aal2, one person) | `suspendPaymentConfig` |
-| GET | `/v1/platform/payment-providers` | The provider register: who may be used for payments or mandates, and the evidence behind it | `listPaymentProviders` |
+| GET | `/v1/platform/payment-providers` | The provider register: who may be used for payments or mandates, and the evidence behind it (read from the platform view; lenders read only the vocabulary columns) | `listPaymentProviders` |
 | POST | `/v1/platform/payment-providers` | Register or update a payment or mandate provider (platform.payments.providers.manage, aal2) | `setPaymentProvider` |
 | GET | `/v1/platform/return-code-classes` | How each provider return code is classified, with the evidence it comes from | `listReturnCodeClasses` |
 | POST | `/v1/platform/return-code-classes` | Classify one provider return code, with its evidence (platform.payments.providers.manage, aal2) | `setReturnCodeClass` |
