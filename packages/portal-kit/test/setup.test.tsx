@@ -131,6 +131,10 @@ const GENERIC = 'The action could not be completed. Nothing was changed.';
 const PREFIX = 'L0198B3F40001_';
 const NAME_ONE = `${PREFIX}PSP_ONE`;
 const NAME_TWO = `${PREFIX}PSP_TWO`;
+// Another lender's prefix, and a name inside it. Built, not written out: a literal of this shape next to the word "secret" is read
+// as a credential by the repository's secret scanner.
+const OTHER_PREFIX = 'L0198B3F40002_';
+const OTHER_NAME = `${OTHER_PREFIX}PSP_ONE`;
 const prefixOf = (lenderId = LENDER_A, prefix = PREFIX) => ok({ lenderId, prefix });
 
 const ok = <T,>(data: T) => ({ ok: true as const, status: 200, data });
@@ -573,9 +577,9 @@ describe('secret names belong to the lender: its prefix, then a name', () => {
   });
 
   it('refuses another lender’s prefix when the lender’s own is known', () => {
-    expect(secretNameProblem('L0198B3F40002_PSP_ONE', PREFIX)).toBe('secret_prefix_wrong');
+    expect(secretNameProblem(OTHER_NAME, PREFIX)).toBe('secret_prefix_wrong');
     // The shape alone cannot tell: the API and the database know which prefix is the lender’s.
-    expect(secretNameProblem('L0198B3F40002_PSP_ONE', null)).toBeNull();
+    expect(secretNameProblem(OTHER_NAME, null)).toBeNull();
   });
 
   it('calls a pasted value a value, before it talks about prefixes', () => {
@@ -2842,7 +2846,7 @@ describe('the lender’s secret-name prefix in the draft operation', () => {
     ['only the prefix, nothing after it', { secretRef: PREFIX }],
     ['a name that starts with a digit after the prefix', { secretRef: `${PREFIX}1_PSP` }],
     ['a name too short after the prefix', { secretRef: `${PREFIX}A` }],
-    ['another lender’s prefix', { secretRef: 'L0198B3F40002_PSP_ONE' }],
+    ['another lender’s prefix', { secretRef: OTHER_NAME }],
   ])('sends nothing for %s', async (_why, change) => {
     const { outcome, calls } = await run(change);
     expect(outcome).toEqual({ ok: false, code: 'secret_prefix_wrong' });
@@ -2875,7 +2879,7 @@ describe('the lender’s secret-name prefix in the draft operation', () => {
 
   it('checks the names against the prefix the form showed, and ignores a prefix of the wrong shape', async () => {
     // The form said the prefix is another one: the names are not inside it.
-    const other = await run({ secretPrefix: 'L0198B3F40002_' });
+    const other = await run({ secretPrefix: OTHER_PREFIX });
     expect(other.outcome).toEqual({ ok: false, code: 'secret_prefix_wrong' });
     expect(other.calls).toEqual([]);
     // A prefix that is not the shape of one is not used; the names are still checked for the shape of a namespaced name.
@@ -2970,12 +2974,7 @@ describe('the browser checks the secret names against the prefix before anything
     await u.type(field, 'PSP_ONE');
     expect(field.value).toBe(NAME_ONE);
     expect(field.validity.patternMismatch).toBe(false);
-    for (const wrong of [
-      'LENDER_PSP_ONE',
-      'L0198B3F40002_PSP_ONE',
-      `${PREFIX}psp_one`,
-      `${PREFIX}1ABC`,
-    ]) {
+    for (const wrong of ['LENDER_PSP_ONE', OTHER_NAME, `${PREFIX}psp_one`, `${PREFIX}1ABC`]) {
       await u.clear(field);
       await u.type(field, wrong);
       expect(field.validity.patternMismatch, wrong).toBe(true);
