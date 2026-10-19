@@ -66,7 +66,7 @@ Database: `ROOT=$(pwd) bash /tmp/claude-0/p08a/apply.sh udofin_fix_IX2`, rebuilt
 | `... test/integration/lender-activation.integration.test.ts` (fresh DB, twice in a row)                     | 1 file, 11 tests passed each time                                                                                  |
 | `pnpm --filter @udofin/api exec vitest run` (fresh DB, all 49 files, lender-accounts first)                 | 43 files passed, 6 failed; 1135 tests passed, 13 failed, 1148 in all. The 13 are not from this stream (section 5). |
 | `CI=1 pnpm --filter @udofin/portal-kit test` (dependent package, not touched)                               | 8 failed, 1049 passed: the fixtures with bare secret names (section 3)                                             |
-| `gitleaks detect --source . --redact --no-banner --config .gitleaks.toml --log-opts="5c6fd19..HEAD"`        | see the report: no leaks found                                                                                     |
+| `gitleaks detect --source . --redact --no-banner --config .gitleaks.toml --log-opts="5c6fd19..HEAD"`        | 10 commits scanned, no leaks found                                                                                 |
 
 The 13 failures of the last full run: `openapi.test.ts` (stale committed file); `lender-reminders` x3 (Aadhaar-shaped number: `wording_invalid` instead of `unsafe_free_text`); `lender-servicing` x1 (invalid batch with the same bytes); `payments` x2 (debits list, mandates switch off); `servicing` x2 (activity state, security-release SLA evidence); `provider-callbacks` x4 (`seenCount`).
 
