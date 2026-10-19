@@ -56,7 +56,10 @@ const fakeVerifier: TokenVerifier = {
 let nextAddress = 1;
 const freshAddress = () => `10.14.${(nextAddress >> 8) & 255}.${nextAddress++ & 255}`;
 
-const TAG = randomUUID().slice(0, 8);
+// Letters only: eight hexadecimal digits can all be digits, and the wording screen of the database refuses a run of digits.
+const TAG = randomUUID()
+  .slice(0, 8)
+  .replace(/[0-9]/g, (digit) => 'ghijklmnop'.charAt(Number(digit)));
 // Values that must never come back in a response or a log line. They are planted in the columns that hold personal-looking
 // values, content hashes and the lender's display name, and in refused requests, and every response of this file is scanned for
 // them at the end.

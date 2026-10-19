@@ -717,7 +717,9 @@ describe.skipIf(!enabled)('borrower servicing over HTTP', () => {
     const adjustment = plan('payment_adjustment', 'adj', at(5, 900), 'refund', 100_000, null);
     const iExp = plan('payment_attempt', 'iExp', at(4), 'expired', 475_000, 'installment');
     const iFail = plan('payment_attempt', 'iFail', at(3), 'failed', 475_000, 'installment');
-    const r1r = plan('lender_reversal', 'r1r', at(2), 'recorded', 100_000, null);
+    // r1 is reversed in full (a receipt counts as reversed only when the reversals add up to its amount), r3 by part only.
+    const r1r = plan('lender_reversal', 'r1r', at(2), 'recorded', 475_000, null);
+    const r3r = plan('lender_reversal', 'r3r', at(7), 'recorded', 100_000, null);
     const iCancel = plan('payment_attempt', 'iCancel', at(1), 'cancelled', 475_000, 'installment');
     const r1 = plan('lender_receipt', 'r1', at(0), 'reversed', 475_000, null);
     const rPosted = plan('lender_receipt', 'rPosted', at(6.5), 'posted', 1_200_000, null);
@@ -820,10 +822,16 @@ describe.skipIf(!enabled)('borrower servicing over HTTP', () => {
       await receipt('A1', ids.lenderA, r1r, 2, {
         kind: 'reversal',
         at: at(2),
-        amount: 100_000,
+        amount: 475_000,
         reverses: { id: r1, ref: `${CANARY.receiptRef}-1-A1` },
       });
       await receipt('A1', ids.lenderA, rPosted3, 3, { at: at(5, 500), amount: 475_000 });
+      await receipt('A1', ids.lenderA, r3r, 6, {
+        kind: 'reversal',
+        at: at(7),
+        amount: 100_000,
+        reverses: { id: rPosted3, ref: `${CANARY.receiptRef}-3-A1` },
+      });
       // The payment attempts (the terminal ones first; only iStart is open).
       await intent('A1', ids.lenderA, 'b1', iCancel, 1, 'installment', 'cancelled', 475_000, a(1));
       await intent('A1', ids.lenderA, 'b1', iFail, 2, 'installment', 'failed', 475_000, a(3));
@@ -1717,11 +1725,12 @@ describe.skipIf(!enabled)('borrower servicing over HTTP', () => {
     });
 
     it('keeps the microseconds in the cursor: a page that ends inside one millisecond neither skips nor repeats the entries after it', async () => {
-      // limit 5 ends at the refund (900 microseconds), limit 6 at the receipt (500), limit 7 at the open attempt (100).
+      // The newest entry is the partial reversal; then limit 6 ends at the refund (900 microseconds), limit 7 at the receipt (500),
+      // limit 8 at the open attempt (100).
       for (const [limit, micro] of [
-        [5, 900],
-        [6, 500],
-        [7, 100],
+        [6, 900],
+        [7, 500],
+        [8, 100],
       ] as const) {
         const { pages, cursors } = await walk(limit);
         const decoded = JSON.parse(Buffer.from(cursors[0] ?? '', 'base64url').toString('utf8')) as {

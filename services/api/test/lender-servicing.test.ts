@@ -240,15 +240,15 @@ describe('what a refusal may carry', () => {
     ]);
   });
 
-  it('names the two newer classes in the answer, and records the nearest class the database lists (it refuses an unknown one)', () => {
+  it('names the two newer classes both in the answer and in the audit record (the database lists them since migration 926)', () => {
     const errors = [
       error({ rowNumber: 2, code: 'ref_looks_personal', field: 'lms_loan_ref' }),
       error({ rowNumber: 3, code: 'receipt_date_in_future', field: 'value_date' }),
     ];
-    // the audit function of the database (migration 911) answers 22023 for a code it does not list
+    // the audit function of the database answers 22023 for a code it does not list; since migration 926 it lists both
     expect(auditErrors(errors)).toEqual([
-      { row_no: 2, code: 'invalid_reference', field: 'lms_loan_ref' },
-      { row_no: 3, code: 'invalid_date', field: 'value_date' },
+      { row_no: 2, code: 'ref_looks_personal', field: 'lms_loan_ref' },
+      { row_no: 3, code: 'receipt_date_in_future', field: 'value_date' },
     ]);
     // the lender is told the real class
     expect(groupRowErrors(errors).rows).toEqual([

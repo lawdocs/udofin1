@@ -273,7 +273,10 @@ const KNOWN_FIELDS: ReadonlySet<string> = new Set<string>([
   ...LMS_SCHEDULE_INSTALLMENT_FIELDS,
   'installments',
 ]);
-/** The error classes the database accepts in an audit record of a refused file (`quote validity` is not a file error). */
+/**
+ * The error classes the database accepts in an audit record of a refused file (`quote validity` is not a file error), which are
+ * also the classes a refusal answer may name.
+ */
 const AUDIT_CODES: ReadonlySet<string> = new Set([
   'file_too_large',
   'too_many_rows',
@@ -287,9 +290,11 @@ const AUDIT_CODES: ReadonlySet<string> = new Set([
   'missing_required',
   'invalid_reference',
   'borrower_ref_looks_personal',
+  'ref_looks_personal',
   'invalid_amount',
   'amount_not_positive',
   'invalid_date',
+  'receipt_date_in_future',
   'invalid_timestamp',
   'timestamp_in_future',
   'invalid_integer',
@@ -304,22 +309,6 @@ const AUDIT_CODES: ReadonlySet<string> = new Set([
   'duplicate_row',
   'conflicting_duplicate',
 ]);
-/**
- * Classes the importer has had since migration 20261018000925 that the audit function of the database
- * (`servicing.record_rejected_file`, migration 20261018000911) does not list yet: it answers 22023 `errors_invalid` for a code it
- * does not know. The refusal shows the real class; the audit record keeps the nearest class the database accepts. When a migration
- * adds the two codes to that list, move them from here to AUDIT_CODES.
- */
-const AUDIT_NEAREST_CODE: Readonly<Record<string, string>> = {
-  ref_looks_personal: 'invalid_reference',
-  receipt_date_in_future: 'invalid_date',
-};
-/** The classes a refusal answer may name: those the database lists, and the two newer ones. */
-const ANSWER_CODES: ReadonlySet<string> = new Set([
-  ...AUDIT_CODES,
-  ...Object.keys(AUDIT_NEAREST_CODE),
-]);
-
 interface BoundedError {
   row_no: number;
   code: string;
@@ -341,13 +330,7 @@ function boundedErrors(
 export function auditErrors(
   errors: readonly LmsImportError[],
 ): { row_no: number; code: string; field: string | null }[] {
-  return boundedErrors(errors, (code) =>
-    AUDIT_CODES.has(code)
-      ? code
-      : Object.hasOwn(AUDIT_NEAREST_CODE, code)
-        ? (AUDIT_NEAREST_CODE[code] ?? 'malformed_file')
-        : 'malformed_file',
-  );
+  return boundedErrors(errors, (code) => (AUDIT_CODES.has(code) ? code : 'malformed_file'));
 }
 
 /** The same errors grouped per row, in the shape of the database's row-level problems. */
@@ -357,7 +340,7 @@ export function groupRowErrors(errors: readonly LmsImportError[]): {
 } {
   const byRow = new Map<number, { codes: Set<string>; fields: Set<string> }>();
   for (const error of boundedErrors(errors, (code) =>
-    ANSWER_CODES.has(code) ? code : 'malformed_file',
+    AUDIT_CODES.has(code) ? code : 'malformed_file',
   )) {
     const entry = byRow.get(error.row_no) ?? {
       codes: new Set<string>(),
