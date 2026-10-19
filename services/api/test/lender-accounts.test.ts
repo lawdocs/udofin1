@@ -12,9 +12,15 @@ import {
   AccountsEvidenceLabel,
   AccountsReason,
   FeatureChangeRequestInput,
+  LenderRecordActionInput,
+  OwnAccountListAttestInput,
+  OwnAccountListState,
   PaymentConfigDraftInput,
+  PaymentConfigEntry,
   PaymentConfigRailLimits,
   RegistryAccountRegisterInput,
+  SecretRefPrefix,
+  SecretRefPrefixQuery,
   SettlementAccountRequestInput,
 } from '@udofin/contracts';
 import { describe, expect, it } from 'vitest';
@@ -27,6 +33,8 @@ import { lenderAccountsRoutes } from '../src/modules/lender-accounts/routes.js';
 
 const NUMBER = '918273645500';
 const IFSC = 'CNRY0CAN4RY';
+/** A lender namespace as the database derives it: L, twelve capital hexadecimal digits, an underscore. */
+const NAMESPACE = 'L0198B3F40001_';
 
 describe('AccountSecret', () => {
   it('shows only the bank code, the length and the last four digits to anything that serialises, prints or hashes it', () => {
@@ -319,8 +327,8 @@ describe('request shapes', () => {
       providerMode: 'production',
       merchantRegistryId: '0198b3f4-0000-7000-8000-000000000002',
       settlementAccountId: '0198b3f4-0000-7000-8000-000000000003',
-      secretRef: 'TESTPAY_API_SECRET',
-      webhookSecretRef: 'TESTPAY_WEBHOOK_SECRET',
+      secretRef: `${NAMESPACE}TESTPAY_API`,
+      webhookSecretRef: `${NAMESPACE}TESTPAY_WEBHOOK`,
     };
     expect(PaymentConfigDraftInput.safeParse(draft).success).toBe(true);
     for (const change of [
@@ -352,6 +360,150 @@ describe('request shapes', () => {
     ]) {
       expect(PaymentConfigRailLimits.safeParse(rails).success, JSON.stringify(rails)).toBe(false);
     }
+  });
+
+  it('accepts a secret name only inside a lender namespace: a platform secret name or a bare name is refused (U51)', () => {
+    const draft = {
+      lenderId: '0198b3f4-0000-7000-8000-000000000001',
+      provider: 'testpay',
+      providerMode: 'production',
+      merchantRegistryId: '0198b3f4-0000-7000-8000-000000000002',
+      settlementAccountId: '0198b3f4-0000-7000-8000-000000000003',
+      secretRef: `${NAMESPACE}TESTPAY_API`,
+      webhookSecretRef: `${NAMESPACE}TESTPAY_WEBHOOK`,
+    };
+    const accepted = [
+      `${NAMESPACE}AB`, // the shortest: a capital and one more character
+      `${NAMESPACE}A${'B'.repeat(48)}`, // the longest: 49 characters after the namespace
+      `${NAMESPACE}TESTPAY_API_2`,
+    ];
+    for (const name of accepted) {
+      expect(PaymentConfigDraftInput.safeParse({ ...draft, secretRef: name }).success, name).toBe(
+        true,
+      );
+    }
+    const refused = [
+      'TESTPAY_API_SECRET', // a bare name: the old rule
+      'SYSTEM_DATABASE_URL', // a platform secret
+      'PROVIDER_HOOK_IP_HMAC_KEY',
+      'HANDOFF_ENCRYPTION_KEYS',
+      `${NAMESPACE}A`, // too short after the namespace
+      `${NAMESPACE}A${'B'.repeat(49)}`, // too long after the namespace
+      `${NAMESPACE}1ABC`, // must start with a capital letter
+      `${NAMESPACE}lower_case`,
+      NAMESPACE, // the namespace alone
+      'L0198b3f40001_TESTPAY_API', // lower-case hexadecimal digits
+      'L0198B3F4000_TESTPAY_API', // eleven digits
+      'L0198B3F400012_TESTPAY_API', // thirteen digits
+      'L0198B3F4000G_TESTPAY_API', // not hexadecimal
+      `l0198B3F40001_TESTPAY_API`,
+      ` ${NAMESPACE}TESTPAY_API`,
+      `${NAMESPACE}TESTPAY_API\n`,
+      `${NAMESPACE}TESTPAY-API`,
+    ];
+    for (const name of refused) {
+      expect(
+        PaymentConfigDraftInput.safeParse({ ...draft, secretRef: name }).success,
+        JSON.stringify(name),
+      ).toBe(false);
+      expect(
+        PaymentConfigDraftInput.safeParse({ ...draft, webhookSecretRef: name }).success,
+        JSON.stringify(name),
+      ).toBe(false);
+    }
+  });
+
+  it('validates the prefix answer and the inputs of the own-account list, the withdrawals and the hold release', () => {
+    const lender = '0198b3f4-0000-7000-8000-000000000001';
+    expect(SecretRefPrefixQuery.safeParse({ lenderId: lender }).success).toBe(true);
+    expect(SecretRefPrefixQuery.safeParse({}).success).toBe(false);
+    expect(SecretRefPrefixQuery.safeParse({ lenderId: lender, extra: 1 }).success).toBe(false);
+    expect(SecretRefPrefix.safeParse({ lenderId: lender, prefix: NAMESPACE }).success).toBe(true);
+    for (const prefix of ['L0198B3F40001', 'TESTPAY_', 'L0198b3f40001_', `${NAMESPACE}X`]) {
+      expect(SecretRefPrefix.safeParse({ lenderId: lender, prefix }).success, prefix).toBe(false);
+    }
+
+    expect(LenderRecordActionInput.safeParse({ lenderId: lender }).success).toBe(true);
+    expect(LenderRecordActionInput.safeParse({}).success).toBe(false);
+    expect(LenderRecordActionInput.safeParse({ lenderId: lender, status: 'revoked' }).success).toBe(
+      false,
+    );
+
+    expect(
+      OwnAccountListAttestInput.safeParse({ evidenceRef: 'SAMPLE-OWN-ACCOUNT-RECONCILIATION-1' })
+        .success,
+    ).toBe(true);
+    for (const body of [
+      {},
+      { evidenceRef: 'ab' },
+      { evidenceRef: 'BANK-LETTER-912345678901' },
+      { evidenceRef: 'SAMPLE-RECONCILIATION-1', note: 'call 9876543210 about it' },
+      { evidenceRef: 'SAMPLE-RECONCILIATION-1', keyVersion: 2 },
+    ]) {
+      expect(OwnAccountListAttestInput.safeParse(body).success, JSON.stringify(body)).toBe(false);
+    }
+
+    const event = {
+      id: lender,
+      eventKind: 'attested',
+      keyVersion: 1,
+      evidenceRef: 'SAMPLE-RECONCILIATION-1',
+      reason: null,
+      entriesCounted: 2,
+      actorId: lender,
+      occurredAt: '2026-10-18T10:00:00.000Z',
+    };
+    expect(
+      OwnAccountListState.safeParse({ keyVersion: 1, attested: true, events: [event] }).success,
+    ).toBe(true);
+    expect(
+      OwnAccountListState.safeParse({ keyVersion: null, attested: false, events: [] }).success,
+    ).toBe(true);
+    expect(
+      OwnAccountListState.safeParse({
+        keyVersion: 1,
+        attested: true,
+        events: [{ ...event, eventKind: 'verified' }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('reports a hold on a configuration, and null when the answer does not mention one', () => {
+    const entry = {
+      id: '0198b3f4-0000-7000-8000-000000000009',
+      lenderId: '0198b3f4-0000-7000-8000-000000000001',
+      provider: 'testpay',
+      providerMode: 'production',
+      merchantRegistryId: '0198b3f4-0000-7000-8000-000000000002',
+      settlementAccountId: '0198b3f4-0000-7000-8000-000000000003',
+      secretRef: `${NAMESPACE}TESTPAY_API`,
+      webhookSecretRef: `${NAMESPACE}TESTPAY_WEBHOOK`,
+      railLimits: {},
+      railLimitsSource: null,
+      evidenceRef: null,
+      contractSectionRef: null,
+      status: 'suspended',
+      draftedBy: '0198b3f4-0000-7000-8000-000000000004',
+      draftedAt: '2026-10-18T10:00:00.000Z',
+      submittedBy: null,
+      submittedAt: null,
+      approvedBy: null,
+      approvedAt: null,
+      statusReason: 'suspended by the platform',
+      statusReasons: [],
+      lastValidatedAt: null,
+      lastValidationOk: null,
+      updatedAt: '2026-10-18T10:00:00.000Z',
+    };
+    expect(PaymentConfigEntry.parse(entry)).toMatchObject({ holdKind: null, holdSetAt: null });
+    expect(
+      PaymentConfigEntry.parse({
+        ...entry,
+        holdKind: 'platform',
+        holdSetAt: '2026-10-18T10:05:00.000Z',
+      }),
+    ).toMatchObject({ holdKind: 'platform', holdSetAt: '2026-10-18T10:05:00.000Z' });
+    expect(PaymentConfigEntry.safeParse({ ...entry, holdKind: 'lender' }).success).toBe(false);
   });
 
   it('limits feature evidence to flat reference labels', () => {
@@ -398,6 +550,43 @@ describe('the route table of the module', () => {
       if (route.auth === 'none') continue;
       expect(route.idempotent === true, route.operationId).toBe(route.method === 'post');
     }
+  });
+
+  it('declares the routes the accounts migration needs: the own-account list, the hold release, both withdrawals and the secret prefix', () => {
+    const wanted: [string, string, string, boolean][] = [
+      ['get', '/v1/platform/own-account-list', 'getOwnAccountList', false],
+      ['post', '/v1/platform/own-account-list/attest', 'attestOwnAccountList', true],
+      ['post', '/v1/platform/own-account-list/withdraw', 'withdrawOwnAccountListAttestation', true],
+      ['post', '/v1/platform/payment-configs/:id/release-hold', 'releasePaymentConfigHold', true],
+      ['post', '/v1/lender/merchants/:id/withdraw', 'withdrawMerchantClaim', true],
+      ['post', '/v1/lender/settlement-accounts/:id/withdraw', 'withdrawSettlementAccount', true],
+      ['get', '/v1/lender/secret-ref-prefix', 'getSecretRefPrefix', false],
+    ];
+    const staffRoute = (operationId: string) => {
+      const route = routes.find((r) => r.operationId === operationId);
+      if (!route || route.auth === 'none') throw new Error(`no staff route ${operationId}`);
+      return route;
+    };
+    for (const [method, path, operationId, writes] of wanted) {
+      const route = staffRoute(operationId);
+      expect([route.method, route.path, route.auth], operationId).toEqual([method, path, 'staff']);
+      expect(route.idempotent === true, operationId).toBe(writes);
+    }
+    // The lender-scoped writes name the lender in the body and key idempotency per lender, like every other lender write.
+    for (const operationId of ['withdrawMerchantClaim', 'withdrawSettlementAccount']) {
+      const route = staffRoute(operationId);
+      expect(
+        route.idempotencyTenant?.({ body: { lenderId: 'lender-1' } } as never),
+        operationId,
+      ).toBe('lender-1');
+      expect(route.body?.safeParse({}).success, operationId).toBe(false);
+    }
+    // A hold is lifted with a reason, and the answer carries an id and a status only.
+    const release = routes.find((r) => r.operationId === 'releasePaymentConfigHold');
+    expect(release?.body?.safeParse({ reason: 'short' }).success).toBe(false);
+    expect(release?.body?.safeParse({ reason: 'the provider incident is closed' }).success).toBe(
+      true,
+    );
   });
 
   it('exposes the registration only with a sealed body that never reaches an OpenAPI example or a response', () => {

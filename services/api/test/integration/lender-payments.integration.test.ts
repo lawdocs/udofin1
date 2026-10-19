@@ -213,14 +213,16 @@ describe.skipIf(!enabled)(
       const hoursAgo = (n: number) => `now() - interval '${String(n)} hours'`;
 
       await replica(async (c) => {
-        for (const [id, label] of [
-          [account, `SAMPLE ${CANARY.account}`],
-          [otherAccount, 'SAMPLE spare'],
+        // One live settlement account per (lender, bank, masked reference): a unique index refuses two accounts of one lender at
+        // one bank with the same masked reference, so each gets its own.
+        for (const [id, label, masked] of [
+          [account, `SAMPLE ${CANARY.account}`, 'XXXXXX0000'],
+          [otherAccount, 'SAMPLE spare', 'XXXXXX0001'],
         ] as const)
           await c.query(
             `insert into tenancy.lender_settlement_accounts (id, lender_org_id, label, bank_name, masked_account_ref, status)
-             values ($1, $2, $3, 'Test Bank', 'XXXXXX0000', 'unverified')`,
-            [id, lender, label],
+             values ($1, $2, $3, 'Test Bank', $4, 'unverified')`,
+            [id, lender, label, masked],
           );
         await c.query(
           `insert into payments.lender_payment_configs (id, lender_org_id, provider, provider_mode, merchant_registry_id, settlement_account_id, secret_ref,

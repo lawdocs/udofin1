@@ -382,7 +382,7 @@ describe.skipIf(!enabled)(
       expect(fine.statusCode, fine.body).toBe(201);
     });
 
-    it('answers a repeat request with the status the account has now, not a fresh unverified one (A15)', async () => {
+    it('answers a repeat request with the row the request matches, and a revoked row is history: the same request makes a new account (A15, M4)', async () => {
       const first = await call(
         'POST',
         '/v1/lender/settlement-accounts',
@@ -392,6 +392,21 @@ describe.skipIf(!enabled)(
       expect(first.statusCode, first.body).toBe(201);
       const account = first.json<{ id: string; status: string }>();
       expect(account.status).toBe('unverified');
+      // While the row is live, the same request answers with that row and its status.
+      const repeat = await call(
+        'POST',
+        '/v1/lender/settlement-accounts',
+        ids.maker,
+        body({ maskedRef: 'XXXXXX0428', label: 'SAMPLE account to revoke' }),
+      );
+      expect(repeat.statusCode, repeat.body).toBe(201);
+      expect(repeat.json()).toEqual({ id: account.id, status: 'unverified' });
+      await q(
+        "update tenancy.lender_settlement_accounts set status = 'revoked' where id = $1::uuid",
+        [account.id],
+      );
+      // A revoked row (withdrawn by the lender, or revoked with its registry entry) neither matches nor counts: the request is a new
+      // account, never the revoked one reported as a success. The revoked row stays as it was.
       const again = await call(
         'POST',
         '/v1/lender/settlement-accounts',
@@ -399,24 +414,17 @@ describe.skipIf(!enabled)(
         body({ maskedRef: 'XXXXXX0428', label: 'SAMPLE account to revoke' }),
       );
       expect(again.statusCode, again.body).toBe(201);
-      expect(again.json()).toEqual({ id: account.id, status: 'unverified' });
-
-      // A revoked account no longer holds its masked reference (unique among live rows, M4): the same request after a
-      // revocation is a new, unverified request, never the revoked row presented as if it were usable.
-      await q(
-        "update tenancy.lender_settlement_accounts set status = 'revoked' where id = $1::uuid",
-        [account.id],
-      );
-      const fresh = await call(
-        'POST',
-        '/v1/lender/settlement-accounts',
-        ids.maker,
-        body({ maskedRef: 'XXXXXX0428', label: 'SAMPLE account to revoke' }),
-      );
-      expect(fresh.statusCode, fresh.body).toBe(201);
-      const next = fresh.json<{ id: string; status: string }>();
-      expect(next.status).toBe('unverified');
-      expect(next.id).not.toBe(account.id);
+      const fresh = again.json<{ id: string; status: string }>();
+      expect(fresh.id).not.toBe(account.id);
+      expect(fresh.status).toBe('unverified');
+      expect(
+        (
+          await q<{ status: string }>(
+            'select status::text as status from tenancy.lender_settlement_accounts where id = $1::uuid',
+            [account.id],
+          )
+        )[0]?.status,
+      ).toBe('revoked');
     });
   },
 );

@@ -356,6 +356,52 @@ export const LenderSettlementAccountQuery = z.strictObject({
   lenderId: z.uuid().optional(),
 });
 
+/**
+ * A lender-scoped action on one record the lender owns (withdraw a settlement account request, withdraw a merchant claim): the
+ * record id is in the path, the lender in the body, as for every other lender-scoped write. The answer is `AccountsActionResult`
+ * (`revoked`: the row stays as history).
+ */
+export const LenderRecordActionInput = z.strictObject({ lenderId: z.uuid() });
+export type LenderRecordActionInput = z.infer<typeof LenderRecordActionInput>;
+
+// ---- the own-account list (platform) ------------------------------------------------------------------------------
+
+/**
+ * Evidence that the list of accounts owned by Udofin and its group companies is loaded and complete under the active key
+ * version. A reference label only (what the list was reconciled against): no file contents, no account details. The attestation
+ * is a recorded decision of one platform person, not proof; the database refuses it while the list is visibly incomplete.
+ */
+export const OwnAccountListAttestInput = z.strictObject({
+  evidenceRef: AccountsEvidenceLabel,
+  note: AccountsNote.optional(),
+});
+export type OwnAccountListAttestInput = z.infer<typeof OwnAccountListAttestInput>;
+
+export const OwnAccountListEventKind = z.enum(['attested', 'withdrawn']);
+export const OwnAccountListEvent = z.object({
+  id: z.uuid(),
+  eventKind: OwnAccountListEventKind,
+  keyVersion: z.number().int(),
+  evidenceRef: z.string().nullable(),
+  reason: z.string().nullable(),
+  entriesCounted: z.number().int().nullable(),
+  actorId: z.uuid(),
+  occurredAt: Timestamp,
+});
+export type OwnAccountListEvent = z.infer<typeof OwnAccountListEvent>;
+
+/**
+ * Where the own-account list stands for the ACTIVE key version: attested only when the latest event for that version is an
+ * attestation. After a key rotation it is `false` until the list is attested again under the new version. `keyVersion` is null
+ * when no key version is active. `events` are the latest events of that version, newest first (at most 20).
+ */
+export const OwnAccountListState = z.object({
+  keyVersion: z.number().int().nullable(),
+  attested: z.boolean(),
+  events: z.array(OwnAccountListEvent),
+});
+export type OwnAccountListState = z.infer<typeof OwnAccountListState>;
+
 // ---- merchants ----------------------------------------------------------------------------------------------------
 
 export const MerchantClaimInput = z.strictObject({
@@ -419,8 +465,27 @@ export const PaymentConfigRailLimits = z
   )
   .refine((rails) => Object.keys(rails).length <= 10, { message: 'too_many_rails' });
 
-/** NAMES of secrets held in the secrets manager, never the values. */
-export const PaymentConfigSecretName = z.string().regex(/^[A-Z][A-Z0-9_]{2,63}$/);
+/**
+ * The lender's secret namespace: `L`, the last twelve hexadecimal digits of the lender id (capitals) and an underscore. The
+ * database derives it (`payments.secret_ref_prefix`) and the portal shows it (`GET /v1/lender/secret-ref-prefix`); every secret
+ * name of a payment configuration must start with it, so one lender can never name another lender's or the platform's secret.
+ */
+export const PaymentConfigSecretNamespace = z.string().regex(/^L[0-9A-F]{12}_$/);
+
+/**
+ * NAMES of secrets held in the secrets manager, never the values, inside the lender's namespace: the prefix above and then a
+ * capital letter followed by capitals, digits and underscores (two to forty-nine characters in all after the prefix). That the
+ * prefix is THIS lender's is checked by the database, which knows the lender.
+ */
+export const PaymentConfigSecretName = z.string().regex(/^L[0-9A-F]{12}_[A-Z][A-Z0-9_]{1,48}$/);
+
+/** The prefix a lender's secret names must start with, as the database derives it. */
+export const SecretRefPrefixQuery = z.strictObject({ lenderId: z.uuid() });
+export const SecretRefPrefix = z.object({
+  lenderId: z.uuid(),
+  prefix: PaymentConfigSecretNamespace,
+});
+export type SecretRefPrefix = z.infer<typeof SecretRefPrefix>;
 
 export const PaymentConfigDraftInput = z.strictObject({
   lenderId: z.uuid(),
@@ -482,6 +547,13 @@ export const PaymentConfigEntry = z.object({
   statusReasons: z.array(z.string()),
   lastValidatedAt: Timestamp.nullable(),
   lastValidationOk: z.boolean().nullable(),
+  /**
+   * Who put a suspended configuration on hold: the platform (kill switch) or the system (a failed validation). While a hold
+   * stands the lender can neither re-submit nor re-approve any configuration; only a platform person other than the one who set
+   * a platform hold can lift it (`POST /v1/platform/payment-configs/:id/release-hold`). Null when there is no hold.
+   */
+  holdKind: z.enum(['platform', 'system']).nullable().default(null),
+  holdSetAt: Timestamp.nullable().default(null),
   updatedAt: Timestamp,
 });
 export type PaymentConfigEntry = z.infer<typeof PaymentConfigEntry>;

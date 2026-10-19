@@ -29,12 +29,16 @@ import {
   FingerprintKeyVersionProposalInput,
   FingerprintKeyVersionResult,
   LenderFeatureQuery,
+  LenderRecordActionInput,
   MerchantClaimInput,
   MerchantClaimed,
   MerchantPage,
   MerchantQuery,
   MerchantRegistered,
   MerchantVerifyInput,
+  OwnAccountListAttestInput,
+  OwnAccountListState,
+  type OwnAccountListEvent,
   PaymentConfigDecisionInput,
   PaymentConfigDraftInput,
   PaymentConfigDrafted,
@@ -56,6 +60,8 @@ import {
   ReturnCodeClassList,
   ReturnCodeClassQuery,
   ReturnCodeClassSet,
+  SecretRefPrefix,
+  SecretRefPrefixQuery,
   SettlementAccountLinkInput,
   SettlementAccountPage,
   SettlementAccountQuery,
@@ -133,6 +139,31 @@ async function requireLenderPermission(
 }
 
 const notFound = (): ApiError => new ApiError(404, 'not_found', 'Not Found');
+
+/**
+ * Where the own-account list stands: the latest events for the ACTIVE key version, newest first, and whether the latest one is an
+ * attestation. This mirrors `private.own_account_list_attested()` (which the API login cannot call); the table is readable only
+ * by a platform person holding a registry permission, so for anyone else the list is empty.
+ */
+async function ownAccountListState(tx: UserTx): Promise<OwnAccountListState> {
+  const active = await tx.query<{ keyVersion: number }>(
+    `select key_version as "keyVersion" from payments.fingerprint_key_versions where status = 'active'`,
+  );
+  const keyVersion = active.rows[0]?.keyVersion ?? null;
+  if (keyVersion === null) return { keyVersion: null, attested: false, events: [] };
+  const events = await tx.query<OwnAccountListEvent>(
+    `select id, event_kind as "eventKind", key_version as "keyVersion", evidence_ref as "evidenceRef", reason,
+            entries_counted as "entriesCounted", actor_id as "actorId", ${ts('occurred_at')} as "occurredAt"
+       from payments.own_account_attestations where key_version = $1::integer
+      order by occurred_at desc, id desc limit 20`,
+    [keyVersion],
+  );
+  return {
+    keyVersion,
+    attested: events.rows[0]?.eventKind === 'attested',
+    events: events.rows,
+  };
+}
 
 /** The response goes through its schema so a column that is not declared can never reach the client. */
 const out = <T extends z.ZodType>(schema: T, value: unknown): z.output<T> => schema.parse(value);
@@ -352,6 +383,8 @@ const CONFIG_COLUMNS = columns({
   statusReasons: "coalesce(status_reasons, '{}'::text[])",
   lastValidatedAt: ts('last_validated_at'),
   lastValidationOk: 'last_validation_ok',
+  holdKind: 'hold_kind',
+  holdSetAt: ts('hold_set_at'),
   updatedAt: ts('updated_at'),
 });
 const CHANGE_REQUEST_COLUMNS = columns({
@@ -543,7 +576,7 @@ export function lenderAccountsRoutes(deps: LenderAccountsDeps = {}): RouteDefini
       summary:
         'Platform kill switch: suspend an active configuration (platform.payments.providers.manage, aal2, one person)',
       description:
-        'A suspended configuration needs a fresh two-person approval before it can be used again. Only a platform person with the provider permission can do this; a lender user is refused.',
+        'The suspension is a platform hold: while it stands the lender cannot re-submit or re-approve any configuration (platform_hold). A DIFFERENT platform person lifts it (POST .../release-hold); then the lender submits the configuration again and a different approver approves it. Only a platform person with the provider permission can suspend; a lender user is refused.',
       tags: [tag],
       auth: 'staff',
       idempotent: true,
@@ -569,7 +602,7 @@ export function lenderAccountsRoutes(deps: LenderAccountsDeps = {}): RouteDefini
       path: '/v1/platform/payment-providers',
       operationId: 'listPaymentProviders',
       summary:
-        'The provider register: who may be used for payments or mandates, and the evidence behind it',
+        'The provider register: who may be used for payments or mandates, and the evidence behind it (read from the platform view; lenders read only the vocabulary columns)',
       tags: ['Platform payments'],
       auth: 'staff',
       responses: { 200: PaymentProviderList },
@@ -578,7 +611,7 @@ export function lenderAccountsRoutes(deps: LenderAccountsDeps = {}): RouteDefini
       handler: async ({ tx }) => {
         await requirePlatform(tx, [PLATFORM_PROVIDERS]);
         const result = await tx.query(
-          `select ${PROVIDER_COLUMNS} from payments.provider_register order by provider`,
+          `select ${PROVIDER_COLUMNS} from payments.provider_register_platform order by provider`,
         );
         return { status: 200, body: out(PaymentProviderList, { items: result.rows }) };
       },
@@ -633,6 +666,27 @@ export function lenderAccountsRoutes(deps: LenderAccountsDeps = {}): RouteDefini
           `select provider, display_name as "displayName", kind, status from payments.provider_register where status = 'approved' order by provider`,
         );
         return { status: 200, body: out(PaymentProviderChoiceList, { items: result.rows }) };
+      },
+    }),
+    userRoute({
+      method: 'get',
+      path: '/v1/lender/secret-ref-prefix',
+      operationId: 'getSecretRefPrefix',
+      summary:
+        "The prefix every secret name of the lender's payment configurations must start with",
+      description:
+        "L, the last twelve hexadecimal digits of the lender id and an underscore. A configuration names its secrets inside this namespace (the prefix and then a name such as TESTPAY_API); the platform provisions the secrets under those names and no other name is ever read. Readable by the lender's payment users and by a platform person with the provider permission.",
+      tags: ['Lender payments'],
+      auth: 'staff',
+      query: SecretRefPrefixQuery,
+      responses: { 200: SecretRefPrefix },
+      errors: [401, 403, 404, 422],
+      rateLimit: READ_LIMIT,
+      handler: async ({ tx, query }) => {
+        const prefix = await one<string>(tx, 'select payments.secret_ref_prefix($1::uuid) as r', [
+          query.lenderId,
+        ]);
+        return { status: 200, body: out(SecretRefPrefix, { lenderId: query.lenderId, prefix }) };
       },
     }),
     userRoute({
@@ -895,6 +949,71 @@ export function lenderAccountsRoutes(deps: LenderAccountsDeps = {}): RouteDefini
           status: 200,
           body: out(FingerprintKeyVersionResult, { keyVersion: params.version, status }),
         };
+      },
+    }),
+
+    // ---- the own-account list (platform) ------------------------------------------------------------------------------
+    userRoute({
+      method: 'get',
+      path: '/v1/platform/own-account-list',
+      operationId: 'getOwnAccountList',
+      summary:
+        'Whether the list of accounts owned by Udofin and its group is attested complete, for the active key version',
+      description:
+        'The latest events of the active key version, newest first. Until the latest one is an attestation no lender account can be verified or linked, and payments and mandates cannot be switched on (own_account_list_not_attested). After a key rotation it must be attested again under the new version. Readable by a platform person with a registry permission.',
+      tags: ['Platform accounts'],
+      auth: 'staff',
+      responses: { 200: OwnAccountListState },
+      errors: [401, 403],
+      rateLimit: READ_LIMIT,
+      handler: async ({ tx }) => {
+        await requirePlatform(tx, [PLATFORM_REGISTRY_MANAGE, PLATFORM_REGISTRY_VERIFY]);
+        return { status: 200, body: out(OwnAccountListState, await ownAccountListState(tx)) };
+      },
+    }),
+    userRoute({
+      method: 'post',
+      path: '/v1/platform/own-account-list/attest',
+      operationId: 'attestOwnAccountList',
+      summary:
+        'Attest that the list of accounts owned by Udofin and its group is loaded and complete (platform.accounts.registry.verify, aal2)',
+      description:
+        'A recorded decision of one platform person with an evidence reference label (what the list was reconciled against; no file contents, no account details), not proof. Refused (own_account_list_incomplete) unless a verified Udofin account exists under the active key and no Udofin or group account is still unverified. The same person and evidence again changes nothing. The answer is the state after the attestation.',
+      tags: ['Platform accounts'],
+      auth: 'staff',
+      idempotent: true,
+      body: OwnAccountListAttestInput,
+      responses: { 200: OwnAccountListState },
+      errors: [400, 401, 403, 409, 422],
+      rateLimit: WRITE_LIMIT,
+      handler: async ({ tx, body }) => {
+        await one<string>(tx, 'select payments.attest_own_account_list($1, $2) as r', [
+          body.evidenceRef,
+          body.note ?? null,
+        ]);
+        return { status: 200, body: out(OwnAccountListState, await ownAccountListState(tx)) };
+      },
+    }),
+    userRoute({
+      method: 'post',
+      path: '/v1/platform/own-account-list/withdraw',
+      operationId: 'withdrawOwnAccountListAttestation',
+      summary:
+        'Withdraw the attestation of the own-account list (either registry permission, aal2, a reason of 10 or more characters)',
+      description:
+        'For example because an Udofin or group account was found that is not on the list. From then on lender accounts cannot be verified or linked, and payments and mandates cannot be switched on, until the list is attested again. Nothing to withdraw is not an error. The answer is the state after the withdrawal.',
+      tags: ['Platform accounts'],
+      auth: 'staff',
+      idempotent: true,
+      body: AccountsReasonInput,
+      responses: { 200: OwnAccountListState },
+      errors: [400, 401, 403, 422],
+      rateLimit: WRITE_LIMIT,
+      handler: async ({ tx, body }) => {
+        await one<string>(tx, 'select payments.withdraw_own_account_list_attestation($1) as r', [
+          body.reason,
+        ]);
+        return { status: 200, body: out(OwnAccountListState, await ownAccountListState(tx)) };
       },
     }),
 
@@ -1206,7 +1325,7 @@ export function lenderAccountsRoutes(deps: LenderAccountsDeps = {}): RouteDefini
       operationId: 'claimMerchant',
       summary: "Claim the lender's merchant identifier at a provider (payment.configure, aal2)",
       description:
-        'A claim starts unverified: the platform confirms against evidence that the identifier belongs to the lender. An identifier already claimed by anyone else (including Udofin) is refused (merchant_already_claimed). Claiming an identifier the lender claimed before returns that claim with the status it has now: if the platform has revoked it the status is revoked, and a revoked identifier stays taken (it cannot be used in a payment configuration).',
+        "A claim is only a claim: it starts unverified, and the platform confirms against evidence that the identifier belongs to the lender. Several lenders can claim the same identifier and the answer never says whether anyone else holds it; only one live claim of an identifier can ever be verified, and that is the platform's decision. Claiming an identifier the lender already holds a live claim for returns that claim. A claim that was withdrawn or revoked is history: claiming again makes a new claim. At most 20 unverified claims can be open at a time (too_many_claims).",
       tags: ['Lender payments'],
       auth: 'staff',
       idempotent: true,
@@ -1273,6 +1392,31 @@ export function lenderAccountsRoutes(deps: LenderAccountsDeps = {}): RouteDefini
         return { status: 200, body: out(MerchantPage, page) };
       },
     }),
+    userRoute({
+      method: 'post',
+      path: '/v1/lender/merchants/:id/withdraw',
+      operationId: 'withdrawMerchantClaim',
+      summary: "Withdraw one of the lender's unverified merchant claims (payment.configure, aal2)",
+      description:
+        "The claim becomes revoked and stays as history; claiming the identifier again makes a new claim. A verified claim cannot be withdrawn (already_verified): the platform revokes it. Another lender's claim reads as not found. At most 20 unverified claims can be open at a time (too_many_claims).",
+      tags: ['Lender payments'],
+      auth: 'staff',
+      idempotent: true,
+      idempotencyTenant: ({ body }) => (body as { lenderId?: string }).lenderId ?? null,
+      params: Id,
+      body: LenderRecordActionInput,
+      responses: { 200: AccountsActionResult },
+      errors: [400, 401, 403, 404, 409, 422],
+      rateLimit: WRITE_LIMIT,
+      handler: async ({ tx, params, body }) => {
+        const status = await one<string>(
+          tx,
+          'select payments.withdraw_merchant_claim($1::uuid, $2::uuid) as r',
+          [body.lenderId, params.id],
+        );
+        return { status: 200, body: out(AccountsActionResult, { id: params.id, status }) };
+      },
+    }),
     // ---- settlement accounts (the lender's own; masked reference only) -------------------------------------------------------
     userRoute({
       method: 'post',
@@ -1307,6 +1451,32 @@ export function lenderAccountsRoutes(deps: LenderAccountsDeps = {}): RouteDefini
         const row = stored.rows[0];
         if (!row) throw new ApiError(403, 'forbidden', 'Forbidden');
         return { status: 201, body: out(SettlementAccountRequested, { id, status: row.status }) };
+      },
+    }),
+    userRoute({
+      method: 'post',
+      path: '/v1/lender/settlement-accounts/:id/withdraw',
+      operationId: 'withdrawSettlementAccount',
+      summary:
+        'Withdraw a settlement account request that was never linked to the registry (payment.configure, aal2)',
+      description:
+        "The row becomes revoked and stays as history; it no longer counts toward the limit of 20 accounts or the duplicate check, so the same bank and masked reference can be requested again. An account linked to the registry cannot be withdrawn (already_linked): the platform revokes it. Another lender's account reads as not found.",
+      tags: ['Lender payments'],
+      auth: 'staff',
+      idempotent: true,
+      idempotencyTenant: ({ body }) => (body as { lenderId?: string }).lenderId ?? null,
+      params: Id,
+      body: LenderRecordActionInput,
+      responses: { 200: AccountsActionResult },
+      errors: [400, 401, 403, 404, 409, 422],
+      rateLimit: WRITE_LIMIT,
+      handler: async ({ tx, params, body }) => {
+        const status = await one<string>(
+          tx,
+          'select payments.withdraw_settlement_account($1::uuid, $2::uuid) as r',
+          [body.lenderId, params.id],
+        );
+        return { status: 200, body: out(AccountsActionResult, { id: params.id, status }) };
       },
     }),
     userRoute({
@@ -1493,7 +1663,7 @@ export function lenderAccountsRoutes(deps: LenderAccountsDeps = {}): RouteDefini
       operationId: 'draftPaymentConfig',
       summary: 'Draft a payment configuration (payment.configure, aal2)',
       description:
-        'Secrets are given as the NAMES of secrets in the secrets manager, never values. The API generates the opaque callback token, stores only its SHA-256 and returns the token once, here: configure it at the provider as the callback path. It is not returned again and is not logged. Content cannot change after drafting.',
+        "Secrets are given as the NAMES of secrets in the secrets manager, never values, inside the lender's own namespace (see GET /v1/lender/secret-ref-prefix): a name outside it is refused (secret_ref_invalid) and is never read. The API generates the opaque callback token, stores only its SHA-256 and returns the token once, here: configure it at the provider as the callback path. It is not returned again and is not logged. Content cannot change after drafting.",
       tags: ['Lender payments'],
       auth: 'staff',
       idempotent: true,
@@ -1656,6 +1826,31 @@ export function lenderAccountsRoutes(deps: LenderAccountsDeps = {}): RouteDefini
         const status = await one<string>(
           tx,
           'select payments.retire_payment_config($1::uuid, $2) as r',
+          [params.id, body.reason],
+        );
+        return { status: 200, body: out(AccountsActionResult, { id: params.id, status }) };
+      },
+    }),
+    userRoute({
+      method: 'post',
+      path: '/v1/platform/payment-configs/:id/release-hold',
+      operationId: 'releasePaymentConfigHold',
+      summary:
+        'Lift the hold of a suspended configuration (platform.payments.providers.manage, aal2, a reason; a platform hold only by a different person)',
+      description:
+        'A configuration suspended by the platform kill switch, by a system suspension or by the nightly validation carries a hold. While a hold stands on any configuration of a lender, that lender can neither re-submit nor re-approve a configuration (platform_hold). A hold set by a platform person is lifted by a DIFFERENT person (self_approval); a system hold by any platform person with the permission. The configuration stays suspended: the lender submits it again and a different approver approves it. The release and its reason are recorded in the configuration history.',
+      tags: ['Platform payments'],
+      auth: 'staff',
+      idempotent: true,
+      params: Id,
+      body: AccountsReasonInput,
+      responses: { 200: AccountsActionResult },
+      errors: [400, 401, 403, 404, 409, 422],
+      rateLimit: WRITE_LIMIT,
+      handler: async ({ tx, params, body }) => {
+        const status = await one<string>(
+          tx,
+          'select payments.release_payment_config_hold($1::uuid, $2) as r',
           [params.id, body.reason],
         );
         return { status: 200, body: out(AccountsActionResult, { id: params.id, status }) };

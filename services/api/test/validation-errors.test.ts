@@ -67,8 +67,9 @@ describe('validation problems never carry a caller-supplied key (A20)', () => {
     providerMode: 'sandbox',
     merchantRegistryId: REGISTRY,
     settlementAccountId: SETTLEMENT,
-    secretRef: 'PROVIDER_API_SECRET',
-    webhookSecretRef: 'PROVIDER_WEBHOOK_SECRET',
+    // Secret NAMES lie inside a lender namespace (L, twelve capital hexadecimal digits, an underscore).
+    secretRef: 'L0198B3F40001_PROVIDER_API',
+    webhookSecretRef: 'L0198B3F40001_PROVIDER_HOOK',
   };
 
   it('writes `*` for the key of a record, at the first and the second level', async () => {

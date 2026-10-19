@@ -64,6 +64,7 @@ describe.skipIf(!enabled)(
       p1: randomUUID(), // platform: providers.manage + registry.manage + features.manage
       p2: randomUUID(), // platform: registry.verify + features.manage (a different person for every second signature)
       p3: randomUUID(), // platform: no payments permission at all
+      p4: randomUUID(), // platform: providers.manage only (the second person who may lift a hold that p1 set)
       l1: randomUUID(), // lender A maker: payment.configure
       l2: randomUUID(), // lender A checker: payment.config.approve
       l3: randomUUID(), // lender A second maker (the submitter)
@@ -120,6 +121,22 @@ describe.skipIf(!enabled)(
     };
     const q = async <T extends pg.QueryResultRow>(sql: string, values: unknown[] = []) =>
       (await admin.query<T>(sql, values)).rows;
+    /** One statement as the system role (the worker's login assumes service_role), in its own transaction. */
+    const asSystem = async <T extends pg.QueryResultRow>(sql: string, values: unknown[] = []) => {
+      const client = await admin.connect();
+      try {
+        await client.query('begin');
+        await client.query('set local role service_role');
+        const result = await client.query<T>(sql, values);
+        await client.query('commit');
+        return result.rows;
+      } catch (error) {
+        await client.query('rollback').catch(() => undefined);
+        throw error;
+      } finally {
+        client.release();
+      }
+    };
     /** Registry rows registered by this file's platform users (other integration files may share the database). */
     const myRegistry = () =>
       q('select 1 from payments.account_registry where registered_by = any($1::uuid[])', [
@@ -214,6 +231,25 @@ describe.skipIf(!enabled)(
       permittedPurposes: ['repayment_settlement'],
       ...over,
     });
+    /** The namespace of a lender's secret names, derived as the database derives it (the route is checked against this). */
+    const prefixOf = (lender: string) => `L${lender.replaceAll('-', '').slice(-12).toUpperCase()}_`;
+    // The secret NAMES of a configuration lie inside the namespace of its lender: L, the last twelve hexadecimal digits of the
+    // lender id in capitals, and an underscore (payments.secret_ref_prefix). Anything else is refused and never read (U51).
+    const draftBody = (over: Record<string, unknown> = {}) => ({
+      lenderId: ids.lenderA,
+      provider: 'testpay',
+      providerMode: 'production',
+      merchantRegistryId: state.merchantA,
+      settlementAccountId: state.settlementA,
+      secretRef: `${prefixOf((over.lenderId as string | undefined) ?? ids.lenderA)}TESTPAY_API`,
+      webhookSecretRef: `${prefixOf((over.lenderId as string | undefined) ?? ids.lenderA)}TESTPAY_HOOK`,
+      railLimits: { upi: { max_amount_minor: 10_000_000, needs_afa_each_debit: false } },
+      railLimitsSource: 'SAMPLE provider documentation v1, section 4',
+      evidenceRef: 'SAMPLE-ONBOARDING-CONFIRMATION-1',
+      contractSectionRef: 'SAMPLE-LSP-AGREEMENT-7.1',
+      ...over,
+    });
+
     const newSample = (length = 12): Sample => {
       const sample = { accountNumber: digits(length), ifsc: newIfsc() };
       used.push(sample);
@@ -239,7 +275,18 @@ describe.skipIf(!enabled)(
           'this file needs a freshly migrated database (or one only the fixtures of other integration files used)',
         );
 
-      for (const id of [ids.p1, ids.p2, ids.p3, ids.l1, ids.l2, ids.l3, ids.la, ids.b1, ids.b2]) {
+      for (const id of [
+        ids.p1,
+        ids.p2,
+        ids.p3,
+        ids.p4,
+        ids.l1,
+        ids.l2,
+        ids.l3,
+        ids.la,
+        ids.b1,
+        ids.b2,
+      ]) {
         await admin.query(
           `insert into auth.users (id, phone, raw_app_meta_data) values ($1, null, '{"actor_type":"staff"}')`,
           [id],
@@ -280,6 +327,7 @@ describe.skipIf(!enabled)(
         'platform_features_admin',
       ]);
       await member(ids.platformOrg, ids.p3, 'platform', ['platform_admin']);
+      await member(ids.platformOrg, ids.p4, 'platform', ['platform_payments_admin']);
       await member(ids.lenderA, ids.l1, 'lender', ['payments_admin']);
       await member(ids.lenderA, ids.l2, 'lender', ['payments_approver']);
       await member(ids.lenderA, ids.l3, 'lender', ['payments_admin']);
@@ -327,6 +375,7 @@ describe.skipIf(!enabled)(
         '/v1/platform/return-code-classes',
         '/v1/platform/account-format-rules',
         '/v1/platform/fingerprint-key-versions',
+        '/v1/platform/own-account-list',
         '/v1/platform/accounts',
         '/v1/platform/settlement-accounts',
         '/v1/platform/merchants',
@@ -530,6 +579,36 @@ describe.skipIf(!enabled)(
             status: 'approved',
           },
         ]);
+        // The evidence reference is not in the table any more for anyone but the platform view: the lender-facing list names
+        // four columns, and the platform listing is read from payments.provider_register_platform (U41).
+        expect(JSON.stringify(choices)).not.toContain('SAMPLE-PA-AUTHORISATION-2026');
+        expect(JSON.stringify(choices)).not.toContain('authorisationEvidenceRef');
+        // At the database: the table refuses the evidence column to every logged-in user, and the platform view shows a row to a
+        // person with the provider permission and to nobody else.
+        const direct = createUserContext(apiPool);
+        const as = (sub: string) => ({ sub, aal: 'aal2' as const, sessionId: null });
+        await expect(
+          direct.withUserContext(as(ids.l1), (tx) =>
+            tx.query('select authorisation_evidence_ref from payments.provider_register'),
+          ),
+        ).rejects.toMatchObject({ code: '42501' });
+        await expect(
+          direct.withUserContext(as(ids.p1), (tx) =>
+            tx.query('select authorisation_evidence_ref from payments.provider_register'),
+          ),
+        ).rejects.toMatchObject({ code: '42501' });
+        for (const [user, expected] of [
+          [ids.l1, 0],
+          [ids.p2, 0],
+          [ids.p1, 1],
+        ] as const) {
+          const viewed = await direct.withUserContext(as(user), (tx) =>
+            tx.query(
+              `select provider from payments.provider_register_platform where provider = 'testpay'`,
+            ),
+          );
+          expect([user, viewed.rowCount]).toEqual([user, expected]);
+        }
       });
 
       it('refuses a suspension without a reason, free text that looks like a number, other roles, and a replayed key with other content', async () => {
@@ -902,7 +981,7 @@ describe.skipIf(!enabled)(
         expect(sealed).not.toBe(naive);
       });
 
-      it('refuses the same real account again, under any owner, and keeps one entry per account', async () => {
+      it('refuses the same account number at the same bank again, under any owner (best effort: the fingerprint covers the bank code and the number as typed)', async () => {
         const sample = JSON.parse(state.sampleE ?? '{}') as Sample;
         const again = await post('/v1/platform/accounts', ids.p1, registerBody(sample));
         expect(again.statusCode).toBe(409);
@@ -1111,6 +1190,192 @@ describe.skipIf(!enabled)(
         expect(code(bad)).toBe('invalid_cursor');
       });
 
+      it('does not verify a lender account until the own-account list is attested complete, by the verifier only (A17)', async () => {
+        type ListState = {
+          keyVersion: number | null;
+          attested: boolean;
+          events: {
+            eventKind: string;
+            keyVersion: number;
+            evidenceRef: string | null;
+            reason: string | null;
+            entriesCounted: number | null;
+            actorId: string;
+          }[];
+        };
+        const listState = async (user: string) =>
+          ok(await get('/v1/platform/own-account-list', user)).json<ListState>();
+        // Readable by the two registry people, by nobody else.
+        for (const user of [ids.p1, ids.p2]) expect((await listState(user)).keyVersion).toBe(1);
+        for (const user of [ids.l1, ids.la, ids.b1, ids.p3])
+          expect((await get('/v1/platform/own-account-list', user)).statusCode, user).toBe(403);
+        if ((await listState(ids.p1)).attested) {
+          ok(
+            await post('/v1/platform/own-account-list/withdraw', ids.p1, {
+              reason: 'starting this test from a list that is not attested',
+            }),
+          );
+        }
+        expect((await listState(ids.p1)).attested).toBe(false);
+
+        // A lender account is not verified while the list is not attested: the refusal is a stable code, nothing is changed.
+        const evidence = { evidenceRef: 'SAMPLE-BANK-LETTER-2026-1' };
+        const blocked = await post(`/v1/platform/accounts/${state.regE}/verify`, ids.p2, evidence);
+        expect([blocked.statusCode, code(blocked)]).toEqual([409, 'own_account_list_not_attested']);
+        expect(
+          await q(
+            `select 1 from payments.account_registry where id = $1 and verification_status = 'unverified'`,
+            [state.regE],
+          ),
+        ).toHaveLength(1);
+
+        // The list is attested only when it is loaded: a verified Udofin account exists and none is waiting for verification.
+        const attestBody = { evidenceRef: 'SAMPLE-OWN-ACCOUNT-RECONCILIATION-1' };
+        const empty = await post('/v1/platform/own-account-list/attest', ids.p2, attestBody);
+        expect([empty.statusCode, code(empty)]).toEqual([409, 'own_account_list_incomplete']);
+        const udofinSample = newSample();
+        const udofin = ok(
+          await post(
+            '/v1/platform/accounts',
+            ids.p1,
+            registerBody(udofinSample, {
+              ownerKind: 'udofin',
+              ownerOrgId: undefined,
+              legalOwnerName: 'Udofin Technologies Private Limited',
+              permittedPurposes: ['fee_collection'],
+            }),
+          ),
+          201,
+        ).json<{ id: string }>();
+        state.udofinList = udofin.id;
+        const pending = await post('/v1/platform/own-account-list/attest', ids.p2, attestBody);
+        expect([pending.statusCode, code(pending)]).toEqual([409, 'own_account_list_incomplete']);
+        // An Udofin entry builds the list and needs no attestation to be verified.
+        ok(
+          await post(`/v1/platform/accounts/${udofin.id}/verify`, ids.p2, {
+            evidenceRef: 'SAMPLE-BANK-LETTER-UDOFIN-LIST',
+          }),
+        );
+
+        // Who may attest: the verifier, with a second factor, an evidence label and nothing else in the body.
+        for (const user of [ids.p1, ids.p3, ids.l1, ids.la, ids.b1])
+          expect(
+            (await post('/v1/platform/own-account-list/attest', user, attestBody)).statusCode,
+            user,
+          ).toBe(403);
+        const aal1 = await call(
+          keyed,
+          'POST',
+          '/v1/platform/own-account-list/attest',
+          ids.p2,
+          attestBody,
+          undefined,
+          'aal1',
+        );
+        expect([aal1.statusCode, code(aal1)]).toEqual([401, 'mfa_required']);
+        for (const bad of [
+          {},
+          { evidenceRef: '  ' },
+          { evidenceRef: 'LIST-912345678901' },
+          { ...attestBody, note: 'call 9876543210 about it' },
+          { ...attestBody, keyVersion: 2 },
+        ]) {
+          const refused = await post('/v1/platform/own-account-list/attest', ids.p2, bad);
+          expect([JSON.stringify(bad), refused.statusCode]).toEqual([JSON.stringify(bad), 422]);
+          expect(refused.body).not.toContain('912345678901');
+          expect(refused.body).not.toContain('9876543210');
+        }
+        expect((await listState(ids.p2)).attested).toBe(false);
+
+        const key = `it-${randomUUID()}`;
+        const attested = ok(
+          await post('/v1/platform/own-account-list/attest', ids.p2, attestBody, key),
+        ).json<ListState>();
+        expect(attested).toMatchObject({ keyVersion: 1, attested: true });
+        expect(attested.events).toEqual([
+          expect.objectContaining({
+            eventKind: 'attested',
+            keyVersion: 1,
+            evidenceRef: attestBody.evidenceRef,
+            reason: null,
+            actorId: ids.p2,
+          }),
+        ]);
+        expect(attested.events[0]?.entriesCounted).toBeGreaterThanOrEqual(1);
+        // The same request again replays; a new key with the same person and evidence records nothing new.
+        expect(
+          (await post('/v1/platform/own-account-list/attest', ids.p2, attestBody, key)).headers[
+            'idempotent-replayed'
+          ],
+        ).toBe('true');
+        const same = ok(
+          await post('/v1/platform/own-account-list/attest', ids.p2, attestBody),
+        ).json<ListState>();
+        expect(same.events).toHaveLength(1);
+
+        // It can be withdrawn by either registry person with a reason; from then on lender accounts wait again.
+        for (const user of [ids.l1, ids.la, ids.b1, ids.p3])
+          expect(
+            (
+              await post('/v1/platform/own-account-list/withdraw', user, {
+                reason: 'an Udofin account was found that is not on the list',
+              })
+            ).statusCode,
+            user,
+          ).toBe(403);
+        for (const reason of ['short', 'reconciled against 912345678901 again'])
+          expect(
+            (await post('/v1/platform/own-account-list/withdraw', ids.p1, { reason })).statusCode,
+            reason,
+          ).toBe(422);
+        const withdrawn = ok(
+          await post('/v1/platform/own-account-list/withdraw', ids.p1, {
+            reason: 'an Udofin account was found that is not on the list',
+          }),
+        ).json<ListState>();
+        expect(withdrawn.attested).toBe(false);
+        expect(withdrawn.events.map((e) => e.eventKind)).toEqual(['withdrawn', 'attested']);
+        expect(withdrawn.events[0]).toMatchObject({
+          reason: 'an Udofin account was found that is not on the list',
+          evidenceRef: null,
+          entriesCounted: null,
+          actorId: ids.p1,
+        });
+        // Nothing to withdraw is not an error and records nothing.
+        const again = ok(
+          await post('/v1/platform/own-account-list/withdraw', ids.p2, {
+            reason: 'withdrawing a list that is already withdrawn',
+          }),
+        ).json<ListState>();
+        expect(again.events).toHaveLength(2);
+        const blockedAgain = await post(
+          `/v1/platform/accounts/${state.regE}/verify`,
+          ids.p2,
+          evidence,
+        );
+        expect(code(blockedAgain)).toBe('own_account_list_not_attested');
+
+        // Attested again (new evidence): the lender account can be verified in the next test.
+        const reattested = ok(
+          await post('/v1/platform/own-account-list/attest', ids.p2, {
+            evidenceRef: 'SAMPLE-OWN-ACCOUNT-RECONCILIATION-2',
+          }),
+        ).json<ListState>();
+        expect(reattested.attested).toBe(true);
+        expect(reattested.events.map((e) => e.eventKind)).toEqual([
+          'attested',
+          'withdrawn',
+          'attested',
+        ]);
+        // The audit trail names ids and counts, never the evidence label's content or an account.
+        const audit = await q<{ metadata: unknown }>(
+          `select metadata from audit.events where action in ('payments.own_account_list.attested', 'payments.own_account_list.withdrawn')`,
+        );
+        expect(audit.length).toBeGreaterThanOrEqual(3);
+        expect(JSON.stringify(audit)).not.toContain('SAMPLE-OWN-ACCOUNT');
+        expect(JSON.stringify(audit)).not.toContain(udofinSample.accountNumber);
+      });
+
       it('verifies by a different person with an evidence label, once, and rejects or revokes with a reason', async () => {
         const evidence = { evidenceRef: 'SAMPLE-BANK-LETTER-2026-1' };
         expect(
@@ -1281,7 +1546,7 @@ describe.skipIf(!enabled)(
 
     // ----------------------------------------------------------------------------------------------------------------------
     describe('merchants', () => {
-      it('lets a lender claim its merchant identifier once, and nobody else', async () => {
+      it('lets a lender claim its merchant identifier; a second lender claiming the same identifier gets an ordinary claim and learns nothing (A19, M2, U52)', async () => {
         const claim = { lenderId: ids.lenderA, provider: 'testpay', merchantRef: 'MER-ALPHA-0001' };
         const created = ok(await post('/v1/lender/merchants', ids.l1, claim), 201);
         expect(created.json()).toMatchObject({ status: 'active' });
@@ -1290,12 +1555,25 @@ describe.skipIf(!enabled)(
         expect(
           ok(await post('/v1/lender/merchants', ids.l1, claim), 201).json<{ id: string }>().id,
         ).toBe(state.merchantA);
-        const stolen = await post('/v1/lender/merchants', ids.b1, {
-          ...claim,
-          lenderId: ids.lenderB,
+        // Another lender claiming the same identifier is an ordinary claim: 201, unverified, its own id. The answer is the same as
+        // for an identifier nobody holds, so a claim is no way to find out who holds one; which claim is VERIFIED is the
+        // platform's decision (see the verification test below).
+        const second = ok(
+          await post('/v1/lender/merchants', ids.b1, { ...claim, lenderId: ids.lenderB }),
+          201,
+        );
+        expect(second.json()).toEqual({
+          id: expect.stringMatching(/^[0-9a-f-]{36}$/) as string,
+          status: 'active',
         });
-        expect(stolen.statusCode).toBe(409);
-        expect(code(stolen)).toBe('merchant_already_claimed');
+        state.claimB2 = second.json<{ id: string }>().id;
+        expect(state.claimB2).not.toBe(state.merchantA);
+        expect(
+          ok(
+            await post('/v1/lender/merchants', ids.b1, { ...claim, lenderId: ids.lenderB }),
+            201,
+          ).json<{ id: string }>().id,
+        ).toBe(state.claimB2);
         expect((await post('/v1/lender/merchants', ids.b1, claim)).statusCode).toBe(403);
         expect((await post('/v1/lender/merchants', ids.l2, claim)).statusCode).toBe(403);
         expect((await post('/v1/lender/merchants', ids.p1, claim)).statusCode).toBe(403);
@@ -1331,8 +1609,9 @@ describe.skipIf(!enabled)(
         expect(
           ok(await get('/v1/lender/merchants', ids.b1))
             .json<{ items: { id: string }[] }>()
-            .items.map((m) => m.id),
-        ).toEqual([state.merchantB]);
+            .items.map((m) => m.id)
+            .sort(),
+        ).toEqual([state.merchantB, state.claimB2].sort());
         const all = ok(await get('/v1/platform/merchants', ids.p1)).json<{
           items: { id: string }[];
         }>();
@@ -1346,7 +1625,7 @@ describe.skipIf(!enabled)(
               ids.p1,
             ),
           ).json<{ items: unknown[] }>().items,
-        ).toHaveLength(1);
+        ).toHaveLength(2);
       });
 
       it('verifies a claim against evidence by the platform, once, and revokes with a reason', async () => {
@@ -1381,6 +1660,55 @@ describe.skipIf(!enabled)(
           evidenceRef: 'SAMPLE-ANOTHER-EVIDENCE',
         });
         expect(code(again)).toBe('already_verified');
+        // Only ONE live claim of an identifier can be verified. Lender B's competing claim of the same identifier is refused for the
+        // platform alone (merchant_already_claimed): the platform settles it on evidence, and neither lender is told about the other.
+        const competing = await post(`/v1/platform/merchants/${state.claimB2}/verify`, ids.p1, {
+          evidenceRef: 'SAMPLE-PROVIDER-ONBOARDING-2',
+        });
+        expect([competing.statusCode, code(competing)]).toEqual([409, 'merchant_already_claimed']);
+        expect(
+          (
+            await q<{ verification_status: string }>(
+              'select verification_status from payments.merchant_registry where id = $1',
+              [state.claimB2],
+            )
+          )[0]?.verification_status,
+        ).toBe('unverified');
+        // The lender withdraws a claim of its own that was never verified: it becomes history (revoked) and is no longer taken.
+        const withdrawBody = { lenderId: ids.lenderB };
+        const withdrawUrl = `/v1/lender/merchants/${state.claimB2}/withdraw`;
+        for (const [user, body] of [
+          [ids.b2, withdrawBody], // the lender's approver does not hold payment.configure
+          [ids.la, withdrawBody],
+          [ids.l1, { lenderId: ids.lenderA }], // another lender's user naming its own lender: the claim is not found
+          [ids.l1, withdrawBody], // another lender's user naming this lender
+          [ids.p1, withdrawBody],
+        ] as const) {
+          const res = await post(withdrawUrl, user, body);
+          expect([user, res.statusCode]).toEqual([
+            user,
+            user === ids.l1 && body.lenderId === ids.lenderA ? 404 : 403,
+          ]);
+        }
+        const withdrawn = ok(await post(withdrawUrl, ids.b1, withdrawBody));
+        expect(withdrawn.json()).toEqual({ id: state.claimB2, status: 'revoked' });
+        expect(ok(await post(withdrawUrl, ids.b1, withdrawBody)).json()).toEqual({
+          id: state.claimB2,
+          status: 'revoked',
+        });
+        expect(
+          (await post(withdrawUrl, ids.b1, { lenderId: ids.lenderB, extra: 1 })).statusCode,
+        ).toBe(422);
+        // A verified claim is not the lender's to withdraw: the platform revokes it.
+        const verifiedWithdraw = await post(
+          `/v1/lender/merchants/${state.merchantA}/withdraw`,
+          ids.l1,
+          { lenderId: ids.lenderA },
+        );
+        expect([verifiedWithdraw.statusCode, code(verifiedWithdraw)]).toEqual([
+          409,
+          'already_verified',
+        ]);
         expect(
           (
             await post(`/v1/platform/merchants/${randomUUID()}/verify`, ids.p1, {
@@ -1407,9 +1735,27 @@ describe.skipIf(!enabled)(
           provider: 'testpay',
           merchantRef: 'MER-BETA-0001',
         });
-        // The repeat claim returns the lender's own revoked claim: it must say so, never 'active' (A19).
+        // A revoked claim is history: claiming the identifier again makes a NEW claim, unverified and active (M2). The old one stays
+        // revoked, so the answer never reports a revoked claim as active (A19).
         expect(reclaim.statusCode).toBe(201);
-        expect(reclaim.json()).toEqual({ id: state.merchantB, status: 'revoked' });
+        expect(reclaim.json()).toEqual({
+          id: expect.stringMatching(/^[0-9a-f-]{36}$/) as string,
+          status: 'active',
+        });
+        expect(reclaim.json<{ id: string }>().id).not.toBe(state.merchantB);
+        expect(
+          (
+            await q<{ status: string }>(
+              'select status from payments.merchant_registry where id = $1',
+              [state.merchantB],
+            )
+          )[0]?.status,
+        ).toBe('revoked');
+        ok(
+          await post(`/v1/lender/merchants/${reclaim.json<{ id: string }>().id}/withdraw`, ids.b1, {
+            lenderId: ids.lenderB,
+          }),
+        );
         expect(
           (
             await post(`/v1/platform/merchants/${state.merchantB}/revoke`, ids.l1, {
@@ -1419,7 +1765,47 @@ describe.skipIf(!enabled)(
         ).toBe(403);
       });
 
-      it("registers Udofin's own fee merchant, which no lender can claim", async () => {
+      it('stops a lender from holding more than twenty unverified claims at once (too_many_claims)', async () => {
+        // Lender B holds no live claim now (every one above was revoked or withdrawn). The twenty-first open claim is refused,
+        // and withdrawing one makes room: the cap counts live unverified claims only.
+        const claimOf = (n: number) => ({
+          lenderId: ids.lenderB,
+          provider: 'testpay',
+          merchantRef: `MER-CAP-${String(1000 + n)}`,
+        });
+        const opened: string[] = [];
+        for (let n = 0; n < 20; n++)
+          opened.push(
+            ok(await post('/v1/lender/merchants', ids.b1, claimOf(n)), 201).json<{ id: string }>()
+              .id,
+          );
+        const over = await post('/v1/lender/merchants', ids.b1, claimOf(20));
+        expect([over.statusCode, code(over)]).toEqual([422, 'too_many_claims']);
+        expect(
+          (await post('/v1/lender/merchants', ids.b1, claimOf(3))).statusCode,
+          'a claim the lender already holds is still answered',
+        ).toBe(201);
+        ok(
+          await post(`/v1/lender/merchants/${opened[0]}/withdraw`, ids.b1, {
+            lenderId: ids.lenderB,
+          }),
+        );
+        ok(await post('/v1/lender/merchants', ids.b1, claimOf(20)), 201);
+        for (const id of opened.slice(1))
+          ok(await post(`/v1/lender/merchants/${id}/withdraw`, ids.b1, { lenderId: ids.lenderB }));
+        const last = await q<{ id: string }>(
+          `select id from payments.merchant_registry where owner_org_id = $1 and status = 'active'`,
+          [ids.lenderB],
+        );
+        for (const row of last)
+          ok(
+            await post(`/v1/lender/merchants/${row.id}/withdraw`, ids.b1, {
+              lenderId: ids.lenderB,
+            }),
+          );
+      });
+
+      it("registers Udofin's own fee merchant, which no lender claim can ever verify", async () => {
         const created = ok(
           await post('/v1/platform/udofin-fee-merchants', ids.p1, {
             provider: 'testpay',
@@ -1436,12 +1822,26 @@ describe.skipIf(!enabled)(
           201,
         );
         expect(again.json<{ id: string }>().id).toBe(created.json<{ id: string }>().id);
-        const claim = await post('/v1/lender/merchants', ids.l1, {
-          lenderId: ids.lenderA,
-          provider: 'testpay',
-          merchantRef: 'MER-UDOFIN-FEES-1',
+        // A lender can claim the identifier like any other (the answer reveals nothing about who holds it), but the claim can never
+        // be verified: Udofin's fee merchant holds the one verified place, and it can never be used in a payment configuration.
+        const claim = ok(
+          await post('/v1/lender/merchants', ids.l1, {
+            lenderId: ids.lenderA,
+            provider: 'testpay',
+            merchantRef: 'MER-UDOFIN-FEES-1',
+          }),
+          201,
+        ).json<{ id: string; status: string }>();
+        expect(claim.status).toBe('active');
+        const feeVerify = await post(`/v1/platform/merchants/${claim.id}/verify`, ids.p1, {
+          evidenceRef: 'SAMPLE-PROVIDER-ONBOARDING-FEES',
         });
-        expect(code(claim)).toBe('merchant_already_claimed');
+        expect([feeVerify.statusCode, code(feeVerify)]).toEqual([409, 'merchant_already_claimed']);
+        ok(
+          await post(`/v1/lender/merchants/${claim.id}/withdraw`, ids.l1, {
+            lenderId: ids.lenderA,
+          }),
+        );
         expect(
           (
             await post('/v1/platform/udofin-fee-merchants', ids.p2, {
@@ -1458,11 +1858,14 @@ describe.skipIf(!enabled)(
             })
           ).statusCode,
         ).toBe(403);
-        // The lender listing never shows Udofin's own merchant.
+        // The lender listing never shows Udofin's own merchant: only the lender's claims, the withdrawn one as history.
         const lenderView = ok(await get('/v1/lender/merchants', ids.l1)).json<{
-          items: { merchantRef: string }[];
+          items: { merchantRef: string; ownerKind: string; status: string }[];
         }>();
-        expect(lenderView.items.map((m) => m.merchantRef)).toEqual(['MER-ALPHA-0001']);
+        expect(lenderView.items.every((m) => m.ownerKind === 'lender')).toBe(true);
+        expect(
+          lenderView.items.filter((m) => m.status === 'active').map((m) => m.merchantRef),
+        ).toEqual(['MER-ALPHA-0001']);
       });
     });
 
@@ -1624,23 +2027,103 @@ describe.skipIf(!enabled)(
           ),
         ).toHaveLength(0);
       });
+
+      it('withdraws a settlement account request that was never linked, and never a linked one (A15, M4)', async () => {
+        const request = {
+          lenderId: ids.lenderB,
+          label: 'Spare collections (SAMPLE)',
+          bankName: 'Sample Bank',
+          maskedRef: 'XXXXXX4242',
+        };
+        const created = ok(
+          await post('/v1/lender/settlement-accounts', ids.b1, request),
+          201,
+        ).json<{
+          id: string;
+          status: string;
+        }>();
+        expect(created.status).toBe('unverified');
+        // The same request again answers with the same row.
+        expect(
+          ok(await post('/v1/lender/settlement-accounts', ids.b1, request), 201).json<{
+            id: string;
+          }>().id,
+        ).toBe(created.id);
+        const url = `/v1/lender/settlement-accounts/${created.id}/withdraw`;
+        const mine = { lenderId: ids.lenderB };
+        // Who may: the lender's maker only. The approver, another lender's maker and the platform are refused, and an account named
+        // under another lender is simply not found.
+        for (const user of [ids.b2, ids.l1, ids.p1])
+          expect((await post(url, user, mine)).statusCode, user).toBe(403);
+        expect((await post(url, ids.l1, { lenderId: ids.lenderA })).statusCode).toBe(404);
+        expect((await post(url, ids.b1, { ...mine, status: 'revoked' })).statusCode).toBe(422);
+        const withdrawn = ok(await post(url, ids.b1, mine));
+        expect(withdrawn.json()).toEqual({ id: created.id, status: 'revoked' });
+        expect(ok(await post(url, ids.b1, mine)).json()).toEqual({
+          id: created.id,
+          status: 'revoked',
+        });
+        // A withdrawn request is history: it no longer matches, so the same request makes a new account.
+        const fresh = ok(await post('/v1/lender/settlement-accounts', ids.b1, request), 201).json<{
+          id: string;
+          status: string;
+        }>();
+        expect(fresh.id).not.toBe(created.id);
+        expect(fresh.status).toBe('unverified');
+        ok(await post(`/v1/lender/settlement-accounts/${fresh.id}/withdraw`, ids.b1, mine));
+        // An account that is linked to the registry is revoked by the platform, not withdrawn by the lender.
+        const linked = await post(
+          `/v1/lender/settlement-accounts/${state.settlementA}/withdraw`,
+          ids.l1,
+          { lenderId: ids.lenderA },
+        );
+        expect([linked.statusCode, code(linked)]).toEqual([409, 'already_linked']);
+      });
     });
 
     // ----------------------------------------------------------------------------------------------------------------------
     describe('payment configurations: draft, submit and decide by different people; the callback token is shown once', () => {
-      const draftBody = (over: Record<string, unknown> = {}) => ({
-        lenderId: ids.lenderA,
-        provider: 'testpay',
-        providerMode: 'production',
-        merchantRegistryId: state.merchantA,
-        settlementAccountId: state.settlementA,
-        secretRef: 'TESTPAY_API_SECRET',
-        webhookSecretRef: 'TESTPAY_WEBHOOK_SECRET',
-        railLimits: { upi: { max_amount_minor: 10_000_000, needs_afa_each_debit: false } },
-        railLimitsSource: 'SAMPLE provider documentation v1, section 4',
-        evidenceRef: 'SAMPLE-ONBOARDING-CONFIRMATION-1',
-        contractSectionRef: 'SAMPLE-LSP-AGREEMENT-7.1',
-        ...over,
+      it("shows a lender the namespace its secret names must start with, and nobody else's (U51)", async () => {
+        for (const [lender, user] of [
+          [ids.lenderA, ids.l1],
+          [ids.lenderA, ids.l2],
+          [ids.lenderA, ids.la],
+          [ids.lenderA, ids.p1],
+          [ids.lenderB, ids.b1],
+        ] as const) {
+          const res = ok(await get(`/v1/lender/secret-ref-prefix?lenderId=${lender}`, user));
+          expect(res.json()).toEqual({ lenderId: lender, prefix: prefixOf(lender) });
+        }
+        expect(prefixOf(ids.lenderA)).toMatch(/^L[0-9A-F]{12}_$/);
+        expect(prefixOf(ids.lenderA)).not.toBe(prefixOf(ids.lenderB));
+        // Another lender's person, a platform person without the provider permission, a borrower and a bad query get nothing.
+        for (const user of [ids.b1, ids.b2, ids.p2, ids.p3])
+          expect(
+            (await get(`/v1/lender/secret-ref-prefix?lenderId=${ids.lenderA}`, user)).statusCode,
+            user,
+          ).toBe(403);
+        expect(
+          (await get(`/v1/lender/secret-ref-prefix?lenderId=${ids.lenderA}`, ids.borrower))
+            .statusCode,
+        ).toBe(403);
+        expect(
+          (await get(`/v1/lender/secret-ref-prefix?lenderId=${ids.lenderA}`, null)).statusCode,
+        ).toBe(401);
+        expect((await get('/v1/lender/secret-ref-prefix', ids.l1)).statusCode).toBe(422);
+        expect((await get('/v1/lender/secret-ref-prefix?lenderId=nope', ids.l1)).statusCode).toBe(
+          422,
+        );
+        expect(
+          (await get(`/v1/lender/secret-ref-prefix?lenderId=${ids.lenderA}&x=1`, ids.l1))
+            .statusCode,
+        ).toBe(422);
+        // A platform person asking for a lender that does not exist is told so; a lender's person is told nothing.
+        expect(
+          (await get(`/v1/lender/secret-ref-prefix?lenderId=${randomUUID()}`, ids.p1)).statusCode,
+        ).toBe(404);
+        expect(
+          (await get(`/v1/lender/secret-ref-prefix?lenderId=${randomUUID()}`, ids.l1)).statusCode,
+        ).toBe(403);
       });
 
       it('refuses a draft that holds a secret value, a bad shape, a foreign merchant or account, a mock mode, or a person without the permission', async () => {
@@ -1651,15 +2134,47 @@ describe.skipIf(!enabled)(
         );
         expect(value.statusCode).toBe(422);
         expect(value.body).not.toContain('sk_live');
+        // The two names must differ, and both lie inside the lender's own namespace (U51): another lender's namespace passes the
+        // shape check, and the database, which knows the lender, refuses it; a bare name or a platform secret's name fails the shape.
         expect(
           code(
             await post(
               '/v1/lender/payment-configs',
               ids.l1,
-              draftBody({ webhookSecretRef: 'TESTPAY_API_SECRET' }),
+              draftBody({ webhookSecretRef: `${prefixOf(ids.lenderA)}TESTPAY_API` }),
             ),
           ),
         ).toBe('secret_ref_invalid');
+        for (const change of [
+          { secretRef: `${prefixOf(ids.lenderB)}TESTPAY_API` },
+          { webhookSecretRef: `${prefixOf(ids.lenderB)}TESTPAY_HOOK` },
+        ]) {
+          const foreign = await post('/v1/lender/payment-configs', ids.l1, draftBody(change));
+          expect([foreign.statusCode, code(foreign)]).toEqual([422, 'secret_ref_invalid']);
+          expect(foreign.body).not.toContain(prefixOf(ids.lenderB));
+        }
+        for (const name of [
+          'TESTPAY_API_SECRET',
+          'SYSTEM_DATABASE_URL',
+          'PROVIDER_HOOK_IP_HMAC_KEY',
+          'HANDOFF_ENCRYPTION_KEYS',
+          `${prefixOf(ids.lenderA).toLowerCase()}testpay_api`,
+        ]) {
+          for (const field of ['secretRef', 'webhookSecretRef']) {
+            const bare = await post(
+              '/v1/lender/payment-configs',
+              ids.l1,
+              draftBody({ [field]: name }),
+            );
+            expect([name, field, bare.statusCode, code(bare)]).toEqual([
+              name,
+              field,
+              422,
+              'validation_failed',
+            ]);
+            expect(bare.body).not.toContain(name);
+          }
+        }
         expect(
           (
             await post(
@@ -1838,8 +2353,10 @@ describe.skipIf(!enabled)(
           lender_org_id: ids.lenderA,
           status: 'draft',
           provider_mode: 'production',
-          secret_ref: 'TESTPAY_API_SECRET',
-          webhook_secret_ref: 'TESTPAY_WEBHOOK_SECRET',
+          secret_ref: `${prefixOf(ids.lenderA)}TESTPAY_API`,
+          webhook_secret_ref: `${prefixOf(ids.lenderA)}TESTPAY_HOOK`,
+          // The namespace is stored on the configuration for the worker and the callback receiver to check.
+          secret_namespace: prefixOf(ids.lenderA),
           drafted_by: ids.l1,
         });
         // A second configuration gets a different token.
@@ -1865,7 +2382,7 @@ describe.skipIf(!enabled)(
             await post(
               '/v1/lender/payment-configs',
               ids.l1,
-              draftBody({ secretRef: 'OTHER_SECRET_NAME' }),
+              draftBody({ secretRef: `${prefixOf(ids.lenderA)}OTHER_SECRET_NAME` }),
               key,
             ),
           ),
@@ -1898,8 +2415,8 @@ describe.skipIf(!enabled)(
           status: 'draft',
           provider: 'testpay',
           providerMode: 'production',
-          secretRef: 'TESTPAY_API_SECRET',
-          webhookSecretRef: 'TESTPAY_WEBHOOK_SECRET',
+          secretRef: `${prefixOf(ids.lenderA)}TESTPAY_API`,
+          webhookSecretRef: `${prefixOf(ids.lenderA)}TESTPAY_HOOK`,
           evidenceRef: null,
           draftedBy: ids.l1,
           statusReasons: [],
@@ -2356,6 +2873,29 @@ describe.skipIf(!enabled)(
         });
         expect(code(refused)).toBe('prerequisites_unmet');
         expect(refused.json<{ detail?: string }>().detail).toMatch(/payment_config_missing/);
+        // The list of accounts owned by Udofin and its group must be attested complete (A17): with the attestation withdrawn
+        // payments cannot be switched on for ANY lender, and the reason is named.
+        ok(
+          await post('/v1/platform/own-account-list/withdraw', ids.p1, {
+            reason: 'checking that payments wait for the attestation',
+          }),
+        );
+        const unattested = await post('/v1/platform/feature-change-requests', ids.p1, body);
+        expect([unattested.statusCode, code(unattested)]).toEqual([409, 'prerequisites_unmet']);
+        expect(unattested.json<{ detail?: string }>().detail).toMatch(
+          /own_account_list_not_attested/,
+        );
+        expect(
+          await q(
+            `select 1 from servicing.feature_change_requests where lender_org_id = $1 and feature = 'payments'`,
+            [ids.lenderA],
+          ),
+        ).toHaveLength(0);
+        ok(
+          await post('/v1/platform/own-account-list/attest', ids.p2, {
+            evidenceRef: 'SAMPLE-OWN-ACCOUNT-RECONCILIATION-3',
+          }),
+        );
         const requested = ok(await post('/v1/platform/feature-change-requests', ids.p1, body), 201);
         const decided = ok(
           await post(
@@ -2506,8 +3046,8 @@ describe.skipIf(!enabled)(
           providerMode: 'production',
           merchantRegistryId: state.merchantA,
           settlementAccountId: state.settlementA,
-          secretRef: 'TESTPAY_RETRY_SECRET',
-          webhookSecretRef: 'TESTPAY_RETRY_WEBHOOK',
+          secretRef: `${prefixOf(ids.lenderA)}TESTPAY_RETRY_SECRET`,
+          webhookSecretRef: `${prefixOf(ids.lenderA)}TESTPAY_RETRY_WEBHOOK`,
         };
         ok(await post('/v1/lender/payment-configs', ids.l1, draft, draftKey), 201);
         await expire(draftKey);
@@ -2516,16 +3056,16 @@ describe.skipIf(!enabled)(
         expect(code(second)).toBe('idempotency_conflict');
         expect(second.body).not.toMatch(/[A-Za-z0-9_-]{43}/);
         expect(
-          await q(
-            `select 1 from payments.lender_payment_configs where secret_ref = 'TESTPAY_RETRY_SECRET'`,
-          ),
+          await q(`select 1 from payments.lender_payment_configs where secret_ref = $1`, [
+            `${prefixOf(ids.lenderA)}TESTPAY_RETRY_SECRET`,
+          ]),
         ).toHaveLength(1);
       });
     });
 
     // ----------------------------------------------------------------------------------------------------------------------
     describe('platform controls on configurations and the cascade from the registry', () => {
-      it('suspends an active configuration by one platform person, needs a fresh two-person approval, and retires it', async () => {
+      it('suspends an active configuration by one platform person, keeps it on hold until a different person releases it, then needs a fresh two-person approval, and retires it', async () => {
         const reason = { reason: 'provider reported a settlement incident' };
         for (const user of [ids.l1, ids.l2, ids.p2, ids.p3]) {
           expect(
@@ -2549,6 +3089,90 @@ describe.skipIf(!enabled)(
           await post(`/v1/platform/payment-configs/${state.config2}/suspend`, ids.p1, reason),
         );
         expect(suspended.json()).toEqual({ id: state.config2, status: 'suspended' });
+        // The suspension is a HOLD, visible to the platform and to the lender (A13).
+        for (const [url, user] of [
+          [`/v1/platform/payment-configs/${state.config2}`, ids.p1],
+          [`/v1/lender/payment-configs/${state.config2}`, ids.l1],
+        ] as const) {
+          const held = ok(await get(url, user)).json<{
+            status: string;
+            holdKind: string | null;
+            holdSetAt: string | null;
+          }>();
+          expect([user, held.status, held.holdKind]).toEqual([user, 'suspended', 'platform']);
+          expect(held.holdSetAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+        }
+        // The lender cannot undo it: not by submitting this configuration, not by submitting a new one, not by retiring it.
+        const resubmitHeld = await post(
+          `/v1/lender/payment-configs/${state.config2}/submit`,
+          ids.l3,
+        );
+        expect([resubmitHeld.statusCode, code(resubmitHeld)]).toEqual([409, 'platform_hold']);
+        const fresh = ok(
+          await post(
+            '/v1/lender/payment-configs',
+            ids.l1,
+            draftBody({
+              secretRef: `${prefixOf(ids.lenderA)}TESTPAY_REPLACEMENT`,
+              webhookSecretRef: `${prefixOf(ids.lenderA)}TESTPAY_REPLACEMENT_HOOK`,
+            }),
+          ),
+          201,
+        ).json<{ id: string }>();
+        const replace = await post(`/v1/lender/payment-configs/${fresh.id}/submit`, ids.l3);
+        expect([replace.statusCode, code(replace)]).toEqual([409, 'platform_hold']);
+        ok(
+          await post(`/v1/lender/payment-configs/${fresh.id}/withdraw`, ids.l1, {
+            reason: 'replacement drafted while the platform hold stands',
+          }),
+        );
+        const retireHeld = await post(
+          `/v1/lender/payment-configs/${state.config2}/retire`,
+          ids.l2,
+          {
+            reason: 'the lender retires the held configuration to replace it',
+          },
+        );
+        expect([retireHeld.statusCode, code(retireHeld)]).toEqual([409, 'platform_hold']);
+        // Who may lift it: a platform person with the provider permission, with a reason, and NOT the person who set it.
+        const lift = { reason: 'the provider confirmed the incident is closed' };
+        const releaseUrl = `/v1/platform/payment-configs/${state.config2}/release-hold`;
+        for (const user of [ids.l1, ids.l2, ids.la, ids.p2, ids.p3, ids.borrower])
+          expect((await post(releaseUrl, user, lift)).statusCode, user).toBe(403);
+        const self = await post(releaseUrl, ids.p1, lift);
+        expect([self.statusCode, code(self)]).toEqual([403, 'self_approval']);
+        expect((await post(releaseUrl, ids.p4, { reason: 'short' })).statusCode).toBe(422);
+        expect(
+          (await post(releaseUrl, ids.p4, { reason: 'call the contact on 9876543210 about it' }))
+            .statusCode,
+        ).toBe(422);
+        expect((await post(releaseUrl, ids.p4, { ...lift, extra: 1 })).statusCode).toBe(422);
+        expect(
+          (await post(`/v1/platform/payment-configs/${randomUUID()}/release-hold`, ids.p4, lift))
+            .statusCode,
+        ).toBe(404);
+        const aal1 = await call(keyed, 'POST', releaseUrl, ids.p4, lift, undefined, 'aal1');
+        expect([aal1.statusCode, code(aal1)]).toEqual([401, 'mfa_required']);
+        const released = ok(await post(releaseUrl, ids.p4, lift));
+        expect(released.json()).toEqual({ id: state.config2, status: 'suspended' });
+        const lifted = ok(await get(`/v1/platform/payment-configs/${state.config2}`, ids.p1)).json<{
+          status: string;
+          holdKind: string | null;
+          holdSetAt: string | null;
+        }>();
+        expect(lifted).toMatchObject({ status: 'suspended', holdKind: null, holdSetAt: null });
+        // The release is recorded in the configuration's history, and a second release changes nothing.
+        const history = ok(
+          await get(`/v1/lender/payment-configs/${state.config2}/history`, ids.l1),
+        ).json<{ items: { eventKind: string }[] }>();
+        expect(history.items.map((e) => e.eventKind)).toEqual(
+          expect.arrayContaining(['suspended', 'hold_released']),
+        );
+        expect(ok(await post(releaseUrl, ids.p4, lift)).json()).toEqual({
+          id: state.config2,
+          status: 'suspended',
+        });
+        // The configuration is still suspended: the lender submits it again and a different approver approves it, as before.
         const resubmitted = ok(
           await post(`/v1/lender/payment-configs/${state.config2}/submit`, ids.l3),
         );
@@ -2589,6 +3213,125 @@ describe.skipIf(!enabled)(
         ).toBe('config_state_invalid');
       });
 
+      it('holds a configuration the system suspends (a merchant mismatch, the nightly validation) just like the platform kill switch, and only a release lifts it (A13)', async () => {
+        const drafted = ok(
+          await post(
+            '/v1/lender/payment-configs',
+            ids.l1,
+            draftBody({
+              secretRef: `${prefixOf(ids.lenderA)}TESTPAY_SYSTEM_HOLD`,
+              webhookSecretRef: `${prefixOf(ids.lenderA)}TESTPAY_SYSTEM_HOOK`,
+            }),
+          ),
+          201,
+        ).json<{ id: string }>();
+        const id = drafted.id;
+        ok(await post(`/v1/lender/payment-configs/${id}/submit`, ids.l3));
+        ok(await post(`/v1/lender/payment-configs/${id}/decide`, ids.l2, { approve: true }));
+        const holdOf = async () =>
+          ok(await get(`/v1/platform/payment-configs/${id}`, ids.p1)).json<{
+            status: string;
+            holdKind: string | null;
+            statusReasons: string[];
+          }>();
+        const lift = async (user: string) =>
+          ok(
+            await post(`/v1/platform/payment-configs/${id}/release-hold`, user, {
+              reason: 'the cause was looked at and is resolved',
+            }),
+          );
+        const resubmit = async () => {
+          ok(await post(`/v1/lender/payment-configs/${id}/submit`, ids.l3));
+          ok(await post(`/v1/lender/payment-configs/${id}/decide`, ids.l2, { approve: true }));
+        };
+
+        // A system suspension (a settlement or merchant mismatch seen on a provider event) is a hold of kind system.
+        expect(
+          (
+            await asSystem<{ r: string }>(
+              `select payments.system_suspend_payment_config($1::uuid, 'merchant_mismatch') as r`,
+              [id],
+            )
+          )[0]?.r,
+        ).toBe('suspended');
+        expect(await holdOf()).toMatchObject({
+          status: 'suspended',
+          holdKind: 'system',
+          statusReasons: ['merchant_mismatch'],
+        });
+        const blocked = await post(`/v1/lender/payment-configs/${id}/submit`, ids.l3);
+        expect([blocked.statusCode, code(blocked)]).toEqual([409, 'platform_hold']);
+        // A system hold has no person behind it: any platform person with the provider permission lifts it, the one who suspended
+        // other things included.
+        await lift(ids.p1);
+        expect(await holdOf()).toMatchObject({ status: 'suspended', holdKind: null });
+        await resubmit();
+        expect((await holdOf()).status).toBe('active');
+
+        // The nightly validation: a provider that is no longer approved fails the check and suspends the configuration with a hold.
+        const provider = {
+          provider: 'testpay',
+          displayName: 'Testpay (SAMPLE provider)',
+          kind: 'payment_and_mandate',
+          evidenceLabel: 'likely',
+        };
+        ok(
+          await post('/v1/platform/payment-providers', ids.p1, {
+            ...provider,
+            status: 'suspended',
+            reason: 'provider under review for this test only',
+          }),
+        );
+        const night = await asSystem<{ config_id: string; ok: boolean; suspended: boolean }>(
+          'select config_id, ok, suspended from payments.revalidate_payment_configs($1::uuid)',
+          [ids.lenderA],
+        );
+        expect(night).toEqual([{ config_id: id, ok: false, suspended: true }]);
+        expect(await holdOf()).toMatchObject({ status: 'suspended', holdKind: 'system' });
+        expect((await holdOf()).statusReasons).toContain('provider_not_approved');
+        ok(
+          await post('/v1/platform/payment-providers', ids.p1, {
+            ...provider,
+            status: 'approved',
+            authorisationEvidenceRef: 'SAMPLE-PA-AUTHORISATION-2026',
+          }),
+        );
+        // The provider is fine again, but the hold stands: the lender still cannot resubmit, and a new draft cannot either.
+        const stillHeld = await post(`/v1/lender/payment-configs/${id}/submit`, ids.l3);
+        expect([stillHeld.statusCode, code(stillHeld)]).toEqual([409, 'platform_hold']);
+        await lift(ids.p4);
+        await resubmit();
+        expect((await holdOf()).status).toBe('active');
+
+        // A second active configuration of the lender is refused with a stable code (M5): payments choose among the active ones.
+        const other = ok(
+          await post(
+            '/v1/lender/payment-configs',
+            ids.l1,
+            draftBody({
+              secretRef: `${prefixOf(ids.lenderA)}TESTPAY_SECOND`,
+              webhookSecretRef: `${prefixOf(ids.lenderA)}TESTPAY_SECOND_HOOK`,
+            }),
+          ),
+          201,
+        ).json<{ id: string }>();
+        ok(await post(`/v1/lender/payment-configs/${other.id}/submit`, ids.l3));
+        const second = await post(`/v1/lender/payment-configs/${other.id}/decide`, ids.l2, {
+          approve: true,
+        });
+        expect([second.statusCode, code(second)]).toEqual([409, 'active_config_exists']);
+        ok(
+          await post(`/v1/lender/payment-configs/${other.id}/withdraw`, ids.l1, {
+            reason: 'a second active configuration is refused',
+          }),
+        );
+        ok(
+          await post(`/v1/platform/payment-configs/${id}/retire`, ids.p1, {
+            reason: 'this test configuration is replaced by a newer one',
+          }),
+        );
+      });
+
       it('suspends the configurations that settle into a revoked registry entry and revokes its settlement account', async () => {
         // A fresh active configuration, then revoke the registry entry underneath it.
         const drafted = ok(
@@ -2598,8 +3341,8 @@ describe.skipIf(!enabled)(
             providerMode: 'production',
             merchantRegistryId: state.merchantA,
             settlementAccountId: state.settlementA,
-            secretRef: 'TESTPAY_API_SECRET_2',
-            webhookSecretRef: 'TESTPAY_WEBHOOK_SECRET_2',
+            secretRef: `${prefixOf(ids.lenderA)}TESTPAY_API_2`,
+            webhookSecretRef: `${prefixOf(ids.lenderA)}TESTPAY_HOOK_2`,
             railLimits: {},
             evidenceRef: 'SAMPLE-ONBOARDING-CONFIRMATION-2',
             contractSectionRef: 'SAMPLE-LSP-AGREEMENT-7.1',
@@ -2624,6 +3367,13 @@ describe.skipIf(!enabled)(
           await post(`/v1/lender/payment-configs/${state.config3}/suspend`, ids.p1, lenderPath),
         );
         expect(viaLenderPath.json()).toEqual({ id: state.config3, status: 'suspended' });
+        const heldAgain = await post(`/v1/lender/payment-configs/${state.config3}/submit`, ids.l3);
+        expect([heldAgain.statusCode, code(heldAgain)]).toEqual([409, 'platform_hold']);
+        ok(
+          await post(`/v1/platform/payment-configs/${state.config3}/release-hold`, ids.p4, {
+            reason: 'suspended through the lender path for this test only',
+          }),
+        );
         ok(await post(`/v1/lender/payment-configs/${state.config3}/submit`, ids.l3));
         ok(
           await post(`/v1/lender/payment-configs/${state.config3}/decide`, ids.l2, {
@@ -2760,10 +3510,28 @@ describe.skipIf(!enabled)(
           items: { id: string }[];
         }>().items;
         expect(unverified.length).toBeGreaterThan(2);
-        const toVerify = unverified[0]?.id as string;
+        const toVerify = state.regR as string;
+        expect(unverified.map((e) => e.id)).toContain(toVerify);
         ok(
           await post(`/v1/platform/accounts/${toVerify}/verify`, ids.p2, {
             evidenceRef: 'SAMPLE-BANK-LETTER-PRE-ROTATION',
+          }),
+        );
+        // A lender settlement account linked to that entry moves to the entry's successor by itself when the new version is
+        // approved (M1): nobody has to link it again.
+        const sampleR = JSON.parse(state.sampleR ?? '{}') as Sample;
+        const settlementR = ok(
+          await post('/v1/lender/settlement-accounts', ids.l1, {
+            lenderId: ids.lenderA,
+            label: 'Rotation collections (SAMPLE)',
+            bankName: 'Sample Bank',
+            maskedRef: `XXXXXX${sampleR.accountNumber.slice(-4)}`,
+          }),
+          201,
+        ).json<{ id: string }>().id;
+        ok(
+          await post(`/v1/platform/settlement-accounts/${settlementR}/link`, ids.p1, {
+            registryId: toVerify,
           }),
         );
 
@@ -2817,6 +3585,7 @@ describe.skipIf(!enabled)(
             verification_status: 'unverified',
           });
           if (row.verification_status === 'verified') successorOfVerified.push(rekey.id);
+          if (row.id === toVerify) state.successorR = rekey.id;
         }
         expect(successorOfVerified.length).toBeGreaterThanOrEqual(1);
         // Every entry has a successor, but the successor of the verified entry is not verified yet.
@@ -2846,6 +3615,46 @@ describe.skipIf(!enabled)(
           '2:active',
           '1:retired',
         ]);
+        const moved = await q<{ registry_id: string; status: string }>(
+          'select registry_id, status::text from tenancy.lender_settlement_accounts where id = $1',
+          [settlementR],
+        );
+        expect(moved).toEqual([{ registry_id: state.successorR, status: 'verified' }]);
+        expect(
+          await q(
+            `select 1 from audit.events where action = 'payments.settlement_account.relinked' and entity_id = $1`,
+            [settlementR],
+          ),
+        ).toHaveLength(1);
+        // The attestation belongs to a key version: under the new one the list is not attested until it is attested again, and
+        // lender accounts wait for it. (Settlement accounts that were linked move to their successor entries by themselves.)
+        const afterRotation = ok(await get('/v1/platform/own-account-list', ids.p1)).json<{
+          keyVersion: number;
+          attested: boolean;
+          events: unknown[];
+        }>();
+        expect(afterRotation).toEqual({ keyVersion: 2, attested: false, events: [] });
+        const lenderEntry = (
+          await q<{ id: string }>(
+            `select id from payments.account_registry where key_version = 2 and owner_kind = 'lender' and verification_status = 'unverified' limit 1`,
+          )
+        )[0]?.id;
+        expect(lenderEntry).toBeDefined();
+        const waiting = await post(`/v1/platform/accounts/${lenderEntry}/verify`, ids.p2, {
+          evidenceRef: 'SAMPLE-BANK-LETTER-AFTER-ROTATION',
+        });
+        expect([waiting.statusCode, code(waiting)]).toEqual([409, 'own_account_list_not_attested']);
+        const attestedAgain = ok(
+          await post('/v1/platform/own-account-list/attest', ids.p2, {
+            evidenceRef: 'SAMPLE-OWN-ACCOUNT-RECONCILIATION-V2',
+          }),
+        ).json<{ keyVersion: number; attested: boolean }>();
+        expect(attestedAgain).toMatchObject({ keyVersion: 2, attested: true });
+        ok(
+          await post(`/v1/platform/accounts/${lenderEntry}/verify`, ids.p2, {
+            evidenceRef: 'SAMPLE-BANK-LETTER-AFTER-ROTATION',
+          }),
+        );
         // New registrations now use version 2, and a re-key is no longer possible (nothing is proposed).
         const sample = newSample();
         const fresh = ok(

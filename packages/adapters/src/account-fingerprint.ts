@@ -12,9 +12,16 @@ import type { EncryptedBlob, KeyManager } from './key-management.js';
  *
  * The bank code is the first four letters of the IFSC, not the whole IFSC: the same account number at the same bank
  * can appear under another branch IFSC (a branch moves or merges, or the lender types another branch), and a
- * registry that hashed the branch would let the same account through twice. Two different accounts at one bank
- * never share an account number, so the cost is nothing. The full IFSC is still validated and is kept elsewhere for
- * display.
+ * registry that hashed the branch would let the same account through twice. The full IFSC is still validated and is
+ * kept elsewhere for display.
+ *
+ * THE GUARANTEE IS BEST EFFORT, NOT ONE ENTRY PER REAL ACCOUNT. The fingerprint covers the bank code and the account
+ * number AS TYPED. An account number written with leading zeros (or without them) gives another fingerprint, and a
+ * bank code that changed through a merger gives another one too; a registry entry made under either spelling is not
+ * recognised as the same account. The stated control is the verifier's check of the evidence before an entry is
+ * verified; the fingerprint is an additional guard that catches the plain repeat, not proof of uniqueness. Folding
+ * leading zeros and a maintained table of merged bank codes (passed to the database as the other fingerprints of the
+ * same account) would narrow the gap; neither is done here.
  *
  * The account-number format is DATA: the caller passes the `AccountFormatRule` that applies (rule id, country, account
  * type, length range, status). The caller must load only rules the database marks approved; the result carries the rule

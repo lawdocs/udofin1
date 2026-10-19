@@ -1,4 +1,5 @@
 import { type SystemPool } from './pool.js';
+import { NO_SECRET_NAME, secretNamesInNamespace } from './secret-namespace.js';
 
 /**
  * System-role access for the payment-provider callback receiver (`POST /v1/hooks/provider/:endpointToken`). Only the separate
@@ -19,7 +20,11 @@ export interface ProviderHookConfig {
   /** Provider key from the provider register, e.g. `mock_payment_provider`. */
   readonly provider: string;
   readonly providerMode: HookProviderMode;
-  /** Name of the environment variable or secret that holds the webhook signing secret. */
+  /**
+   * Name of the environment variable or secret that holds the webhook signing secret. It is `NO_SECRET_NAME` (an empty string,
+   * which no reader resolves to a value) when the configuration's secret names are not inside its lender's namespace: the
+   * receiver then treats the secret as not configured (U51).
+   */
   readonly webhookSecretRef: string;
 }
 
@@ -89,7 +94,11 @@ interface ConfigRow {
   id: unknown;
   provider: unknown;
   provider_mode: unknown;
+  secret_ref: unknown;
   webhook_secret_ref: unknown;
+  /** `secret_namespace` as stored, and what `private.secret_ref_prefix(lender_org_id)` says it must be. */
+  secret_namespace: unknown;
+  expected_namespace: unknown;
 }
 
 function readConfig(row: ConfigRow): ProviderHookConfig {
@@ -105,11 +114,19 @@ function readConfig(row: ConfigRow): ProviderHookConfig {
   ) {
     throw new UnreadableAnswerError('configuration row');
   }
+  // The secret is read only when the configuration's namespace is set, is the namespace of its lender and both names are inside
+  // it. Otherwise the name is not handed on at all, so nothing can read the environment under it.
+  const inNamespace = secretNamesInNamespace({
+    storedNamespace: typeof row.secret_namespace === 'string' ? row.secret_namespace : null,
+    expectedNamespace: typeof row.expected_namespace === 'string' ? row.expected_namespace : null,
+    secretRef: typeof row.secret_ref === 'string' ? row.secret_ref : '',
+    webhookSecretRef: row.webhook_secret_ref,
+  });
   return {
     configId: row.id,
     provider: row.provider,
     providerMode: mode,
-    webhookSecretRef: row.webhook_secret_ref,
+    webhookSecretRef: inNamespace ? row.webhook_secret_ref : NO_SECRET_NAME,
   };
 }
 
@@ -174,7 +191,8 @@ export function createProviderHookProcessor(pool: SystemPool): ProviderHookProce
     async lookupConfig(tokenHash) {
       return pool.withSystem(async (tx) => {
         const result = await tx.query<ConfigRow>(
-          `select id::text as id, provider, provider_mode::text as provider_mode, webhook_secret_ref
+          `select id::text as id, provider, provider_mode::text as provider_mode, secret_ref, webhook_secret_ref,
+                  secret_namespace, private.secret_ref_prefix(lender_org_id) as expected_namespace
              from payments.lender_payment_configs
             where endpoint_token_hash = $1 and status = 'active'`,
           [tokenHash],

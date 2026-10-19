@@ -3,7 +3,8 @@ import { assertSystemLoginPosture } from '../db/login-posture.js';
 import { createRoutingProcessor } from '../system/routing.js';
 import { createSystemPool } from '../system/pool.js';
 import { buildCallbackApp } from './lender-callbacks.js';
-import { registerProviderHooks } from './provider-callbacks.js';
+import { IP_HMAC_SECRET_NAME, registerProviderHooks } from './provider-callbacks.js';
+import { createSecretReader } from '../system/secret-namespace.js';
 
 /** Entry point of the lender callback receiver: `pnpm --filter @udofin/api callbacks`. Uses the system login. */
 {
@@ -22,9 +23,11 @@ import { registerProviderHooks } from './provider-callbacks.js';
     environment: config.APP_ENV,
   });
   // Phase 08a: signed payment-provider and mandate events (verified here, applied by the database).
+  // Only the platform's own address-hash key and names inside a lender namespace are ever read; the receiver also refuses a
+  // configuration whose secret names are not inside its lender's namespace (system/provider-hooks.ts, U51).
   registerProviderHooks(app, {
     pool,
-    secret: (name) => process.env[name],
+    secret: createSecretReader(process.env, [IP_HMAC_SECRET_NAME]),
     environment: config.APP_ENV,
   });
   const stop = async (signal: string) => {
