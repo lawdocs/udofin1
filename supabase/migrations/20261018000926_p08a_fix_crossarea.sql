@@ -872,3 +872,63 @@ update documents.applicability_rules
    set direction_ref = 'RBC Directions 2025 (RBI/DOR/2025-26/362), para 100 (hours for recovery calls): text confirmed in the primary extract on file; its application to service messages is interpretation',
        exclusions = 'DRAFT FOR LEGAL/COMPLIANCE REVIEW. Evidence label: interpretation. Confirmed in the primary extract on file (RBC Directions 2025, as on 1 April 2026): para 100 bars calling a borrower before 8:00 a.m. or after 7:00 p.m. for recovery of overdue loans, and is not applicable to microfinance loans under the Credit Facilities Directions (para 91(2) gives those 9:00 a.m. to 6:00 p.m.; its scope is unclear in the extract). Interpretation: the text speaks of calling and does not say whether in-app or push service messages count (open question 4 of the extract); an overdue reminder is recovery-adjacent, so the same hours are applied to every borrower reminder as a conservative reading. A lender policy may only NARROW this window; a message outside it is deferred to the next window, never dropped silently. TRAI promotional-hours rules are not relied on because these are service messages (unverified).'
  where rule_key = 'servicing.reminder_window.default' and version = 1 and approval_status = 'draft';
+
+
+-- ---------------------------------------------------------------------------------------------
+-- 5. A refused file is recorded with the two import error codes that migration 925 added to the importer's vocabulary
+-- ---------------------------------------------------------------------------------------------
+-- servicing.record_rejected_file keeps a closed list of error codes (audited without values). Migration 925 made the importer and the staging
+-- functions answer ref_looks_personal (a PAN-shaped reference field) and receipt_date_in_future (a receipt dated after the report that carries it),
+-- but did not redefine this function, so a refused file carrying either code answered 22023 errors_invalid instead of being recorded. Nothing else
+-- changes.
+
+CREATE OR REPLACE FUNCTION servicing.record_rejected_file(p_lender uuid, p_kind text, p_source_kind text, p_file_sha256 text, p_byte_size bigint, p_format_version text, p_record_count integer, p_errors jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  v_codes constant text[] := array[
+    'file_too_large', 'too_many_rows', 'empty_file', 'malformed_file', 'unknown_column', 'missing_column', 'duplicate_column', 'column_count_mismatch',
+    'unknown_field', 'missing_required', 'invalid_reference', 'borrower_ref_looks_personal', 'invalid_amount', 'amount_not_positive', 'invalid_date',
+    'invalid_timestamp', 'timestamp_in_future', 'invalid_integer', 'invalid_status', 'invalid_receipt_kind', 'incomplete_disbursement', 'incomplete_next_due',
+    'disbursed_exceeds_sanctioned', 'reversal_reference_invalid', 'invalid_items', 'inconsistent_report_head', 'duplicate_row', 'conflicting_duplicate',
+    'ref_looks_personal', 'receipt_date_in_future'];
+  v_bad integer;
+  v_errors jsonb;
+begin
+  perform private.servicing_require_user(p_lender, 'servicing.manual_entry');
+  perform private.require_feature(p_lender, 'servicing_sync');
+  if p_kind is null or p_kind not in ('loan', 'receipt', 'schedule') or p_source_kind is null or p_source_kind not in ('file', 'manual')
+     or p_file_sha256 is null or p_file_sha256 !~ '^[0-9a-f]{64}$' or p_byte_size is null or p_byte_size < 0 or p_byte_size > 1099511627776
+     or p_record_count is null or p_record_count not between 0 and 100000000 then
+    raise exception 'invalid request' using errcode = '22023', hint = 'bad_request';
+  end if;
+  if p_format_version is distinct from 'udofin-lms-import-v1' then
+    raise exception 'unsupported import format' using errcode = '22023', hint = 'format_unsupported';
+  end if;
+  if p_errors is null or jsonb_typeof(p_errors) <> 'array' or jsonb_array_length(p_errors) not between 1 and 1000 then
+    raise exception 'between 1 and 1000 errors are recorded' using errcode = '22023', hint = 'errors_invalid';
+  end if;
+  select count(*) into v_bad from jsonb_array_elements(p_errors) e
+  where coalesce(jsonb_typeof(e) <> 'object', true)
+     or coalesce(jsonb_typeof(e -> 'row_no') <> 'number', true) or coalesce((e ->> 'row_no') !~ '^[0-9]{1,8}$', true)
+     or coalesce(jsonb_typeof(e -> 'code') <> 'string', true) or not coalesce((e ->> 'code') = any (v_codes), false)
+     or not (e -> 'field' is null or jsonb_typeof(e -> 'field') = 'null'
+             or (jsonb_typeof(e -> 'field') = 'string' and coalesce((e ->> 'field') = any (private.servicing_known_fields()), false)));
+  if v_bad > 0 then
+    raise exception 'each error needs a row number, a known error code and a known field name or null' using errcode = '22023', hint = 'errors_invalid';
+  end if;
+  select jsonb_agg(jsonb_build_object('row_no', (e.value ->> 'row_no')::integer, 'code', e.value ->> 'code', 'field', e.value -> 'field') order by e.ord)
+    into v_errors from jsonb_array_elements(p_errors) with ordinality as e (value, ord);
+  perform private.servicing_audit(p_lender, 'servicing.import.file_rejected', 'import_file', p_file_sha256,
+    jsonb_build_object('kind', p_kind, 'source_kind', p_source_kind, 'format_version', p_format_version, 'file_sha256', p_file_sha256, 'byte_size', p_byte_size,
+      'record_count', p_record_count, 'error_count', jsonb_array_length(v_errors), 'errors', v_errors));
+  return jsonb_build_object('recorded', true, 'error_count', jsonb_array_length(v_errors));
+end
+$function$;
+
+
+comment on function servicing.record_rejected_file(uuid, text, text, text, bigint, text, integer, jsonb) is
+  'servicing.manual_entry of the lender, aal2, servicing_sync switch on. Audit record for a file the importer refused before any record reached the database: file hash, size, record count and the positions, error classes and field names of the errors (closed lists, never values; the classes include ref_looks_personal and receipt_date_in_future). Writes one audit.events row; creates no batch.';
