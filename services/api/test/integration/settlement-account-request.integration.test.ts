@@ -392,10 +392,6 @@ describe.skipIf(!enabled)(
       expect(first.statusCode, first.body).toBe(201);
       const account = first.json<{ id: string; status: string }>();
       expect(account.status).toBe('unverified');
-      await q(
-        "update tenancy.lender_settlement_accounts set status = 'revoked' where id = $1::uuid",
-        [account.id],
-      );
       const again = await call(
         'POST',
         '/v1/lender/settlement-accounts',
@@ -403,7 +399,24 @@ describe.skipIf(!enabled)(
         body({ maskedRef: 'XXXXXX0428', label: 'SAMPLE account to revoke' }),
       );
       expect(again.statusCode, again.body).toBe(201);
-      expect(again.json()).toEqual({ id: account.id, status: 'revoked' });
+      expect(again.json()).toEqual({ id: account.id, status: 'unverified' });
+
+      // A revoked account no longer holds its masked reference (unique among live rows, M4): the same request after a
+      // revocation is a new, unverified request, never the revoked row presented as if it were usable.
+      await q(
+        "update tenancy.lender_settlement_accounts set status = 'revoked' where id = $1::uuid",
+        [account.id],
+      );
+      const fresh = await call(
+        'POST',
+        '/v1/lender/settlement-accounts',
+        ids.maker,
+        body({ maskedRef: 'XXXXXX0428', label: 'SAMPLE account to revoke' }),
+      );
+      expect(fresh.statusCode, fresh.body).toBe(201);
+      const next = fresh.json<{ id: string; status: string }>();
+      expect(next.status).toBe('unverified');
+      expect(next.id).not.toBe(account.id);
     });
   },
 );
