@@ -9,7 +9,7 @@
 -- Synthetic data only (labelled SAMPLE). Error codes are reported as SQLSTATE|hint.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(237);
+select plan(242);
 
 create function pg_temp.as_user(uid uuid, aal text default 'aal2') returns void language plpgsql as $fn$
 begin
@@ -598,9 +598,25 @@ select is((select count(*) from payments.reconciliation_exceptions where lender_
 select pg_temp.as_user(pg_temp.u(17));
 select is((select count(*) from payments.reconciliation_exceptions where lender_org_id = pg_temp.ly()), 0::bigint, 'D: and lender X''s viewer none of lender Y''s');
 
+-- D, a receipt on the WRONG loan: the lender posts a receipt that carries the provider's payment reference of loan 3 on loan 8. The run raises it
+-- (lender_receipt_no_intent) unless the receipt is reversed in full: W1 has no reversal, W2 a reversal of 0.01, W3 a reversal of the whole receipt.
+select is(pg_temp.imp(pg_temp.lx(), 10, 'receipt', 'x-receipts-w', jsonb_build_array(pg_temp.rrow('SAMPLE-LN-8', 'RC-W1', '1.00', 'PAY-D3', 2), pg_temp.rrow('SAMPLE-LN-8', 'RC-W2', '1.00', 'PAY-D3', 2),
+  pg_temp.rrow('SAMPLE-LN-8', 'RC-W3', '1.00', 'PAY-D3', 2))), 'committed:{"new": 3}', 'D: the lender posts three receipts on loan 8 that carry the payment reference of loan 3''s payment');
+select is(pg_temp.imp(pg_temp.lx(), 10, 'receipt', 'x-reversals-w', jsonb_build_array(
+  pg_temp.rrow('SAMPLE-LN-8', 'RV-W2', '0.01', 'REV-W2', 1, '{"receipt_kind":"reversal","reverses_receipt_ref":"RC-W2"}'),
+  pg_temp.rrow('SAMPLE-LN-8', 'RV-W3', '1.00', 'REV-W3', 1, '{"receipt_kind":"reversal","reverses_receipt_ref":"RC-W3"}'))), 'committed:{"new": 2}', 'D: and reverses 0.01 of the second and all of the third');
+select pg_temp.as_system();
+select is(payments.run_reconciliation(pg_temp.lx(), pg_temp.d()) ->> 'unchanged', 'false', 'D: the run sees the new receipts');
+select pg_temp.as_user(pg_temp.u(17));
+select is((select array_agg(r.lms_receipt_ref order by r.lms_receipt_ref) from payments.reconciliation_exceptions e join servicing.lms_receipts r on r.id::text = e.subject ->> 'receipt_id'
+            where e.class = 'lender_receipt_no_intent' and e.status <> 'resolved' and r.lms_receipt_ref like 'RC-W%'), array['RC-W1', 'RC-W2'],
+  'D: lender_receipt_no_intent is raised for the receipt on the wrong loan and for the one reversed by 0.01, and not for the one reversed in full');
+select pg_temp.as_user(pg_temp.u(27));
+select is((select count(*) from payments.reconciliation_exceptions where class = 'lender_receipt_no_intent'), 0::bigint, 'D: lender Y sees none of them');
+
 -- D, cross-tenant: a reversal row of ANOTHER lender never counts. The keys refuse such a row (a reversal must name a receipt of its own lender); the
 -- consumers refuse it as well, which is shown with the key and the trigger taken away inside a block that is rolled back: lender Y's row reverses the
--- WHOLE of lender X's receipt RC-D3, and every consumer still reads RC-D3 as posted.
+-- WHOLE of lender X's receipt RC-D3 (and of a receipt on the wrong loan), and every consumer still reads RC-D3 as posted.
 select pg_temp.as_owner();
 select is(pg_temp.err(format($$insert into servicing.lms_receipts (lender_org_id, loan_account_id, kind, lms_receipt_ref, reverses_receipt_id, reverses_receipt_ref, amount_minor, value_date, source_system,
   source_record_id, reported_as_of, content_sha256) select %L, %L, 'reversal', 'RV-FOREIGN', r.id, r.lms_receipt_ref, 475000, current_date, 'file_import', 'SRC-RV-FOREIGN', clock_timestamp(), %L
@@ -617,15 +633,22 @@ begin
       source_record_id, reported_as_of, content_sha256)
     select pg_temp.ly(), pg_temp.lid('SAMPLE-LN-Y1'), 'reversal', 'RV-FOREIGN', r.id, r.lms_receipt_ref, 475000, pg_temp.d(), 'file_import', 'SRC-RV-FOREIGN', clock_timestamp(), pg_temp.sha('foreign')
       from servicing.lms_receipts r where r.lms_receipt_ref = 'RC-D3';
-    -- A pad receipt of lender X, so that its inputs change and the run is evaluated afresh.
-    insert into servicing.lms_receipts (lender_org_id, loan_account_id, kind, lms_receipt_ref, amount_minor, value_date, source_system, source_record_id, reported_as_of, content_sha256)
-    values (pg_temp.lx(), pg_temp.lid('SAMPLE-LN-10'), 'receipt', 'RC-PAD', 1, pg_temp.d(), 'file_import', 'SRC-RC-PAD', clock_timestamp(), pg_temp.sha('pad'));
+    -- A receipt of lender X on the wrong loan (it carries the reference of loan 3's payment) that lender Y's row also "reverses" in full; it also
+    -- changes the inputs of lender X, so that the run is evaluated afresh.
+    insert into servicing.lms_receipts (lender_org_id, loan_account_id, kind, lms_receipt_ref, amount_minor, value_date, source_system, source_record_id, reported_as_of, bank_reference, content_sha256)
+    values (pg_temp.lx(), pg_temp.lid('SAMPLE-LN-8'), 'receipt', 'RC-W4', 100, pg_temp.d(), 'file_import', 'SRC-RC-W4', clock_timestamp(), 'PAY-D3', pg_temp.sha('w4'));
+    insert into servicing.lms_receipts (lender_org_id, loan_account_id, kind, lms_receipt_ref, reverses_receipt_id, reverses_receipt_ref, amount_minor, value_date, source_system,
+      source_record_id, reported_as_of, content_sha256)
+    select pg_temp.ly(), pg_temp.lid('SAMPLE-LN-Y1'), 'reversal', 'RV-FOREIGN-W', r.id, r.lms_receipt_ref, 100, pg_temp.d(), 'file_import', 'SRC-RV-FOREIGN-W', clock_timestamp(), pg_temp.sha('foreign-w')
+      from servicing.lms_receipts r where r.lms_receipt_ref = 'RC-W4';
     v_res := array_to_string(array[pg_temp.bst(40, pg_temp.got('i3')), pg_temp.lst(17, pg_temp.got('i3')), pg_temp.act(40, 'SAMPLE-LN-3', 'RC-D3'), pg_temp.quiet('SAMPLE-LN-3')::text], ',');
     perform pg_temp.as_system();
     v_run := (payments.run_reconciliation(pg_temp.lx(), pg_temp.d()) ->> 'run_id')::uuid;
     perform pg_temp.as_owner();
     v_res := v_res || ',' || (select count(*) from payments.reconciliation_matches m where m.run_id = v_run and m.kind = 'payment_receipt'
-                                 and m.receipt_id = (select id from servicing.lms_receipts where lms_receipt_ref = 'RC-D3'))::text;
+                                 and m.receipt_id = (select id from servicing.lms_receipts where lms_receipt_ref = 'RC-D3'))::text
+             || ',' || (select count(*) from payments.reconciliation_exceptions e where e.class = 'lender_receipt_no_intent' and e.status <> 'resolved'
+                          and e.subject ->> 'receipt_id' = (select id::text from servicing.lms_receipts where lms_receipt_ref = 'RC-W4'))::text;
     raise exception using errcode = 'P0099', message = v_res;
   exception when sqlstate 'P0099' then
     return sqlerrm;
@@ -633,10 +656,10 @@ begin
 end
 $fn$;
 grant execute on all functions in schema pg_temp to public;
-select is(pg_temp.foreign_reversal(), 'lender_posted,true,posted,true,1',
-  'D: with that guard taken away, lender Y''s full reversal of lender X''s receipt changes nothing: stage lender_posted, view true, activity posted, quiet period kept, run match kept');
+select is(pg_temp.foreign_reversal(), 'lender_posted,true,posted,true,1,1',
+  'D: with that guard taken away, lender Y''s full reversals of lender X''s receipts change nothing: stage lender_posted, view true, activity posted, quiet period kept, run match kept, and the receipt on the wrong loan is still raised');
 select pg_temp.as_owner();
-select is((select count(*) from servicing.lms_receipts where lms_receipt_ref in ('RV-FOREIGN', 'RC-PAD')), 0::bigint, 'D: and the block left no row behind');
+select is((select count(*) from servicing.lms_receipts where lms_receipt_ref in ('RV-FOREIGN', 'RV-FOREIGN-W', 'RC-W4')), 0::bigint, 'D: and the block left no row behind');
 select is((select count(*) from pg_constraint where conname = 'lms_receipts_reverses_receipt_id_lender_org_id_fkey'), 1::bigint, 'D: nor changed the table (the key is back)');
 
 -- ============================================================================================================================
