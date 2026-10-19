@@ -39675,7 +39675,7 @@
       "post": {
         "operationId": "stageLenderImport",
         "summary": "Stage a file of loan, receipt or schedule reports of the lender: validate it as a whole and store the preview (nothing is applied)",
-        "description": "Needs servicing.manual_entry (and loan.read) of the lender, a second factor, the servicing_sync switch on and an active file_import (or manual) connection. Send the file as text (`content` with `fileFormat` csv or json) or as JSON records (`rows`). Format udofin-lms-import-v1 (packages/adapters/src/lms.ts); money is a decimal rupee STRING; at most 5 MiB and 10,000 records. ALL OR NOTHING (owner decision of 14 Oct 2026): if any record has an error the whole file is invalid, nothing is applied and the answer lists the row numbers, error classes and field NAMES, never a value; correct the file and send it again (`resubmissionOf` links the new batch to the old). The same file twice returns the same batch (`existing`). A file the importer cannot accept at all (unparseable, too large, unknown column) is audited without row values and answers 200 with `refusedFile` and no batch. Committing is a separate step and needs servicing.sync.manage. Status 201 for a new batch.",
+        "description": "Needs servicing.manual_entry (and loan.read) of the lender, a second factor, the servicing_sync switch on and an active file_import (or manual) connection. Send the file as text (`content` with `fileFormat` csv or json) or as JSON records (`rows`). Format udofin-lms-import-v1 (packages/adapters/src/lms.ts); money is a decimal rupee STRING; at most 5 MiB and 10,000 records. ALL OR NOTHING (owner decision of 14 Oct 2026): if any record has an error the whole file is invalid, nothing is applied and the answer lists the row numbers, error classes and field NAMES, never a value (`rowNumbering` says what a number counts: for a file the importer refuses it is a row of your file, CSV rows counted after the header; for a stored batch it is the position of the record among the distinct records found in the file, where identical repeated records count once and all installment rows of one CSV schedule are one record); correct the file and send it again (`resubmissionOf` links the new batch to the old). The same file twice returns the same batch (`existing`). A file the importer cannot accept at all (unparseable, too large, unknown column) is audited without row values and answers 200 with `refusedFile` and no batch. Committing is a separate step and needs servicing.sync.manage. Status 201 for a new batch.",
         "tags": [
           "Servicing (lender)"
         ],
@@ -40077,6 +40077,13 @@
                     },
                     "errorsTruncated": {
                       "type": "boolean"
+                    },
+                    "rowNumbering": {
+                      "type": "string",
+                      "enum": [
+                        "file_row",
+                        "record_position"
+                      ]
                     }
                   },
                   "required": [
@@ -40412,6 +40419,13 @@
                     },
                     "errorsTruncated": {
                       "type": "boolean"
+                    },
+                    "rowNumbering": {
+                      "type": "string",
+                      "enum": [
+                        "file_row",
+                        "record_position"
+                      ]
                     }
                   },
                   "required": [
@@ -40520,7 +40534,7 @@
       "get": {
         "operationId": "getLenderImport",
         "summary": "One import batch with its row-level problems",
-        "description": "Needs loan.read; another lender's batch answers 404. The problems are row numbers, error classes and the names of the fields at fault (servicing.import_errors): never a value. At most 1,000 rows are listed (`errorsTruncated`).",
+        "description": "Needs loan.read; another lender's batch answers 404. The problems are record positions (`rowNumbering` is `record_position`: the position among the distinct records found in the file, identical repeated records counted once, all installment rows of one CSV schedule one record, so not always a row of the file), error classes and the names of the fields at fault (servicing.import_errors): never a value. At most 1,000 rows are listed (`errorsTruncated`).",
         "tags": [
           "Servicing (lender)"
         ],
@@ -40805,6 +40819,13 @@
                     },
                     "errorsTruncated": {
                       "type": "boolean"
+                    },
+                    "rowNumbering": {
+                      "type": "string",
+                      "enum": [
+                        "file_row",
+                        "record_position"
+                      ]
                     }
                   },
                   "required": [
@@ -41229,6 +41250,13 @@
                     },
                     "errorsTruncated": {
                       "type": "boolean"
+                    },
+                    "rowNumbering": {
+                      "type": "string",
+                      "enum": [
+                        "file_row",
+                        "record_position"
+                      ]
                     }
                   },
                   "required": [
@@ -41707,6 +41735,13 @@
                     },
                     "errorsTruncated": {
                       "type": "boolean"
+                    },
+                    "rowNumbering": {
+                      "type": "string",
+                      "enum": [
+                        "file_row",
+                        "record_position"
+                      ]
                     }
                   },
                   "required": [
@@ -48672,7 +48707,7 @@
       "post": {
         "operationId": "claimMerchant",
         "summary": "Claim the lender's merchant identifier at a provider (payment.configure, aal2)",
-        "description": "A claim starts unverified: the platform confirms against evidence that the identifier belongs to the lender. An identifier already claimed by anyone else (including Udofin) is refused.",
+        "description": "A claim starts unverified: the platform confirms against evidence that the identifier belongs to the lender. An identifier already claimed by anyone else (including Udofin) is refused (merchant_already_claimed). Claiming an identifier the lender claimed before returns that claim with the status it has now: if the platform has revoked it the status is revoked, and a revoked identifier stays taken (it cannot be used in a payment configuration).",
         "tags": [
           "Lender payments"
         ],
@@ -48736,7 +48771,10 @@
                     },
                     "status": {
                       "type": "string",
-                      "const": "active"
+                      "enum": [
+                        "active",
+                        "revoked"
+                      ]
                     }
                   },
                   "required": [
@@ -49103,7 +49141,7 @@
       "post": {
         "operationId": "requestSettlementAccount",
         "summary": "Ask for one of the lender's own settlement accounts to be set up (payment.configure, aal2)",
-        "description": "Label, bank and MASKED reference only. The account starts unverified and can be used for a payment only after a platform user links it to a verified registry entry with the same masked reference. A full account number is never accepted here.",
+        "description": "Label, bank and MASKED reference only. The masked reference is exactly XXXXXX and the last four digits, the form the registry holds and the only one that can be linked. The account starts unverified and can be used for a payment only after a platform user links it to a verified registry entry with the same masked reference. A full account number is never accepted here, in any field. The same request again returns the existing account with the status it has now (it may be verified or revoked, not only unverified); the answer needs payment.read as well, because it reports the stored status.",
         "tags": [
           "Lender payments"
         ],
@@ -49145,7 +49183,7 @@
                   },
                   "maskedRef": {
                     "type": "string",
-                    "pattern": "^[X*]{2,}[0-9]{2,4}$"
+                    "pattern": "^XXXXXX[0-9]{4}$"
                   }
                 },
                 "required": [
@@ -49174,7 +49212,11 @@
                     },
                     "status": {
                       "type": "string",
-                      "const": "unverified"
+                      "enum": [
+                        "unverified",
+                        "verified",
+                        "revoked"
+                      ]
                     }
                   },
                   "required": [
@@ -55267,6 +55309,19 @@
                                   "bankConfirmed": {
                                     "type": "boolean"
                                   },
+                                  "bankConfirmationBasis": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "lender_reported_credit"
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "lenderPosted": {
                                     "type": "boolean"
                                   },
@@ -55282,6 +55337,7 @@
                                   "providerCaptured",
                                   "providerSettled",
                                   "bankConfirmed",
+                                  "bankConfirmationBasis",
                                   "lenderPosted",
                                   "settlementDestinationOk"
                                 ],
@@ -58345,6 +58401,93 @@
                           ],
                           "additionalProperties": false
                         },
+                        "settlementEvidence": {
+                          "type": "object",
+                          "properties": {
+                            "settlementReportExists": {
+                              "type": [
+                                "boolean",
+                                "null"
+                              ]
+                            },
+                            "offAccountBatches": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "offAccountNetMinor": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "destinationUnstatedBatches": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "destinationUnstatedMinor": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "destinationUnstatedNetMinor": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "zeroIsEvidence": {
+                              "type": [
+                                "boolean",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "settlementReportExists",
+                            "offAccountBatches",
+                            "offAccountNetMinor",
+                            "destinationUnstatedBatches",
+                            "destinationUnstatedMinor",
+                            "destinationUnstatedNetMinor",
+                            "zeroIsEvidence"
+                          ],
+                          "additionalProperties": false
+                        },
                         "settings": {
                           "type": "object",
                           "properties": {
@@ -58371,11 +58514,18 @@
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "abovePlatformDefault": {
+                              "type": [
+                                "boolean",
+                                "null"
+                              ]
                             }
                           },
                           "required": [
                             "settlementLagDays",
-                            "receiptLagHours"
+                            "receiptLagHours",
+                            "abovePlatformDefault"
                           ],
                           "additionalProperties": false
                         }
@@ -58386,6 +58536,7 @@
                         "matched",
                         "notReconcilable",
                         "settledToNonLender",
+                        "settlementEvidence",
                         "settings"
                       ],
                       "additionalProperties": false
@@ -59298,13 +59449,13 @@
                   },
                   "settlementLagDays": {
                     "type": "integer",
-                    "minimum": 0,
-                    "maximum": 100000
+                    "minimum": 1,
+                    "maximum": 7
                   },
                   "receiptLagHours": {
                     "type": "integer",
-                    "minimum": 0,
-                    "maximum": 1000000
+                    "minimum": 1,
+                    "maximum": 168
                   }
                 },
                 "required": [
@@ -64358,7 +64509,7 @@
       "post": {
         "operationId": "placeLenderCommunicationHold",
         "summary": "Pause reminders for one loan",
-        "description": "Needs reminder.policy.manage of the lender that owns the loan and a second factor. The reason is one of complaint, hardship, dispute, lender_instruction, borrower_request or legal; the optional note is checked as plain service text (hold_invalid, 422). The messages still planned for the loan are suppressed (hold); the borrower can still pay. One active hold per loan (hold_active, 409). `lenderId` is optional: the loan decides the lender, and when it is sent it must be that lender (otherwise 404). A loan of another lender, an unknown loan and a loan the caller has no permission over all answer 404.",
+        "description": "Needs reminder.policy.manage of the lender that owns the loan and a second factor. The reason is one of complaint, hardship, dispute, lender_instruction, borrower_request or legal; the optional note is 10 to 200 characters (longer or shorter is validation_failed, 422) and is checked as plain service text (hold_invalid, 422). The messages still planned for the loan are suppressed (hold); the borrower can still pay. One active hold per loan (hold_active, 409). `lenderId` is optional: the loan decides the lender, and when it is sent it must be that lender (otherwise 404). A loan of another lender, an unknown loan and a loan the caller has no permission over all answer 404.",
         "tags": [
           "Reminders (lender)"
         ],
@@ -64411,8 +64562,8 @@
                   },
                   "note": {
                     "type": "string",
-                    "minLength": 1,
-                    "maxLength": 1000
+                    "minLength": 10,
+                    "maxLength": 200
                   }
                 },
                 "required": [
@@ -64572,7 +64723,7 @@
       "post": {
         "operationId": "releaseLenderCommunicationHold",
         "summary": "Release a hold",
-        "description": "Needs reminder.policy.manage of the lender and a second factor. Messages suppressed during the hold stay suppressed; new ones are planned from the next planner run. Send {} when there is no note. A hold already released answers already_released (409); a hold of another lender or an unknown id answers 404.",
+        "description": "Needs reminder.policy.manage of the lender and a second factor. Releasing the hold resumes the messages it suppressed that are scheduled AFTER the release and belong to the approved policy; a message whose time passed during the hold stays suppressed, so nothing goes out late because a hold ended. New messages are planned from the next planner run. Send {} when there is no note; a note is 10 to 200 characters (longer or shorter is validation_failed, 422) and is checked as plain service text (hold_invalid, 422). A hold already released answers already_released (409); a hold of another lender or an unknown id answers 404.",
         "tags": [
           "Reminders (lender)"
         ],
@@ -64609,8 +64760,8 @@
                 "properties": {
                   "note": {
                     "type": "string",
-                    "minLength": 1,
-                    "maxLength": 1000
+                    "minLength": 10,
+                    "maxLength": 200
                   }
                 },
                 "additionalProperties": false
