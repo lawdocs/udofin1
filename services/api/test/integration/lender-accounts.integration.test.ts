@@ -1562,7 +1562,10 @@ describe.skipIf(!enabled)(
           await post('/v1/lender/merchants', ids.b1, { ...claim, lenderId: ids.lenderB }),
           201,
         );
-        expect(second.json()).toEqual({ id: expect.any(String), status: 'active' });
+        expect(second.json()).toEqual({
+          id: expect.stringMatching(/^[0-9a-f-]{36}$/) as string,
+          status: 'active',
+        });
         state.claimB2 = second.json<{ id: string }>().id;
         expect(state.claimB2).not.toBe(state.merchantA);
         expect(
@@ -1735,7 +1738,10 @@ describe.skipIf(!enabled)(
         // A revoked claim is history: claiming the identifier again makes a NEW claim, unverified and active (M2). The old one stays
         // revoked, so the answer never reports a revoked claim as active (A19).
         expect(reclaim.statusCode).toBe(201);
-        expect(reclaim.json()).toEqual({ id: expect.any(String), status: 'active' });
+        expect(reclaim.json()).toEqual({
+          id: expect.stringMatching(/^[0-9a-f-]{36}$/) as string,
+          status: 'active',
+        });
         expect(reclaim.json<{ id: string }>().id).not.toBe(state.merchantB);
         expect(
           (
