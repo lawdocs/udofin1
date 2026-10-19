@@ -132,9 +132,15 @@ $fn$;
 create function pg_temp.mexc(p_mandate uuid, p_class text) returns bigint language sql security definer as $fn$
   select count(*) from payments.reconciliation_exceptions where class = p_class and subject ->> 'mandate_id' = p_mandate::text and status <> 'resolved'
 $fn$;
+-- Fixture writes without the lifecycle triggers: the user triggers of the few tables the fixtures write are switched off and on again. (The
+-- session replication role cannot be set from a function on the Supabase stack: its privileged role may run the SET statement only.)
 create function pg_temp.set_replica(p boolean) returns void language plpgsql security definer as $fn$
+declare
+  t text;
 begin
-  perform set_config('session_replication_role', case when p then 'replica' else 'origin' end, true);
+  foreach t in array array['ops.outbox_events', 'payments.lender_payment_configs', 'payments.mandates', 'payments.merchant_registry', 'servicing.lender_features'] loop
+    execute format('alter table %s %s trigger user', t, case when p then 'disable' else 'enable' end);
+  end loop;
 end
 $fn$;
 -- A mandate row in any state, written directly (as the owner, without the lifecycle triggers) with its own provider reference.
@@ -559,9 +565,9 @@ select is(pg_temp.dsev(pg_temp.got('e_d1')::uuid), null, 'and raises no exceptio
 select pg_temp.as_owner();
 select pg_temp.mk_mandate(pg_temp.mid(8), pg_temp.lid(10), 'draft', null);
 select pg_temp.keep('c_h', ops.enqueue_event('mandate.handoff', jsonb_build_object('mandate_id', pg_temp.mid(8)), null, 'mandate.handoff:' || pg_temp.mid(8)::text)::text);
-select pg_temp.set_replica(true);
+set local session_replication_role = replica;
 update ops.outbox_events set status = 'processing', attempts = 1, locked_by = 'sample-worker', locked_until = now() + interval '10 minutes' where id = pg_temp.got('c_h')::uuid;
-select pg_temp.set_replica(false);
+set local session_replication_role = origin;
 select pg_temp.as_user(pg_temp.u(1));
 select is(payments.request_mandate_cancellation(pg_temp.mid(8)), 'cancel_requested', 'the borrower cancels a draft whose hand-off is in flight');
 select pg_temp.as_system();
@@ -577,32 +583,32 @@ select pg_temp.as_user(pg_temp.u(1));
 select pg_temp.as_system();
 select is((payments.sweep_mandates() ->> 'cancel_resent')::integer, 0, 'a cancellation queued a moment ago is not queued again');
 select pg_temp.as_owner();
-select pg_temp.set_replica(true);
+set local session_replication_role = replica;
 update payments.mandates set cancel_enqueued_at = clock_timestamp() - interval '1 hour' where id = pg_temp.mid(4);
-select pg_temp.set_replica(false);
+set local session_replication_role = origin;
 select pg_temp.as_system();
 select is((payments.sweep_mandates() ->> 'cancel_resent')::integer, 1, 'one that the provider has not acknowledged for half an hour is queued again');
 select is(pg_temp.outbox('mandate.cancel:' || pg_temp.mid(4)::text), 2::bigint, 'as a second queue entry under a fresh key');
 select is((payments.sweep_mandates() ->> 'cancel_resent')::integer, 0, 'and not again at once');
 select pg_temp.as_owner();
-select pg_temp.set_replica(true);
+set local session_replication_role = replica;
 update payments.mandates set cancel_enqueued_at = clock_timestamp() - interval '1 hour', cancel_attempts = 48 where id = pg_temp.mid(4);
-select pg_temp.set_replica(false);
+set local session_replication_role = origin;
 select pg_temp.as_system();
 select is((payments.sweep_mandates() ->> 'cancel_resent')::integer, 0, 'after 48 attempts it is not queued again (the 24-hour exception takes over)');
 select pg_temp.as_owner();
-select pg_temp.set_replica(true);
+set local session_replication_role = replica;
 update payments.mandates set cancel_enqueued_at = clock_timestamp() - interval '1 hour', cancel_attempts = 3 where id = pg_temp.mid(4);
-select pg_temp.set_replica(false);
+set local session_replication_role = origin;
 select pg_temp.as_system();
 select is(payments.mark_mandate_cancel_sent(pg_temp.mid(4)), 'ok', 'the worker records that the provider acknowledged it');
 select is((payments.sweep_mandates() ->> 'cancel_resent')::integer, 0, 'an acknowledged cancellation is not queued again');
 -- A cancellation without a provider reference cannot be sent: not queued again.
 select pg_temp.as_owner();
 select pg_temp.mk_mandate(pg_temp.mid(9), pg_temp.lid(10), 'requires_reconciliation', null);
-select pg_temp.set_replica(true);
+set local session_replication_role = replica;
 update payments.mandates set cancel_requested_at = clock_timestamp() - interval '2 hours', cancel_reason = 'borrower', cancel_attempts = 1, cancel_enqueued_at = clock_timestamp() - interval '2 hours' where id = pg_temp.mid(9);
-select pg_temp.set_replica(false);
+set local session_replication_role = origin;
 select pg_temp.as_system();
 select is((payments.sweep_mandates() ->> 'cancel_resent')::integer, 0, 'with no provider reference there is nothing to send: not queued');
 select is(payments.apply_mandate_lookup(pg_temp.mid(9), 'registration_pending', 'SAMPLE-PM-LK', clock_timestamp()), 'applied', 'a lookup finds the registration and supplies the reference');
@@ -646,9 +652,9 @@ select is((select provider_mandate_ref from payments.mandates where id = pg_temp
 -- ============================================================================================================================
 select is((select count(*) from payments.mandates_needing_lookup() where mandate_id = pg_temp.mid(7)), 0::bigint, 'a mandate looked at a moment ago is not listed');
 select pg_temp.as_owner();
-select pg_temp.set_replica(true);
+set local session_replication_role = replica;
 update payments.mandates set last_event_at = clock_timestamp() - interval '30 hours', created_at = clock_timestamp() - interval '30 hours' where id = pg_temp.mid(7);
-select pg_temp.set_replica(false);
+set local session_replication_role = origin;
 select pg_temp.as_system();
 select is((select reason from payments.mandates_needing_lookup() where mandate_id = pg_temp.mid(7)), 'periodic_check', 'an active mandate not looked up for a day is listed for a lookup');
 select is(payments.apply_mandate_lookup(pg_temp.mid(7), 'revoked', null, clock_timestamp()), 'applied', 'the lookup finds a revoke whose event never arrived');
@@ -656,9 +662,9 @@ select is(pg_temp.mstatus(pg_temp.mid(7)), 'revoked', 'and the mandate is repair
 select is(pg_temp.dst(pg_temp.got('e_d1')::uuid), 'presented', 'the debit the provider presented keeps its state');
 select pg_temp.as_owner();
 select pg_temp.mk_mandate(pg_temp.mid(18), pg_temp.lid(5), 'paused', 'SAMPLE-PM-PZ');
-select pg_temp.set_replica(true);
+set local session_replication_role = replica;
 update payments.mandates set last_event_at = clock_timestamp() - interval '30 hours', created_at = clock_timestamp() - interval '30 hours' where id = pg_temp.mid(18);
-select pg_temp.set_replica(false);
+set local session_replication_role = origin;
 select pg_temp.as_system();
 select is((select count(*) from payments.mandates_needing_lookup() where mandate_id = pg_temp.mid(18)), 1::bigint, 'a paused mandate is listed too');
 select is(payments.apply_mandate_lookup(pg_temp.mid(18), 'paused', null, clock_timestamp()), 'ignored_stale', 'a lookup that finds nothing new changes nothing');
@@ -758,9 +764,9 @@ select pg_temp.keep('n_d1', pg_temp.mk_debit(pg_temp.mid(10), 31, 3, 475000, 'sc
 select pg_temp.as_system();
 select is((select count(*) from payments.claim_pre_debit_notices(1000) c where c.debit_id = pg_temp.got('n_d1')::uuid), 1::bigint, 'a live notice is claimed');
 select pg_temp.as_owner();
-select pg_temp.set_replica(true);
+set local session_replication_role = replica;
 update payments.mandates set status = 'revoked' where id = pg_temp.mid(10);
-select pg_temp.set_replica(false);
+set local session_replication_role = origin;
 select pg_temp.as_system();
 select is((payments.sweep_mandates() ->> 'notices_closed')::integer >= 1, true, 'the mandate ended without the hook (a hand edit): the sweep still closes the notice');
 select is(payments.record_pre_debit_notice((select id from payments.pre_debit_notices where debit_id = pg_temp.got('n_d1')::uuid), 'not_configured'), 'not_configured', 'the worker had leased it and finds no channel');
@@ -775,9 +781,9 @@ select is(pg_temp.nstatus(pg_temp.got('n_d1')::uuid), 'sent', 'the truth: the bo
 select pg_temp.as_owner();
 select pg_temp.mk_mandate(pg_temp.mid(31), pg_temp.lid(5), 'active', 'SAMPLE-PM-E2');
 select pg_temp.keep('e2_d1', pg_temp.mk_debit(pg_temp.mid(31), 1, 3, 475000, 'scheduled', null, -60)::text);
-select pg_temp.set_replica(true);
+set local session_replication_role = replica;
 update servicing.lender_features set enabled = false where lender_org_id = pg_temp.lx() and feature = 'mandates';
-select pg_temp.set_replica(false);
+set local session_replication_role = origin;
 select pg_temp.as_user(pg_temp.u(2));
 select is((select count(*) from payments.my_mandates() where mandate_id = pg_temp.mid(31)), 1::bigint, 'the borrower still sees a live mandate when the lender''s mandates switch is off');
 select is((select count(*) from payments.my_mandates() where mandate_id = pg_temp.mid(7)), 0::bigint, 'but not a finished one of that lender');
@@ -791,9 +797,9 @@ select is(pg_temp.claimed(pg_temp.mid(31)), 0::bigint, 'no notice is claimed whi
 select payments.sweep_mandates();
 select is(pg_temp.nstatus(pg_temp.got('e2_d1')::uuid), 'planned', 'and the sweep keeps its notice open (the switch may come back on)');
 select pg_temp.as_owner();
-select pg_temp.set_replica(true);
+set local session_replication_role = replica;
 update servicing.lender_features set enabled = true where lender_org_id = pg_temp.lx() and feature = 'mandates';
-select pg_temp.set_replica(false);
+set local session_replication_role = origin;
 select pg_temp.as_user(pg_temp.u(1));
 select is((select count(*) from payments.my_mandates() where mandate_id = pg_temp.mid(2)), 1::bigint, 'with the switch back on, finished mandates are listed again');
 select pg_temp.as_system();
@@ -846,25 +852,25 @@ select pg_temp.as_owner();
 drop index payments.lender_payment_configs_one_active;
 create temp table sm_cfg_copy as select * from payments.lender_payment_configs where lender_org_id = pg_temp.lx() and status = 'active';
 update sm_cfg_copy set id = gen_random_uuid(), endpoint_token_hash = encode(sha256(convert_to('SAMPLE-TOKEN-SECOND', 'UTF8')), 'hex'), idempotency_key = 'sample-second-config-0001';
-select pg_temp.set_replica(true);
+set local session_replication_role = replica;
 insert into payments.lender_payment_configs select * from sm_cfg_copy;
-select pg_temp.set_replica(false);
+set local session_replication_role = origin;
 select pg_temp.as_user(pg_temp.u(1));
 select is(pg_temp.err(format($$select payments.request_mandate(%L, %L, 'enach_api', 100000, %L, %L, 'XXXXXX9999')$$, pg_temp.mid(40), pg_temp.lid(9), pg_temp.d() + 1, pg_temp.d() + 100)), '55000|config_ambiguous',
   'two active payment configurations of one lender: refused (config_ambiguous)');
 select pg_temp.as_owner();
-select pg_temp.set_replica(true);
+set local session_replication_role = replica;
 update payments.lender_payment_configs set status = 'suspended', status_reason = 'SAMPLE: second fixture configuration', status_changed_at = now() where idempotency_key = 'sample-second-config-0001';
 -- creditor_not_lender is defence in depth behind the collection-target check, which refuses a merchant of another organisation first.
 update payments.merchant_registry set owner_org_id = pg_temp.lz() where owner_org_id = pg_temp.lx();
-select pg_temp.set_replica(false);
+set local session_replication_role = origin;
 select pg_temp.as_user(pg_temp.u(1));
 select is(pg_temp.err(format($$select payments.request_mandate(%L, %L, 'enach_api', 100000, %L, %L, 'XXXXXX9999')$$, pg_temp.mid(40), pg_temp.lid(9), pg_temp.d() + 1, pg_temp.d() + 100)), '55000|collection_target_invalid',
   'a merchant that is not the lender''s own cannot be the creditor: refused');
 select pg_temp.as_owner();
-select pg_temp.set_replica(true);
+set local session_replication_role = replica;
 update payments.merchant_registry set owner_org_id = pg_temp.lx() where provider = 'mock_gateway' and merchant_ref = 'SAMPLE-MERCHANT-' || left(md5(pg_temp.lx()::text), 12);
-select pg_temp.set_replica(false);
+set local session_replication_role = origin;
 select pg_temp.as_user(pg_temp.u(1));
 select is(pg_temp.err(format($$select payments.request_mandate(%L, %L, 'enach_api', 100000, %L, %L, 'XXXXXX9999')$$, pg_temp.mid(40), pg_temp.lid(9), pg_temp.d() + 1, pg_temp.d() + 100)), 'ok',
   'CONTROL: with the lender''s own merchant and one configuration the same request is accepted');
