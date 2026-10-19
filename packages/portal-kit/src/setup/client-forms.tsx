@@ -1,10 +1,10 @@
 'use client';
 
 import { useState } from 'react';
-import { SelectInput, TextArea, TextInput } from '../reminders/fields.js';
+import { Group, SelectInput, TextArea, TextInput } from '../reminders/fields.js';
 import { StatefulForm, typedFirst, type FormRun } from '../reminders/stateful-form.js';
 import { RAIL_LIMIT_ROWS, RAIL_VALUE_KINDS, type DraftedConfig } from './types.js';
-import { setupErrorMessage } from './wording.js';
+import { SECRET_PREFIX, setupErrorMessage } from './wording.js';
 
 // The forms that keep what the person typed when the answer is a refusal, and the one place the callback token is drawn. Each is
 // a client component whose props are plain values and one server action, so a server-rendered page can draw it.
@@ -88,8 +88,12 @@ export function OneTimeToken({ drafted, clear }: { drafted: DraftedConfig; clear
 // ---------------------------------------------------------------------------------------------------------------
 // A new payment configuration
 // ---------------------------------------------------------------------------------------------------------------
+/** The browser-side shape of a secret name of this lender: its prefix, a capital letter, then capitals, digits and underscores. */
+export const secretNamePattern = (prefix: string): string => `${prefix}[A-Z][A-Z0-9_]{1,48}`;
+
 export function ConfigDraftForm({
   lenderId,
+  secretPrefix,
   action,
   returnTo,
   providers,
@@ -97,18 +101,23 @@ export function ConfigDraftForm({
   settlementAccounts,
 }: {
   lenderId: string;
+  /** The prefix every secret name of this lender must start with (the API serves it; it is not a secret). */
+  secretPrefix: string;
   action: FormRun<DraftedConfig>;
   returnTo: string;
   providers: readonly Choice[];
   merchants: readonly Choice[];
   settlementAccounts: readonly Choice[];
 }) {
+  // The prefix goes into a browser-side pattern: a text of any other shape is never drawn into one.
+  if (!SECRET_PREFIX.test(secretPrefix))
+    return <p role="alert">{setupErrorMessage('secret_prefix_unknown')}</p>;
   return (
     <StatefulForm<DraftedConfig>
       op="setup.config.draft"
       action={action}
       returnTo={returnTo}
-      hidden={{ lenderId }}
+      hidden={{ lenderId, secretPrefix }}
       submit="Save as a draft"
       doneMessage="The draft was saved. Its callback path is shown below, once."
       errorMessage={setupErrorMessage}
@@ -150,24 +159,33 @@ export function ConfigDraftForm({
             defaultValue={typedFirst(typed, 'settlementAccountId')}
             hint="Only the masked reference is shown. The platform team must have verified and linked the account before the configuration can be submitted."
           />
-          <TextInput
-            name="secretRef"
-            label="Name of the provider secret"
-            required
-            pattern="[A-Z][A-Z0-9_]{2,63}"
-            maxLength={64}
-            defaultValue={typedFirst(typed, 'secretRef')}
-            hint="The NAME of the secret in your secrets manager: capital letters, digits and underscores, starting with a letter, 3 to 64 characters. Never type the secret itself."
-          />
-          <TextInput
-            name="webhookSecretRef"
-            label="Name of the callback signing secret"
-            required
-            pattern="[A-Z][A-Z0-9_]{2,63}"
-            maxLength={64}
-            defaultValue={typedFirst(typed, 'webhookSecretRef')}
-            hint="The NAME of the secret in your secrets manager, different from the first name. Never type the secret itself."
-          />
+          <Group legend="Names of your secrets">
+            <p>
+              Your provider secret names must start with <code>{secretPrefix}</code>. This prefix
+              belongs to your organisation and is not a secret. After it, a name starts with a
+              capital letter and uses only capital letters, digits and underscores (2 to 49
+              characters). The platform team stores the secrets under these names; a name without
+              the prefix is refused.
+            </p>
+            <TextInput
+              name="secretRef"
+              label="Name of the provider secret"
+              required
+              pattern={secretNamePattern(secretPrefix)}
+              maxLength={63}
+              defaultValue={typedFirst(typed, 'secretRef') ?? secretPrefix}
+              hint={`The NAME of the secret in your secrets manager, starting with ${secretPrefix}. Never type the secret itself.`}
+            />
+            <TextInput
+              name="webhookSecretRef"
+              label="Name of the callback signing secret"
+              required
+              pattern={secretNamePattern(secretPrefix)}
+              maxLength={63}
+              defaultValue={typedFirst(typed, 'webhookSecretRef') ?? secretPrefix}
+              hint={`The NAME of the secret in your secrets manager, starting with ${secretPrefix} and different from the first name. Never type the secret itself.`}
+            />
+          </Group>
           <fieldset>
             <legend>Rail limits, copied from your provider’s documentation (optional)</legend>
             <p className="muted">

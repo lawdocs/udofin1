@@ -23,6 +23,7 @@ export {
   loadSettlementAccounts as loadPaymentSetupSettlements,
   loadRegistryStatus as loadPaymentSetupRegistryStatus,
   loadFeatures as loadPaymentSetupFeatures,
+  loadSecretPrefix as loadPaymentSetupSecretPrefix,
   isUuid as isPaymentSetupId,
   type MembershipLike as PaymentSetupMembership,
   type SetupGrant as PaymentSetupGrant,

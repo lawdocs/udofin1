@@ -6,6 +6,7 @@ import {
   PaymentConfigPage,
   PaymentConfigStatus,
   PaymentProviderChoiceList,
+  SecretRefPrefix,
   SettlementAccountPage,
   SettlementAccountRegistryStatusList,
 } from '@udofin/contracts';
@@ -71,12 +72,20 @@ export const mayDecide = (
   config.submittedBy !== userId &&
   mayIn(grants, config.lenderId, 'approve');
 
-/** Submitting needs payment.configure and a draft or a suspended configuration. */
+/**
+ * A hold (set by the platform or by the system) stands on a suspended configuration until the platform team releases it. While it
+ * stands the lender can neither submit nor retire it; the API refuses both (`platform_hold`), and the form is not drawn.
+ */
+export const isHeld = (config: { holdKind?: string | null | undefined }): boolean =>
+  config.holdKind !== undefined && config.holdKind !== null;
+
+/** Submitting needs payment.configure and a draft or a suspended configuration without a hold. */
 export const maySubmit = (
   grants: readonly SetupGrant[],
-  config: { lenderId: string; status: string },
+  config: { lenderId: string; status: string; holdKind?: string | null | undefined },
 ): boolean =>
   (config.status === 'draft' || config.status === 'suspended') &&
+  !isHeld(config) &&
   mayIn(grants, config.lenderId, 'configure');
 
 /** Withdrawing needs payment.configure and a draft or a configuration waiting for approval. */
@@ -87,13 +96,45 @@ export const mayWithdraw = (
   (config.status === 'draft' || config.status === 'pending_approval') &&
   mayIn(grants, config.lenderId, 'configure');
 
-/** Retiring is the lender approver's act, on an approved or suspended configuration. */
+/** Retiring is the lender approver's act, on an approved or suspended configuration that is not on hold. */
 export const mayRetire = (
   grants: readonly SetupGrant[],
-  config: { lenderId: string; status: string },
+  config: { lenderId: string; status: string; holdKind?: string | null | undefined },
 ): boolean =>
   (config.status === 'active' || config.status === 'suspended') &&
+  !isHeld(config) &&
   mayIn(grants, config.lenderId, 'approve');
+
+/**
+ * Withdrawing a merchant claim needs payment.configure and a claim of the lender's own that is still live and was never verified.
+ * A verified claim is revoked by the platform team, not withdrawn (the database refuses, `already_verified`).
+ */
+export const mayWithdrawMerchant = (
+  grants: readonly SetupGrant[],
+  merchant: {
+    ownerKind: string;
+    ownerOrgId: string | null;
+    status: string;
+    verificationStatus: string;
+  },
+): boolean =>
+  merchant.ownerKind === 'lender' &&
+  merchant.ownerOrgId !== null &&
+  merchant.status === 'active' &&
+  merchant.verificationStatus === 'unverified' &&
+  mayIn(grants, merchant.ownerOrgId, 'configure');
+
+/**
+ * Withdrawing a settlement account needs payment.configure and a request that was never linked to the account registry. A linked
+ * account is revoked by the platform team, not withdrawn (the database refuses, `already_linked`).
+ */
+export const mayWithdrawSettlement = (
+  grants: readonly SetupGrant[],
+  account: { lenderId: string; status: string; registryId: string | null },
+): boolean =>
+  account.status === 'unverified' &&
+  account.registryId === null &&
+  mayIn(grants, account.lenderId, 'configure');
 
 /** The lender a page is about: the one asked for if the person belongs to it, else the first that fits. Null when none fits. */
 export function chooseLender(
@@ -163,6 +204,10 @@ export const loadConfig = (api: OnboardingApi, id: string) =>
 
 export const loadConfigHistory = (api: OnboardingApi, id: string) =>
   api.get(`/v1/lender/payment-configs/${id}/history`, PaymentConfigHistory);
+
+/** The prefix every secret name of this lender's configurations must start with (not a secret: derived from the lender's id). */
+export const loadSecretPrefix = (api: OnboardingApi, lenderId: string) =>
+  api.get(`/v1/lender/secret-ref-prefix${qs({ lenderId })}`, SecretRefPrefix);
 
 export const loadProviders = (api: OnboardingApi) =>
   api.get('/v1/lender/payment-providers', PaymentProviderChoiceList);

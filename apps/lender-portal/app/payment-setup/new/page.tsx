@@ -2,6 +2,7 @@ import {
   choosePaymentSetupLender,
   loadPaymentSetupMerchants,
   loadPaymentSetupProviders,
+  loadPaymentSetupSecretPrefix,
   loadPaymentSetupSettlements,
   parsePaymentSetupQuery,
   PaymentSetupNewPage,
@@ -23,13 +24,14 @@ export default async function NewPaymentConfigRoute({
   const query = parsePaymentSetupQuery(raw);
   const lender = choosePaymentSetupLender(page.grants, query.lenderId, (g) => g.configure);
   const forbidden = { ok: false, status: 403, code: 'forbidden' } as const;
-  const [providers, merchants, settlements] = lender
+  const [providers, merchants, settlements, prefix] = lender
     ? await Promise.all([
         loadPaymentSetupProviders(page.api),
         loadPaymentSetupMerchants(page.api, lender.lenderId),
         loadPaymentSetupSettlements(page.api, lender.lenderId),
+        loadPaymentSetupSecretPrefix(page.api, lender.lenderId),
       ])
-    : [forbidden, forbidden, forbidden];
+    : [forbidden, forbidden, forbidden, forbidden];
   const notice = await noticeFrom(raw, '/payment-setup/new');
   return (
     <PageFrame me={page.session.me} current="/payment-setup">
@@ -38,6 +40,7 @@ export default async function NewPaymentConfigRoute({
         providers={providers}
         merchants={merchants}
         settlements={settlements}
+        prefix={prefix}
         ctx={{
           action: setupAction,
           draft: setupDraftAction,
