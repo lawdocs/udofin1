@@ -36,6 +36,7 @@ import {
 import { type SetupContext } from '../src/setup/common.js';
 import {
   chooseLender,
+  isHeld,
   loadConfig,
   loadConfigHistory,
   loadConfigs,
@@ -43,6 +44,7 @@ import {
   loadMerchants,
   loadProviders,
   loadRegistryStatus,
+  loadSecretPrefix,
   loadSettlementAccounts,
   mayDecide,
   mayIn,
@@ -50,6 +52,8 @@ import {
   maySeeSetup,
   maySubmit,
   mayWithdraw,
+  mayWithdrawMerchant,
+  mayWithdrawSettlement,
   parseSetupQuery,
   setupGrants,
   setupHref,
@@ -75,6 +79,7 @@ import {
   eventKindWords,
   featureWords,
   isTestMode,
+  holdKindWords,
   looksLikeSecretValue,
   merchantStatusWords,
   merchantVerificationWords,
@@ -83,6 +88,8 @@ import {
   railValueWords,
   reasonWords,
   registryStatusWords,
+  SECRET_PREFIX,
+  secretNameProblem,
   settlementStatusWords,
   setupErrorMessage,
 } from '../src/setup/wording.js';
@@ -119,6 +126,13 @@ const CALLBACK_PATH = `/v1/hooks/provider/${PATH_PART}`;
 
 const GENERIC = 'The action could not be completed. Nothing was changed.';
 
+// The prefix of a lender's secret names (the last twelve hexadecimal digits of its id) and two ordinary names inside it. A prefix
+// is not a secret; the names are names. No value in this file is shaped like a credential.
+const PREFIX = 'L0198B3F40001_';
+const NAME_ONE = `${PREFIX}PSP_ONE`;
+const NAME_TWO = `${PREFIX}PSP_TWO`;
+const prefixOf = (lenderId = LENDER_A, prefix = PREFIX) => ok({ lenderId, prefix });
+
 const ok = <T,>(data: T) => ({ ok: true as const, status: 200, data });
 const fail = (status: number, code = 'internal_failure') => ({
   ok: false as const,
@@ -135,8 +149,8 @@ const config = (over: object = {}) =>
     providerMode: 'production',
     merchantRegistryId: MERCHANT,
     settlementAccountId: SETTLEMENT,
-    secretRef: 'LENDER_PSP_ONE',
-    webhookSecretRef: 'LENDER_PSP_TWO',
+    secretRef: NAME_ONE,
+    webhookSecretRef: NAME_TWO,
     railLimits: { upi: { per_payment_max: 10_000_000, needs_prompt: true, window: 'next day' } },
     railLimitsSource: 'Provider guide, section on limits',
     evidenceRef: 'Onboarding mail ref 7',
@@ -314,8 +328,9 @@ const draftFields = {
   providerMode: 'sandbox',
   merchantRegistryId: MERCHANT,
   settlementAccountId: SETTLEMENT,
-  secretRef: 'LENDER_PSP_ONE',
-  webhookSecretRef: 'LENDER_PSP_TWO',
+  secretRef: NAME_ONE,
+  webhookSecretRef: NAME_TWO,
+  secretPrefix: PREFIX,
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -487,6 +502,12 @@ describe('secret references are names, never values', () => {
     'ABC',
     'PSP_1_NAME_2',
     'X'.repeat(8) + '_' + 'Y'.repeat(8),
+    NAME_ONE,
+    `${PREFIX}AB`,
+    // The prefix is made of the lender's id digits, which can form a long run of digits: it is not judged, only what follows it.
+    'L012345678901_PSP_ONE',
+    'L000000000000_PSP_ONE',
+    'LABCDEF012345_PSP_ONE',
   ])('accepts the name %s', (name) => {
     expect(looksLikeSecretValue(name)).toBe(false);
   });
@@ -504,8 +525,68 @@ describe('secret references are names, never values', () => {
     ['is a shorter run of hexadecimal digits', 'ABCDEFAB12CDEF34'],
     ['is a long unbroken run', 'ABCDEFGHIJKLMNOPQRSTUVWX'],
     ['is longer than 64 characters', 'A_' + 'B'.repeat(70)],
+    // What the lender chose after its prefix is judged like any other name.
+    ['has a long run of digits after the prefix', `${PREFIX}KEY_123456789`],
+    ['is a long run of hexadecimal digits after the prefix', `${PREFIX}ABCDEF0123456789ABCD`],
+    ['is a long unbroken run after the prefix', `${PREFIX}ABCDEFGHIJKLMNOPQRSTUVWX`],
   ])('refuses text that is %s', (_why, value) => {
     expect(looksLikeSecretValue(value)).toBe(true);
+  });
+});
+
+describe('secret names belong to the lender: its prefix, then a name', () => {
+  it('knows the shape of a prefix', () => {
+    expect(SECRET_PREFIX.test(PREFIX)).toBe(true);
+    for (const bad of [
+      '',
+      'L0198B3F4000_',
+      'L0198B3F400012_',
+      'l0198b3f40001_',
+      'L0198B3F4000G_',
+      'L0198B3F40001',
+      'X0198B3F40001_',
+      ' L0198B3F40001_',
+    ])
+      expect(SECRET_PREFIX.test(bad), bad).toBe(false);
+  });
+
+  it('accepts a name inside the prefix, with or without knowing which prefix is the lender’s', () => {
+    expect(secretNameProblem(NAME_ONE, PREFIX)).toBeNull();
+    expect(secretNameProblem(NAME_ONE, null)).toBeNull();
+    expect(secretNameProblem(`${PREFIX}AB`, PREFIX)).toBeNull();
+    expect(secretNameProblem(`${PREFIX}A${'B_'.repeat(24)}`, PREFIX)).toBeNull();
+  });
+
+  it('refuses a well-formed name outside the namespace, and says so with its own code', () => {
+    for (const name of [
+      'LENDER_PSP_ONE',
+      'L0198B3F40001PSP_ONE',
+      'L0198B3F4000_PSP_ONE',
+      `${PREFIX}`,
+      `${PREFIX}A`,
+      `${PREFIX}1ABC`,
+      `${PREFIX}_ABC`,
+      // One character too many after the prefix (the whole name is still within 64 characters).
+      `${PREFIX}A${'B_'.repeat(24)}B`,
+    ])
+      expect(secretNameProblem(name, PREFIX), name).toBe('secret_prefix_wrong');
+  });
+
+  it('refuses another lender’s prefix when the lender’s own is known', () => {
+    expect(secretNameProblem('L0198B3F40002_PSP_ONE', PREFIX)).toBe('secret_prefix_wrong');
+    // The shape alone cannot tell: the API and the database know which prefix is the lender’s.
+    expect(secretNameProblem('L0198B3F40002_PSP_ONE', null)).toBeNull();
+  });
+
+  it('calls a pasted value a value, before it talks about prefixes', () => {
+    for (const value of [
+      'abc123def456',
+      'ABCDEF0123456789ABCD',
+      `${PREFIX}KEY_123456789`,
+      `${PREFIX.toLowerCase()}PSP_ONE`,
+      '',
+    ])
+      expect(secretNameProblem(value, PREFIX), value).toBe('secret_looks_like_value');
   });
 });
 
@@ -654,7 +735,9 @@ describe('the allow-listed operations', () => {
       'setup.config.submit',
       'setup.config.withdraw',
       'setup.merchant.claim',
+      'setup.merchant.withdraw',
       'setup.settlement.request',
+      'setup.settlement.withdraw',
     ]);
   });
 
@@ -901,8 +984,8 @@ describe('the allow-listed operations', () => {
             providerMode: 'sandbox',
             merchantRegistryId: MERCHANT,
             settlementAccountId: SETTLEMENT,
-            secretRef: 'LENDER_PSP_ONE',
-            webhookSecretRef: 'LENDER_PSP_TWO',
+            secretRef: NAME_ONE,
+            webhookSecretRef: NAME_TWO,
             railLimits: {},
           },
         },
@@ -985,7 +1068,7 @@ describe('the allow-listed operations', () => {
       expect(
         await runSetupOperation(
           api,
-          formOf({ ...draftFields, webhookSecretRef: 'LENDER_PSP_ONE' }),
+          formOf({ ...draftFields, webhookSecretRef: NAME_ONE }),
           'setup.config.draft',
         ),
       ).toEqual({ ok: false, code: 'secrets_same' });
@@ -1563,6 +1646,7 @@ describe('New configuration', () => {
         providers={providers}
         merchants={merchants}
         settlements={settlements}
+        prefix={prefixOf()}
         ctx={ctx}
         {...over}
       />,
@@ -1597,13 +1681,56 @@ describe('New configuration', () => {
     const secret = screen.getByLabelText<HTMLInputElement>('Name of the provider secret');
     const signing = screen.getByLabelText<HTMLInputElement>('Name of the callback signing secret');
     for (const input of [secret, signing]) {
-      expect(input.value).toBe('');
+      // Only the organisation's own prefix is filled in; the name itself is the person's.
+      expect(input.value).toBe(PREFIX);
       expect(input.required).toBe(true);
       expect(input.type).toBe('text');
-      expect(input.getAttribute('pattern')).toBe('[A-Z][A-Z0-9_]{2,63}');
+      expect(input.getAttribute('pattern')).toBe(`${PREFIX}[A-Z][A-Z0-9_]{1,48}`);
+      expect(input.maxLength).toBe(63);
     }
     expect(text(container)).toMatch(/Never type the secret itself/);
     expect(text(container)).toMatch(/NAME of the secret in your secrets manager/);
+  });
+
+  it('says what to do with the prefix of the organisation, in plain words', () => {
+    const { container } = view();
+    const group = screen.getByRole('group', { name: 'Names of your secrets' });
+    expect(text(group)).toContain(`Your provider secret names must start with ${PREFIX}`);
+    expect(text(group)).toMatch(/belongs to your organisation and is not a secret/);
+    expect(text(group)).toMatch(/a name without the prefix is refused/);
+    // Both fields say which prefix, and the form carries it as shown (the operation checks the names against it).
+    expect(
+      screen.getByLabelText('Name of the provider secret').getAttribute('aria-describedby'),
+    ).toBeTruthy();
+    expect(container.querySelector<HTMLInputElement>('input[name="secretPrefix"]')?.value).toBe(
+      PREFIX,
+    );
+    expect(text(container)).not.toMatch(/\bkey\b/i);
+  });
+
+  it('draws the prefix of the lender the form is for, and no other', () => {
+    const { container } = view({ prefix: prefixOf(LENDER_A, 'L0198B3F40009_') });
+    expect(container.querySelector<HTMLInputElement>('input[name="secretPrefix"]')?.value).toBe(
+      'L0198B3F40009_',
+    );
+    cleanup();
+    // An answer about another lender, one that is not a prefix and one that could not be read: no form, and the reason in words.
+    for (const prefix of [
+      prefixOf(LENDER_B),
+      prefixOf(LENDER_A, 'not a prefix'),
+      prefixOf(LENDER_A, 'L0198B3F40001'),
+      fail(500, 'internal_failure'),
+      fail(403, 'forbidden'),
+    ]) {
+      const drawn = view({ prefix });
+      expect(ops(drawn.container)).toEqual([]);
+      expect(drawn.container.querySelector('input[name="secretRef"]')).toBeNull();
+      expect(drawn.container.querySelector('[role="alert"]')?.textContent).toBe(
+        setupErrorMessage('secret_prefix_unknown'),
+      );
+      expect(text(drawn.container)).not.toContain('internal_failure');
+      cleanup();
+    }
   });
 
   it('offers production, sandbox and mock and labels the two test modes', () => {
@@ -1714,8 +1841,8 @@ describe('One configuration', () => {
     const { container } = view();
     expect(text(container)).toContain('Sample Payments Ltd');
     expect(text(container)).toContain('Production mode');
-    expect(text(container)).toContain('LENDER_PSP_ONE');
-    expect(text(container)).toContain('LENDER_PSP_TWO');
+    expect(text(container)).toContain(NAME_ONE);
+    expect(text(container)).toContain(NAME_TWO);
     expect(text(container)).toMatch(/Udofin never shows or stores the secrets they name/);
     expect(text(container)).toContain('Onboarding mail ref 7');
     expect(text(container)).toContain('Agreement clause 4');
@@ -2245,14 +2372,16 @@ describe('the callback token is shown once', () => {
     await u.selectOptions(screen.getByLabelText('Mode'), 'sandbox');
     await u.selectOptions(screen.getByLabelText('Merchant'), MERCHANT);
     await u.selectOptions(screen.getByLabelText('Settlement account'), SETTLEMENT);
-    await u.type(screen.getByLabelText('Name of the provider secret'), 'LENDER_PSP_ONE');
-    await u.type(screen.getByLabelText('Name of the callback signing secret'), 'LENDER_PSP_TWO');
+    // The prefix of the organisation is already in both fields; the person types the rest of each name.
+    await u.type(screen.getByLabelText('Name of the provider secret'), 'PSP_ONE');
+    await u.type(screen.getByLabelText('Name of the callback signing secret'), 'PSP_TWO');
   };
 
   const draftForm = (action: Parameters<typeof ConfigDraftForm>[0]['action']) =>
     render(
       <ConfigDraftForm
         lenderId={LENDER_A}
+        secretPrefix={PREFIX}
         action={action}
         returnTo="/payment-setup/new"
         providers={[{ value: 'sample_psp', label: 'Sample Payments Ltd' }]}
@@ -2290,7 +2419,9 @@ describe('the callback token is shown once', () => {
     expect(sent.get('lenderId')).toBe(LENDER_A);
     expect(sent.get('provider')).toBe('sample_psp');
     expect(sent.get('providerMode')).toBe('sandbox');
-    expect(sent.get('secretRef')).toBe('LENDER_PSP_ONE');
+    expect(sent.get('secretRef')).toBe(NAME_ONE);
+    expect(sent.get('webhookSecretRef')).toBe(NAME_TWO);
+    expect(sent.get('secretPrefix')).toBe(PREFIX);
     expect(sent.get('key')).toMatch(/^ui-[0-9a-f-]{36}$/);
   });
 
@@ -2372,7 +2503,9 @@ describe('the callback token is shown once', () => {
     // The form is empty again after a success, so it is filled in again. The token appears before the form is cleared: wait for the
     // clearing, or the refill can be wiped by it and the second submission never happens.
     await waitFor(() =>
-      expect(screen.getByLabelText<HTMLInputElement>('Name of the provider secret').value).toBe(''),
+      expect(screen.getByLabelText<HTMLInputElement>('Name of the provider secret').value).toBe(
+        PREFIX,
+      ),
     );
     await fillDraft(u);
     await u.click(screen.getByRole('button', { name: 'Save as a draft' }));
@@ -2393,7 +2526,7 @@ describe('the callback token is shown once', () => {
     );
     await waitFor(() =>
       expect(screen.getByLabelText<HTMLInputElement>('Name of the provider secret').value).toBe(
-        'LENDER_PSP_ONE',
+        NAME_ONE,
       ),
     );
     expect(screen.getByLabelText<HTMLSelectElement>('Mode').value).toBe('sandbox');
@@ -2525,6 +2658,7 @@ describe('across every page', () => {
           providers={providers}
           merchants={merchants}
           settlements={settlements}
+          prefix={prefixOf()}
           ctx={all}
         />,
       ),
@@ -2533,6 +2667,12 @@ describe('across every page', () => {
         pending,
         config({ status: 'active' }),
         config({ status: 'suspended', statusReasons: ['merchant_not_active'] }),
+        config({
+          status: 'suspended',
+          statusReasons: ['platform_suspension'],
+          holdKind: 'platform',
+          holdSetAt: AT_2,
+        }),
       ].map((c) =>
         render(
           <SetupConfigDetailPage
@@ -2549,8 +2689,14 @@ describe('across every page', () => {
         <SetupAccountsPage
           lender={lender}
           providers={providers}
-          merchants={merchants}
-          settlements={settlements}
+          merchants={pageOf([
+            merchant(),
+            merchant({ id: MERCHANT_2, verificationStatus: 'unverified', verifiedAt: null }),
+          ])}
+          settlements={pageOf([
+            settlement(),
+            settlement({ id: SETTLEMENT_2, status: 'unverified', registryId: null }),
+          ])}
           registry={ok({ items: [registryRow()] })}
           ctx={all}
         />,
@@ -2635,5 +2781,753 @@ describe('across every page', () => {
         expect(control.name, control.name).not.toMatch(
           /accountNumber|ifsc|password|secretValue|endpointToken/i,
         );
+  });
+});
+
+// =====================================================================================================================
+// Phase 08a review fixes (P2): the lender's secret-name prefix, the withdrawal of a merchant claim and of a settlement account
+// request, the hold on a suspended configuration, and the new answers of the API in words.
+// =====================================================================================================================
+const NEW_CODES = [
+  'too_many_claims',
+  'already_verified',
+  'already_linked',
+  'active_config_exists',
+  'platform_hold',
+  'own_account_list_not_attested',
+  'secret_prefix_wrong',
+  'secret_prefix_unknown',
+  'confirm_required',
+] as const;
+
+/** An API that answers every write with a refusal, and records what was sent. */
+function refusing(status: number, code: string) {
+  const calls: { path: string; body: unknown; key: string }[] = [];
+  const api: OnboardingApi = {
+    get: () => Promise.resolve({ ok: false as const, status: 404, code: 'not_found' }),
+    post: (path, _schema, body, key) => {
+      calls.push({ path, body, key });
+      return Promise.resolve({ ok: false as const, status, code });
+    },
+  };
+  return { api, calls };
+}
+
+describe('the lender’s secret-name prefix in the draft operation', () => {
+  const run = async (change: Record<string, string>, answer: unknown = DRAFT_ANSWER) => {
+    const rec = recorder(answer);
+    const outcome = await runSetupOperation(
+      rec.api,
+      formOf({ ...draftFields, ...change }),
+      'setup.config.draft',
+    );
+    return { ...rec, outcome };
+  };
+
+  it('sends names inside the prefix, and never sends the prefix field itself', async () => {
+    const { outcome, calls } = await run({});
+    expect(outcome.ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.body).toMatchObject({ secretRef: NAME_ONE, webhookSecretRef: NAME_TWO });
+    expect(JSON.stringify(calls)).not.toMatch(/secretPrefix/);
+  });
+
+  it.each([
+    [
+      'both names without the prefix',
+      { secretRef: 'LENDER_PSP_ONE', webhookSecretRef: 'LENDER_PSP_TWO' },
+    ],
+    ['the signing name without the prefix', { webhookSecretRef: 'LENDER_PSP_TWO' }],
+    ['the provider name without the prefix', { secretRef: 'LENDER_PSP_ONE' }],
+    ['only the prefix, nothing after it', { secretRef: PREFIX }],
+    ['a name that starts with a digit after the prefix', { secretRef: `${PREFIX}1_PSP` }],
+    ['a name too short after the prefix', { secretRef: `${PREFIX}A` }],
+    ['another lender’s prefix', { secretRef: 'L0198B3F40002_PSP_ONE' }],
+  ])('sends nothing for %s', async (_why, change) => {
+    const { outcome, calls } = await run(change);
+    expect(outcome).toEqual({ ok: false, code: 'secret_prefix_wrong' });
+    expect(calls).toEqual([]);
+  });
+
+  it('still calls a pasted value a value, with or without the prefix', async () => {
+    for (const secretRef of [
+      `${PREFIX}KEY_123456789`,
+      `${PREFIX}ABCDEF0123456789ABCD`,
+      'abc123def456',
+      `${PREFIX.toLowerCase()}PSP_ONE`,
+    ]) {
+      const { outcome, calls } = await run({ secretRef });
+      expect(outcome, secretRef).toEqual({ ok: false, code: 'secret_looks_like_value' });
+      expect(calls).toEqual([]);
+    }
+  });
+
+  it('accepts a prefix made only of digits that forms a long run of digits', async () => {
+    const own = 'L012345678901_';
+    const { outcome, calls } = await run({
+      secretPrefix: own,
+      secretRef: `${own}PSP_ONE`,
+      webhookSecretRef: `${own}PSP_TWO`,
+    });
+    expect(outcome.ok).toBe(true);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('checks the names against the prefix the form showed, and ignores a prefix of the wrong shape', async () => {
+    // The form said the prefix is another one: the names are not inside it.
+    const other = await run({ secretPrefix: 'L0198B3F40002_' });
+    expect(other.outcome).toEqual({ ok: false, code: 'secret_prefix_wrong' });
+    expect(other.calls).toEqual([]);
+    // A prefix that is not the shape of one is not used; the names are still checked for the shape of a namespaced name.
+    for (const secretPrefix of ['', 'not a prefix', 'L0198B3F40001', "'; drop table"]) {
+      const { outcome, calls } = await run({ secretPrefix });
+      expect(outcome.ok, secretPrefix).toBe(true);
+      expect(calls).toHaveLength(1);
+    }
+    const bare = await run({ secretPrefix: 'junk', secretRef: 'LENDER_PSP_ONE' });
+    expect(bare.outcome).toEqual({ ok: false, code: 'secret_prefix_wrong' });
+  });
+
+  it('checks the shape without a prefix field at all (the API and the database then judge whose prefix it is)', async () => {
+    const { secretPrefix: _shown, ...withoutPrefix } = draftFields;
+    const rec = recorder(DRAFT_ANSWER);
+    expect((await runSetupOperation(rec.api, formOf(withoutPrefix), 'setup.config.draft')).ok).toBe(
+      true,
+    );
+    const bare = recorder(DRAFT_ANSWER);
+    expect(
+      await runSetupOperation(
+        bare.api,
+        formOf({ ...withoutPrefix, secretRef: 'LENDER_PSP_ONE' }),
+        'setup.config.draft',
+      ),
+    ).toEqual({ ok: false, code: 'secret_prefix_wrong' });
+    expect(bare.calls).toEqual([]);
+  });
+
+  it('sends the same request key again for a repeat of the same form, so a double click applies once', async () => {
+    const rec = recorder(DRAFT_ANSWER);
+    const form = formOf(draftFields);
+    await runSetupOperation(rec.api, form, 'setup.config.draft');
+    await runSetupOperation(rec.api, form, 'setup.config.draft');
+    expect(rec.calls).toHaveLength(2);
+    expect(rec.calls[0]?.key).toBe(REQUEST_ID);
+    expect(rec.calls[1]?.key).toBe(rec.calls[0]?.key);
+  });
+
+  it('tells the person what to do, in words, for each refusal about the names', () => {
+    expect(setupErrorMessage('secret_prefix_wrong')).toMatch(
+      /must start with the prefix shown on the form/,
+    );
+    expect(setupErrorMessage('secret_prefix_unknown')).toMatch(/could not be read/);
+    expect(setupErrorMessage('secret_ref_invalid')).toMatch(
+      /start with the prefix shown on the form/,
+    );
+    for (const code of ['secret_prefix_wrong', 'secret_prefix_unknown', 'secret_ref_invalid'])
+      expect(setupErrorMessage(code), code).not.toMatch(/secret_|_/);
+  });
+
+  it('reads the prefix from the one route, with the lender in the query and nothing else', async () => {
+    const reads: string[] = [];
+    const api: OnboardingApi = {
+      get: (path) => {
+        reads.push(path);
+        return Promise.resolve({
+          ok: true as const,
+          status: 200,
+          data: { lenderId: LENDER_A, prefix: PREFIX } as never,
+        });
+      },
+      post: () => Promise.reject(new Error('no write expected')),
+    };
+    const result = await loadSecretPrefix(api, LENDER_A);
+    expect(result.ok).toBe(true);
+    expect(reads).toEqual([`/v1/lender/secret-ref-prefix?lenderId=${LENDER_A}`]);
+  });
+});
+
+describe('the browser checks the secret names against the prefix before anything is sent', () => {
+  const draft = () =>
+    render(
+      <ConfigDraftForm
+        lenderId={LENDER_A}
+        secretPrefix={PREFIX}
+        action={vi.fn(() => Promise.resolve({ ok: true as const }))}
+        returnTo="/payment-setup/new"
+        providers={[{ value: 'sample_psp', label: 'Sample Payments Ltd' }]}
+        merchants={[{ value: MERCHANT, label: 'Merchant' }]}
+        settlementAccounts={[{ value: SETTLEMENT, label: 'Account' }]}
+      />,
+    );
+
+  it('accepts a name inside the prefix and rejects every other shape', async () => {
+    const u = userEvent.setup();
+    draft();
+    const field = screen.getByLabelText<HTMLInputElement>('Name of the provider secret');
+    // Pre-filled with the prefix alone: not yet a name.
+    expect(field.value).toBe(PREFIX);
+    expect(field.validity.patternMismatch).toBe(true);
+    await u.type(field, 'PSP_ONE');
+    expect(field.value).toBe(NAME_ONE);
+    expect(field.validity.patternMismatch).toBe(false);
+    for (const wrong of [
+      'LENDER_PSP_ONE',
+      'L0198B3F40002_PSP_ONE',
+      `${PREFIX}psp_one`,
+      `${PREFIX}1ABC`,
+    ]) {
+      await u.clear(field);
+      await u.type(field, wrong);
+      expect(field.validity.patternMismatch, wrong).toBe(true);
+    }
+  });
+
+  it('draws no form at all for a prefix that is not the shape of one', () => {
+    const { container } = render(
+      <ConfigDraftForm
+        lenderId={LENDER_A}
+        secretPrefix={'(.*)'}
+        action={vi.fn(() => Promise.resolve({ ok: true as const }))}
+        returnTo="/payment-setup/new"
+        providers={[]}
+        merchants={[]}
+        settlementAccounts={[]}
+      />,
+    );
+    expect(container.querySelector('form')).toBeNull();
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+      setupErrorMessage('secret_prefix_unknown'),
+    );
+  });
+});
+
+describe('withdrawing a merchant claim and a settlement account request: the operations', () => {
+  const merchantForm = {
+    op: 'setup.merchant.withdraw',
+    id: MERCHANT_2,
+    lenderId: LENDER_A,
+    confirm: 'on',
+  };
+  const settlementForm = {
+    op: 'setup.settlement.withdraw',
+    id: SETTLEMENT_2,
+    lenderId: LENDER_A,
+    confirm: 'on',
+  };
+  const revoked = (id: string) => ({ id, status: 'revoked' });
+
+  it('sends each withdrawal to its own route with only the lender in the body and the request key', async () => {
+    const m = recorder(revoked(MERCHANT_2));
+    expect(await runSetupOperation(m.api, formOf(merchantForm))).toEqual({ ok: true });
+    expect(m.calls).toEqual([
+      {
+        path: `/v1/lender/merchants/${MERCHANT_2}/withdraw`,
+        body: { lenderId: LENDER_A },
+        key: REQUEST_ID,
+      },
+    ]);
+    const a = recorder(revoked(SETTLEMENT_2));
+    expect(await runSetupOperation(a.api, formOf(settlementForm))).toEqual({ ok: true });
+    expect(a.calls).toEqual([
+      {
+        path: `/v1/lender/settlement-accounts/${SETTLEMENT_2}/withdraw`,
+        body: { lenderId: LENDER_A },
+        key: REQUEST_ID,
+      },
+    ]);
+  });
+
+  it.each([
+    ['setup.merchant.withdraw', MERCHANT_2],
+    ['setup.settlement.withdraw', SETTLEMENT_2],
+  ])('%s needs the confirm tick, a lender and a record, or sends nothing', async (op, id) => {
+    const base = { op, id, lenderId: LENDER_A, confirm: 'on' };
+    const { api, calls } = recorder(revoked(id));
+    expect(await runSetupOperation(api, formOf({ ...base, confirm: '' }))).toEqual({
+      ok: false,
+      code: 'confirm_required',
+    });
+    expect(await runSetupOperation(api, formOf({ ...base, confirm: 'yes' }))).toEqual({
+      ok: false,
+      code: 'confirm_required',
+    });
+    const { confirm: _tick, ...untickedForm } = base;
+    expect(await runSetupOperation(api, formOf(untickedForm))).toEqual({
+      ok: false,
+      code: 'confirm_required',
+    });
+    for (const change of [{ id: 'nope' }, { id: '' }, { lenderId: 'nope' }, { lenderId: '' }])
+      expect(
+        await runSetupOperation(api, formOf({ ...base, ...change })),
+        JSON.stringify(change),
+      ).toEqual({
+        ok: false,
+        code: 'validation_failed',
+      });
+    expect(calls).toEqual([]);
+  });
+
+  it('sends nothing without a request key of the right shape', async () => {
+    const { api, calls } = recorder(revoked(MERCHANT_2));
+    expect(await runSetupOperation(api, formOf(merchantForm, false))).toEqual({
+      ok: false,
+      code: 'validation_failed',
+    });
+    const form = formOf(merchantForm);
+    form.set('key', 'short');
+    expect(await runSetupOperation(api, form)).toEqual({ ok: false, code: 'validation_failed' });
+    expect(calls).toEqual([]);
+  });
+
+  it('treats an answer that is not this record, now revoked, as an answer it cannot use', async () => {
+    for (const answer of [
+      { id: MERCHANT_2, status: 'active' },
+      { id: MERCHANT, status: 'revoked' },
+      { id: MERCHANT_2 },
+      { status: 'revoked' },
+      {},
+    ]) {
+      const { api } = recorder(answer);
+      expect(await runSetupOperation(api, formOf(merchantForm)), JSON.stringify(answer)).toEqual({
+        ok: false,
+        code: 'bad_response',
+      });
+    }
+  });
+
+  it('sends the same request key for a double click, and a new one only for a new form', async () => {
+    const { api, calls } = recorder(revoked(MERCHANT_2));
+    const form = formOf(merchantForm);
+    await runSetupOperation(api, form);
+    await runSetupOperation(api, form);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.key).toBe(calls[0]?.key);
+    const next = formOf(merchantForm);
+    next.set('key', 'ui-0190a000-0000-7000-8000-0000000009fe');
+    await runSetupOperation(api, next);
+    expect(calls[2]?.key).not.toBe(calls[0]?.key);
+  });
+
+  it.each([
+    ['setup.merchant.withdraw', MERCHANT_2, 409, 'already_verified'],
+    ['setup.settlement.withdraw', SETTLEMENT_2, 409, 'already_linked'],
+    ['setup.merchant.withdraw', MERCHANT_2, 404, 'not_found'],
+    ['setup.settlement.withdraw', SETTLEMENT_2, 404, 'not_found'],
+    ['setup.merchant.withdraw', MERCHANT_2, 403, 'forbidden'],
+    ['setup.settlement.withdraw', SETTLEMENT_2, 403, 'forbidden'],
+    ['setup.merchant.withdraw', MERCHANT_2, 401, 'mfa_required'],
+    ['setup.settlement.withdraw', SETTLEMENT_2, 401, 'mfa_required'],
+    ['setup.merchant.withdraw', MERCHANT_2, 422, 'invalid_request'],
+    ['setup.settlement.withdraw', SETTLEMENT_2, 429, 'rate_limited'],
+  ])(
+    '%s: the answer %i %s becomes a stable code and a sentence, never the server’s text',
+    async (op, id, status, code) => {
+      const { api, calls } = refusing(status, code);
+      const outcome = await runSetupOperation(
+        api,
+        formOf({ op, id, lenderId: LENDER_A, confirm: 'on' }),
+      );
+      expect(outcome).toEqual({ ok: false, code });
+      expect(calls).toHaveLength(1);
+      expect(setupErrorMessage(code), code).not.toBe(GENERIC);
+      // A person without the permission is refused by the API; the screen says so, and the operation changed nothing.
+      expect(setupErrorMessage(code)).not.toContain(id);
+    },
+  );
+
+  it('turns text the server wrote into the generic sentence, and never carries it', async () => {
+    const { api } = refusing(409, 'Some raw text! 4242 for SAMPLE-MERCH-02');
+    const outcome = await runSetupOperation(api, formOf(merchantForm));
+    expect(outcome).toEqual({ ok: false, code: 'unknown' });
+    expect(setupErrorMessage((outcome as { code: string }).code)).toBe(GENERIC);
+  });
+
+  it('puts the record in the path and the lender in the body, and nothing else anywhere', async () => {
+    const { api, calls } = recorder(revoked(MERCHANT_2));
+    const spies = (['log', 'warn', 'error', 'info', 'debug'] as const).map((name) =>
+      vi.spyOn(console, name).mockImplementation(() => undefined),
+    );
+    const form = formOf({
+      ...merchantForm,
+      merchantRef: 'SAMPLE-MERCH-02',
+      label: 'Collections account',
+      secretPrefix: PREFIX,
+    });
+    await runSetupOperation(api, form);
+    for (const spy of spies) {
+      expect(spy).not.toHaveBeenCalled();
+      spy.mockRestore();
+    }
+    const sent = JSON.stringify(calls);
+    expect(sent).not.toMatch(/SAMPLE-MERCH-02|Collections account|secretPrefix|L0198B3F40001/);
+    expect(calls[0]?.path).toBe(`/v1/lender/merchants/${MERCHANT_2}/withdraw`);
+    expect(calls[0]?.path).not.toContain('?');
+  });
+
+  it('keeps the configuration draft on its own entry point', async () => {
+    const { api, calls } = recorder(DRAFT_ANSWER);
+    expect(await runSetupOperation(api, formOf(draftFields))).toEqual({
+      ok: false,
+      code: 'path_not_allowed',
+    });
+    expect(calls).toEqual([]);
+  });
+});
+
+describe('withdrawing in the merchant and settlement account lists: the screens', () => {
+  const pendingMerchant = merchant({
+    id: MERCHANT_2,
+    merchantRef: 'SAMPLE-MERCH-02',
+    verificationStatus: 'unverified',
+    verifiedAt: null,
+  });
+  const openRequest = settlement({
+    id: SETTLEMENT_2,
+    label: 'Second account',
+    maskedRef: 'XXXXXX9876',
+    status: 'unverified',
+    registryId: null,
+  });
+  const view = (
+    over: Partial<Parameters<typeof SetupAccountsPage>[0]> = {},
+    permissions: readonly string[] = CONFIGURE,
+  ) => {
+    const ctx = ctxFor(permissions, '/payment-setup/accounts');
+    return render(
+      <SetupAccountsPage
+        lender={ctx.grants[0] ?? null}
+        providers={providers}
+        merchants={pageOf([merchant(), pendingMerchant])}
+        settlements={pageOf([settlement(), openRequest])}
+        registry={ok({ items: [registryRow()] })}
+        ctx={ctx}
+        {...over}
+      />,
+    );
+  };
+  const formsFor = (container: HTMLElement, op: string) =>
+    [...container.querySelectorAll('form')].filter(
+      (f) => f.querySelector<HTMLInputElement>('input[name="op"]')?.value === op,
+    );
+
+  it('draws a withdrawal for an unverified claim and an unlinked request, and for no other row', () => {
+    const { container } = view({
+      merchants: pageOf([
+        merchant(),
+        pendingMerchant,
+        merchant({
+          id: '0190a000-0000-7000-8000-000000000b03',
+          status: 'revoked',
+          verificationStatus: 'unverified',
+          revokedAt: AT_2,
+        }),
+      ]),
+      settlements: pageOf([
+        settlement(),
+        openRequest,
+        settlement({
+          id: '0190a000-0000-7000-8000-000000000c03',
+          status: 'revoked',
+          registryId: null,
+        }),
+        settlement({
+          id: '0190a000-0000-7000-8000-000000000c04',
+          status: 'unverified',
+          registryId: REGISTRY,
+        }),
+      ]),
+    });
+    const merchantForms = formsFor(container, 'setup.merchant.withdraw');
+    expect(merchantForms).toHaveLength(1);
+    expect(merchantForms[0]?.querySelector<HTMLInputElement>('input[name="id"]')?.value).toBe(
+      MERCHANT_2,
+    );
+    const settlementForms = formsFor(container, 'setup.settlement.withdraw');
+    expect(settlementForms).toHaveLength(1);
+    expect(settlementForms[0]?.querySelector<HTMLInputElement>('input[name="id"]')?.value).toBe(
+      SETTLEMENT_2,
+    );
+    for (const form of [...merchantForms, ...settlementForms])
+      expect(form.querySelector<HTMLInputElement>('input[name="lenderId"]')?.value).toBe(LENDER_A);
+  });
+
+  it('explains what a withdrawal does and does not do, in plain words', () => {
+    const { container } = view();
+    const claim = text(formsFor(container, 'setup.merchant.withdraw')[0] as HTMLElement);
+    expect(claim).toMatch(/stays in the list as history and is not used again/);
+    expect(claim).toMatch(/claimed again later: that is a new claim, and it starts unverified/);
+    expect(claim).toMatch(
+      /A verified merchant cannot be withdrawn here: the platform team revokes it/,
+    );
+    const request = text(formsFor(container, 'setup.settlement.withdraw')[0] as HTMLElement);
+    expect(request).toMatch(/stays in the list as history and is not used again/);
+    expect(request).toMatch(
+      /asked for again later: that is a new request, and it starts unverified/,
+    );
+    expect(request).toMatch(/linked to the account registry cannot be withdrawn here/);
+    // Nothing is promised: no approval, no refund, no speed.
+    expect(claim + request).not.toMatch(
+      /will be (approved|verified)|guarantee|immediately|instantly|refund/i,
+    );
+  });
+
+  it('puts a confirm step in each withdrawal, never ticked, and names the record for a screen reader', () => {
+    const { container } = view();
+    for (const op of ['setup.merchant.withdraw', 'setup.settlement.withdraw']) {
+      const form = formsFor(container, op)[0] as HTMLFormElement;
+      const tick = form.querySelector<HTMLInputElement>('input[type="checkbox"][name="confirm"]');
+      expect(tick?.required, op).toBe(true);
+      expect(tick?.checked, op).toBe(false);
+      expect(form.querySelector('input[name="key"]')?.getAttribute('value')).toMatch(
+        /^ui-[0-9a-f-]{36}$/,
+      );
+      expect(form.querySelector<HTMLInputElement>('input[name="returnTo"]')?.value).toBe(
+        '/payment-setup/accounts',
+      );
+      expect(form.closest('details')?.querySelector('summary')?.textContent).toMatch(
+        /Withdraw this/,
+      );
+    }
+    expect(screen.getByText('(SAMPLE-MERCH-02)')).toBeTruthy();
+    expect(screen.getByText('(Second account, XXXXXX9876)')).toBeTruthy();
+  });
+
+  it('draws nothing for a person who cannot configure, and not even the column', () => {
+    for (const permissions of [READ, APPROVE]) {
+      const { container } = view({}, permissions);
+      expect(ops(container), permissions.join()).toEqual([]);
+      expect(screen.queryByText('What you can do')).toBeNull();
+      cleanup();
+    }
+  });
+
+  it('draws nothing for a claim that belongs to another organisation, whatever the list says', () => {
+    const { container } = view({
+      merchants: pageOf([
+        { ...pendingMerchant, ownerOrgId: LENDER_B },
+        { ...pendingMerchant, ownerKind: 'udofin_fees' as const, ownerOrgId: null },
+      ]),
+    });
+    expect(formsFor(container, 'setup.merchant.withdraw')).toHaveLength(0);
+  });
+
+  it('keeps the rest of the list as it was and says the number of waiting claims is limited', () => {
+    const { container } = view();
+    expect(text(container)).toContain('Not verified yet');
+    expect(text(container)).toContain('Requested: waiting for the platform team to verify it');
+    expect(text(container)).toMatch(/Only a limited number of claims can wait for verification/);
+  });
+
+  it('decides who may withdraw from the claim and the account alone', () => {
+    const grants = grantsFor(CONFIGURE);
+    const claim = {
+      ownerKind: 'lender',
+      ownerOrgId: LENDER_A as string | null,
+      status: 'active',
+      verificationStatus: 'unverified',
+    };
+    expect(mayWithdrawMerchant(grants, claim)).toBe(true);
+    for (const change of [
+      { status: 'revoked' },
+      { verificationStatus: 'verified' },
+      { ownerKind: 'udofin_fees' },
+      { ownerOrgId: null },
+      { ownerOrgId: LENDER_B },
+    ])
+      expect(mayWithdrawMerchant(grants, { ...claim, ...change }), JSON.stringify(change)).toBe(
+        false,
+      );
+    expect(mayWithdrawMerchant(grantsFor(READ), claim)).toBe(false);
+    expect(mayWithdrawMerchant(grantsFor(APPROVE), claim)).toBe(false);
+
+    const account = { lenderId: LENDER_A, status: 'unverified', registryId: null as string | null };
+    expect(mayWithdrawSettlement(grants, account)).toBe(true);
+    for (const change of [
+      { status: 'revoked' },
+      { status: 'verified' },
+      { registryId: REGISTRY },
+      { lenderId: LENDER_B },
+    ])
+      expect(mayWithdrawSettlement(grants, { ...account, ...change }), JSON.stringify(change)).toBe(
+        false,
+      );
+    expect(mayWithdrawSettlement(grantsFor(READ), account)).toBe(false);
+    expect(mayWithdrawSettlement(grantsFor(APPROVE), account)).toBe(false);
+  });
+});
+
+describe('a hold on a suspended configuration, as the lender sees it', () => {
+  const held = (over: object = {}) =>
+    config({
+      status: 'suspended',
+      statusReasons: ['platform_suspension'],
+      holdKind: 'platform',
+      holdSetAt: AT_2,
+      ...over,
+    });
+  const view = (c: ReturnType<typeof config>, permissions: readonly string[] = CONFIGURE) =>
+    render(
+      <SetupConfigDetailPage
+        config={ok(c)}
+        history={history}
+        providers={providers}
+        merchants={merchants}
+        settlements={settlements}
+        ctx={ctxFor(permissions, `/payment-setup/${CONFIG}`)}
+      />,
+    );
+
+  it('says who put it on hold and since when, and what it stops, in plain words', () => {
+    const { container } = view(held());
+    expect(text(container)).toContain('Held by the platform team since 17 Oct 2026, 10:00 IST');
+    expect(text(container)).toMatch(/This configuration is on hold/);
+    expect(text(container)).toMatch(/you cannot submit or retire it/);
+    expect(text(container)).toMatch(
+      /cannot submit or approve any other payment configuration of your organisation/,
+    );
+    expect(text(container)).toMatch(/Only the platform team can release the hold/);
+    expect(text(container)).toMatch(/a different person approves it/);
+    cleanup();
+    const system = view(held({ holdKind: 'system', statusReasons: ['merchant_mismatch'] }));
+    expect(text(system.container)).toContain('Held by the system after a check did not pass since');
+    expect(text(system.container)).toContain(
+      'A provider message named a different merchant from the one configured.',
+    );
+  });
+
+  it('draws neither submit nor retire while the hold stands, for anybody', () => {
+    for (const permissions of [
+      CONFIGURE,
+      APPROVE,
+      ['payment.read', 'payment.configure', 'payment.config.approve'],
+    ]) {
+      const { container } = view(held(), permissions);
+      expect(ops(container), permissions.join()).toEqual([]);
+      cleanup();
+    }
+  });
+
+  it('draws submit and retire again for a suspended configuration without a hold', () => {
+    const plain = { status: 'suspended' as const, holdKind: null, holdSetAt: null };
+    expect(ops(view(config(plain), CONFIGURE).container)).toEqual(['setup.config.submit']);
+    cleanup();
+    const { container } = view(config(plain), APPROVE);
+    expect(ops(container)).toEqual(['setup.config.retire']);
+    expect(text(container)).not.toMatch(/on hold/);
+  });
+
+  it('knows a hold only from the contract’s two kinds', () => {
+    expect(isHeld({ holdKind: 'platform' })).toBe(true);
+    expect(isHeld({ holdKind: 'system' })).toBe(true);
+    expect(isHeld({ holdKind: null })).toBe(false);
+    expect(isHeld({})).toBe(false);
+    expect(
+      maySubmit(grantsFor(CONFIGURE), {
+        lenderId: LENDER_A,
+        status: 'suspended',
+        holdKind: 'system',
+      }),
+    ).toBe(false);
+    expect(
+      mayRetire(grantsFor(APPROVE), {
+        lenderId: LENDER_A,
+        status: 'suspended',
+        holdKind: 'platform',
+      }),
+    ).toBe(false);
+    expect(
+      mayRetire(grantsFor(APPROVE), { lenderId: LENDER_A, status: 'active', holdKind: null }),
+    ).toBe(true);
+    expect(holdKindWords('platform')).toBe('Held by the platform team');
+    expect(holdKindWords('system')).toMatch(/Held by the system/);
+    expect(holdKindWords('toString')).toMatch(/no wording/);
+    expect(holdKindWords('toString')).not.toContain('toString');
+  });
+
+  it('words the release in the history without saying "from suspended to suspended"', () => {
+    const { container } = render(
+      <SetupConfigDetailPage
+        config={ok(held())}
+        history={ok({
+          items: [
+            event(),
+            event({
+              id: '0190a000-0000-7000-8000-000000000e02',
+              eventKind: 'hold_released',
+              fromStatus: 'suspended',
+              toStatus: 'suspended',
+              actorKind: 'platform',
+              occurredAt: AT_2,
+            }),
+          ],
+        })}
+        providers={providers}
+        merchants={merchants}
+        settlements={settlements}
+        ctx={ctxFor(CONFIGURE, `/payment-setup/${CONFIG}`)}
+      />,
+    );
+    expect(text(container)).toContain('Hold released by the platform team');
+    expect(text(container)).not.toMatch(/from suspended to suspended/);
+  });
+});
+
+describe('the new answers of the API, in plain words that name what to do next', () => {
+  it('words every new code, with no code, no value and no table name in the sentence', () => {
+    for (const code of NEW_CODES) {
+      const words = setupErrorMessage(code);
+      expect(words, code).not.toBe(GENERIC);
+      expect(words, code).not.toContain(code);
+      expect(words, code).not.toMatch(/_|SQLSTATE|\d{3,}/);
+    }
+  });
+
+  it('says to withdraw claims when there are too many', () => {
+    expect(setupErrorMessage('too_many_claims')).toMatch(/Withdraw the ones you do not need/);
+  });
+
+  it('says one approved configuration per lender, and to retire the other first', () => {
+    expect(setupErrorMessage('active_config_exists')).toMatch(/only one approved configuration/);
+    expect(setupErrorMessage('active_config_exists')).toMatch(/retire the other one first/);
+  });
+
+  it('says a hold set by the platform team has to be released by the platform team first', () => {
+    const words = setupErrorMessage('platform_hold');
+    expect(words).toMatch(/platform team put a hold/);
+    expect(words).toMatch(/until the platform team releases that hold/);
+    expect(words).toMatch(/Contact the platform team/);
+  });
+
+  it('says the platform team’s own list is awaited, and that nothing was changed', () => {
+    const words = setupErrorMessage('own_account_list_not_attested');
+    expect(words).toMatch(/platform team has not yet confirmed its own list of accounts/);
+    expect(words).toMatch(/Nothing was changed/);
+  });
+
+  it('does not claim compliance or regulatory approval in any of them', () => {
+    for (const code of NEW_CODES)
+      expect(setupErrorMessage(code), code).not.toMatch(
+        /complian|regulat|RBI|\bsafe\b|\bsecure\b/i,
+      );
+  });
+
+  it('shows the code of the address as one of these sentences on the page, and nothing else', () => {
+    for (const code of ['platform_hold', 'active_config_exists', 'too_many_claims']) {
+      const ctx = ctxFor(CONFIGURE, '/payment-setup/accounts');
+      const { container } = render(
+        <SetupAccountsPage
+          lender={ctx.grants[0] ?? null}
+          providers={providers}
+          merchants={merchants}
+          settlements={settlements}
+          registry={ok({ items: [] })}
+          ctx={ctx}
+          error={code}
+        />,
+      );
+      expect(container.querySelector('[role="alert"]')?.textContent).toBe(setupErrorMessage(code));
+      expect(text(container)).not.toContain(code);
+      cleanup();
+    }
   });
 });

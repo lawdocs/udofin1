@@ -3,9 +3,10 @@ import {
   type FeatureSwitchState,
   type MerchantEntry,
   type PaymentConfigEntry,
+  type SecretRefPrefix,
 } from '@udofin/contracts';
 import { OpForm } from '../onboarding/forms.js';
-import { SelectInput, TextArea } from '../reminders/fields.js';
+import { CheckInput, SelectInput, TextArea } from '../reminders/fields.js';
 import { EmptyList, LoadFailure, Paging, Section } from '../servicing/common.js';
 import { dateOrDash, formatIst, istOrDash } from '../servicing/format.js';
 import {
@@ -22,12 +23,15 @@ import {
   type SetupContext,
 } from './common.js';
 import {
+  isHeld,
   mayDecide,
   mayIn,
   mayRetire,
   maySubmit,
   maySeeSetup,
   mayWithdraw,
+  mayWithdrawMerchant,
+  mayWithdrawSettlement,
   setupHref,
   withoutCursor,
   type SetupGrant,
@@ -48,6 +52,7 @@ import {
   configStatusWords,
   eventKindWords,
   featureWords,
+  holdKindWords,
   isTestMode,
   merchantStatusWords,
   merchantVerificationWords,
@@ -55,6 +60,8 @@ import {
   railValueWords,
   reasonWords,
   registryStatusWords,
+  SECRET_PREFIX,
+  setupErrorMessage,
   settlementStatusWords,
 } from './wording.js';
 
@@ -240,6 +247,7 @@ export function SetupNewConfigPage({
   providers,
   merchants,
   settlements,
+  prefix,
   ctx,
   done,
   error,
@@ -248,6 +256,8 @@ export function SetupNewConfigPage({
   providers: Providers;
   merchants: Merchants;
   settlements: Settlements;
+  /** The prefix the lender's secret names must start with. Without it the form is not drawn: nobody could name a secret. */
+  prefix: Loaded<SecretRefPrefix>;
   ctx: SetupContext;
   done?: boolean;
   error?: string | undefined;
@@ -276,6 +286,14 @@ export function SetupNewConfigPage({
     providerChoices.length > 0 && merchantChoices.length > 0 && settlementChoices.length > 0;
   /** The first list that could not be loaded, whose status says whether it was a refusal or a failure. */
   const failedLoad = [providers, merchants, settlements].find((loaded) => !loaded.ok);
+  // The prefix is used only when it is the one asked for this lender and has the shape of a prefix.
+  const secretPrefix =
+    lender !== null &&
+    prefix.ok &&
+    prefix.data.lenderId === lender.lenderId &&
+    SECRET_PREFIX.test(prefix.data.prefix)
+      ? prefix.data.prefix
+      : null;
   return (
     <div>
       <h1>New payment configuration</h1>
@@ -295,14 +313,19 @@ export function SetupNewConfigPage({
           />
           <p>
             Choose the provider, the merchant and the settlement account of your organisation. A
-            secret is named, never typed: you give the NAME of the secret in your secrets manager.
+            secret is named, never typed: you give the NAME of the secret in your secrets manager,
+            and every name starts with the prefix of your organisation, which is shown on the form.
             Saving a draft creates a callback path that is shown to you once. Another person must
             approve the configuration before it is used.
           </p>
           {failedLoad === undefined ? null : (
             <LoadFailure what="the choices for a configuration" status={failedLoad.status} />
           )}
-          {!ready ? (
+          {secretPrefix === null ? (
+            <p role="alert" className="form-error">
+              {setupErrorMessage('secret_prefix_unknown')}
+            </p>
+          ) : !ready ? (
             <EmptyList
               title="Not ready to draft yet"
               detail="You need an approved provider to choose, a claimed merchant and a requested settlement account. Merchants and settlement accounts are set up under “Merchants and settlement accounts”."
@@ -311,6 +334,7 @@ export function SetupNewConfigPage({
             <Section title="Draft a configuration">
               <ConfigDraftForm
                 lenderId={lender.lenderId}
+                secretPrefix={secretPrefix}
                 action={ctx.draftConfig}
                 returnTo={ctx.returnTo}
                 providers={providerChoices}
@@ -382,7 +406,7 @@ function History({ history }: { history: Loaded<PaymentConfigHistory> }) {
             <th scope="row">{formatIst(e.occurredAt)}</th>
             <td>
               {eventKindWords(e.eventKind)}
-              {e.fromStatus !== null
+              {e.fromStatus !== null && e.fromStatus !== e.toStatus
                 ? ` (from ${configStatusShort(e.fromStatus).toLowerCase()} to ${configStatusShort(e.toStatus ?? '').toLowerCase()})`
                 : ''}
             </td>
@@ -563,6 +587,15 @@ function ConfigBody({
                 : 'Not approved'}
             </dd>
           </div>
+          {isHeld(c) ? (
+            <div>
+              <dt>Hold</dt>
+              <dd>
+                {holdKindWords(c.holdKind ?? '')}
+                {c.holdSetAt !== null ? ` since ${formatIst(c.holdSetAt)}` : ''}
+              </dd>
+            </div>
+          ) : null}
           <div>
             <dt>Last check of the settlement account and merchant</dt>
             <dd>
@@ -590,6 +623,14 @@ function ConfigBody({
         <RailLimits config={c} />
       </Section>
       <Section title="What you can do">
+        {isHeld(c) ? (
+          <p role="status">
+            <strong>This configuration is on hold.</strong> While a hold stands you cannot submit or
+            retire it, and you cannot submit or approve any other payment configuration of your
+            organisation. Only the platform team can release the hold. After it is released, you
+            submit this configuration again and a different person approves it.
+          </p>
+        ) : null}
         {own ? (
           <p className="muted">
             You drafted or submitted this configuration, so another person must decide it.
@@ -649,8 +690,8 @@ function ConfigBody({
           </OpForm>
         ) : null}
         <p className="muted">
-          Only the platform team can suspend a configuration. Suspended configurations can be
-          submitted again.
+          Only the platform team can suspend a configuration. A suspended configuration can be
+          submitted again, unless a hold stands on it: only the platform team can release a hold.
         </p>
       </Section>
       <Section title="History">
@@ -663,6 +704,58 @@ function ConfigBody({
 // ---------------------------------------------------------------------------------------------------------------
 // Merchants, settlement accounts and their registry status
 // ---------------------------------------------------------------------------------------------------------------
+const WITHDRAW_WORDS = {
+  claim: {
+    summary: 'Withdraw this claim',
+    explain:
+      'Withdrawing ends this claim. It stays in the list as history and is not used again. The same identifier can be claimed again later: that is a new claim, and it starts unverified. A verified merchant cannot be withdrawn here: the platform team revokes it.',
+    confirm: 'I want to withdraw this claim.',
+  },
+  'settlement account request': {
+    summary: 'Withdraw this request',
+    explain:
+      'Withdrawing ends this request. It stays in the list as history and is not used again. The same bank and masked reference can be asked for again later: that is a new request, and it starts unverified. An account that is linked to the account registry cannot be withdrawn here: the platform team revokes it.',
+    confirm: 'I want to withdraw this request.',
+  },
+} as const;
+
+/** One withdrawal with its explanation and a confirm step. It names the record for screen readers. The API decides again. */
+function WithdrawForm({
+  what,
+  op,
+  id,
+  lenderId,
+  named,
+  ctx,
+}: {
+  what: keyof typeof WITHDRAW_WORDS;
+  op: 'setup.merchant.withdraw' | 'setup.settlement.withdraw';
+  id: string;
+  lenderId: string;
+  named: string;
+  ctx: SetupContext;
+}) {
+  const words = WITHDRAW_WORDS[what];
+  return (
+    <details>
+      <summary>
+        {words.summary} <span className="sr-only">({named})</span>
+      </summary>
+      <OpForm
+        op={op}
+        action={ctx.action}
+        returnTo={ctx.returnTo}
+        hidden={{ id, lenderId }}
+        submit={words.summary}
+        secondary
+      >
+        <p>{words.explain}</p>
+        <CheckInput name="confirm" required label={words.confirm} />
+      </OpForm>
+    </details>
+  );
+}
+
 export function SetupAccountsPage({
   lender,
   providers,
@@ -705,7 +798,8 @@ export function SetupAccountsPage({
             <p>
               A merchant identifier is the one your provider gave your organisation. A claim starts
               unverified: the platform team confirms, against evidence, that it belongs to your
-              organisation.
+              organisation. Only a limited number of claims can wait for verification at the same
+              time: withdraw the ones you do not need.
             </p>
             {mayConfigure ? (
               providerChoices.length === 0 ? (
@@ -737,6 +831,7 @@ export function SetupAccountsPage({
                     <th scope="col">Verification</th>
                     <th scope="col">Claimed</th>
                     <th scope="col">Verified</th>
+                    {mayConfigure ? <th scope="col">What you can do</th> : null}
                   </tr>
                 </thead>
                 <tbody>
@@ -748,6 +843,22 @@ export function SetupAccountsPage({
                       <td>{merchantVerificationWords(m.verificationStatus)}</td>
                       <td>{formatIst(m.claimedAt)}</td>
                       <td>{istOrDash(m.verifiedAt)}</td>
+                      {mayConfigure ? (
+                        <td>
+                          {mayWithdrawMerchant(ctx.grants, m) ? (
+                            <WithdrawForm
+                              what="claim"
+                              op="setup.merchant.withdraw"
+                              id={m.id}
+                              lenderId={lender.lenderId}
+                              named={m.merchantRef}
+                              ctx={ctx}
+                            />
+                          ) : (
+                            <span className="muted">—</span>
+                          )}
+                        </td>
+                      ) : null}
                     </tr>
                   ))}
                 </tbody>
@@ -785,6 +896,7 @@ export function SetupAccountsPage({
                     <th scope="col">Status</th>
                     <th scope="col">Account registry</th>
                     <th scope="col">Requested</th>
+                    {mayConfigure ? <th scope="col">What you can do</th> : null}
                   </tr>
                 </thead>
                 <tbody>
@@ -800,6 +912,22 @@ export function SetupAccountsPage({
                           : 'Linked to the account registry'}
                       </td>
                       <td>{formatIst(s.createdAt)}</td>
+                      {mayConfigure ? (
+                        <td>
+                          {mayWithdrawSettlement(ctx.grants, s) ? (
+                            <WithdrawForm
+                              what="settlement account request"
+                              op="setup.settlement.withdraw"
+                              id={s.id}
+                              lenderId={lender.lenderId}
+                              named={`${s.label}, ${s.maskedRef}`}
+                              ctx={ctx}
+                            />
+                          ) : (
+                            <span className="muted">—</span>
+                          )}
+                        </td>
+                      ) : null}
                     </tr>
                   ))}
                 </tbody>

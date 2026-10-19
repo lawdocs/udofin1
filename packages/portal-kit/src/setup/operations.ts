@@ -1,6 +1,8 @@
 import {
+  AccountsActionResult,
   AccountsNote,
   AccountsReason,
+  LenderRecordActionInput,
   MerchantClaimInput,
   PaymentConfigDraftInput,
   PaymentConfigDrafted,
@@ -12,7 +14,7 @@ import { type OnboardingApi } from '../onboarding/api.js';
 import { parseRupeesToPaise } from '../servicing/format.js';
 import { safeErrorCode } from '../servicing/wording.js';
 import { RAIL_LIMIT_ROWS, type DraftedConfig } from './types.js';
-import { looksLikeAccountDetail, looksLikeSecretValue } from './wording.js';
+import { looksLikeAccountDetail, SECRET_PREFIX, secretNameProblem } from './wording.js';
 
 export type { DraftedConfig };
 
@@ -153,6 +155,26 @@ const actionOn = (route: (id: string) => string, needsReason: boolean): SetupOpe
   },
 });
 
+/**
+ * Withdraws one record of the lender (a merchant claim that was never verified, a settlement account that was never linked).
+ * The lender is in the body and the record in the path, as the API takes them. Withdrawing ends the use of the record for good
+ * (it stays in the list as history), so it needs a deliberate tick, and the answer must be this record, now revoked.
+ */
+const withdrawRecord = (route: (id: string) => string): SetupOperation => ({
+  run: async (api, form, key) => {
+    const id = uuid(form, 'id');
+    const body = LenderRecordActionInput.safeParse({ lenderId: uuid(form, 'lenderId') });
+    if (!id || !body.success) return bad();
+    if (form.get('confirm') !== 'on') return bad('confirm_required');
+    const result = await api.post(route(id), AccountsActionResult, body.data, key);
+    if (!result.ok) return result;
+    const answer = AccountsActionResult.safeParse(result.data);
+    return answer.success && answer.data.id === id && answer.data.status === 'revoked'
+      ? result
+      : { ok: false, status: result.status, code: 'bad_response' };
+  },
+});
+
 export const SETUP_OPERATIONS: Readonly<Record<string, SetupOperation>> = {
   // ---- Settlement accounts (masked reference only) -----------------------------------------------------------------------
   'setup.settlement.request': {
@@ -196,19 +218,27 @@ export const SETUP_OPERATIONS: Readonly<Record<string, SetupOperation>> = {
     },
   },
 
+  'setup.merchant.withdraw': withdrawRecord((id) => `/v1/lender/merchants/${id}/withdraw`),
+  'setup.settlement.withdraw': withdrawRecord(
+    (id) => `/v1/lender/settlement-accounts/${id}/withdraw`,
+  ),
+
   // ---- Payment configurations ---------------------------------------------------------------------------------------------
   'setup.config.draft': {
     run: (api, form, key) => {
       const secretRef = str(form, 'secretRef');
       const webhookSecretRef = str(form, 'webhookSecretRef');
-      // A secret is referred to by NAME. Anything that looks like a value is refused before it is sent anywhere.
-      if (
-        !secretRef ||
-        !webhookSecretRef ||
-        looksLikeSecretValue(secretRef) ||
-        looksLikeSecretValue(webhookSecretRef)
-      )
-        return bad('secret_looks_like_value');
+      if (!secretRef || !webhookSecretRef) return bad('secret_looks_like_value');
+      // The form carries the lender's prefix as it was shown (it is not a secret and is never trusted: the API and the database
+      // check the names against the prefix they derive themselves). A prefix of the wrong shape is ignored, not passed on.
+      const shown = str(form, 'secretPrefix');
+      const prefix = shown !== undefined && SECRET_PREFIX.test(shown) ? shown : null;
+      // A secret is referred to by NAME. Anything that looks like a value is refused before it is sent anywhere, and so is a name
+      // outside the lender's own namespace.
+      for (const name of [secretRef, webhookSecretRef]) {
+        const problem = secretNameProblem(name, prefix);
+        if (problem !== null) return bad(problem);
+      }
       if (secretRef === webhookSecretRef) return bad('secrets_same');
       const rails = readRailLimits(form);
       if (!rails.ok) return bad(rails.code);
